@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src 'self' https://2004.lostcity.rs; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; base-uri 'self'; form-action 'none'; object-src 'none'">
+  <title>Hiscores+</title>
+  <meta name="description" content="Lost City (2004scape) hiscores with percentiles, compare, gains tracking and leaderboards. Built to run as a LostKit tool.">
+  <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="top">
+      <div class="brand"><img src="favicon.png" alt="" width="20" height="20"><span>Hiscores+</span></div>
+      <nav class="tabs" aria-label="Views">
+        <button class="tab" data-tab="lookup" type="button">Lookup</button>
+        <button class="tab" data-tab="compare" type="button">Compare</button>
+        <button class="tab" data-tab="gains" type="button">Gains</button>
+        <button class="tab" data-tab="leaders" type="button">Leaderboard</button>
+      </nav>
+      <div class="top-right">
+        <div class="seg" id="filter-seg" role="group" aria-label="Which skills to show">
+          <button type="button" data-filter="all">All</button>
+          <button type="button" data-filter="combat">Combat</button>
+        </div>
+        <button class="icon-btn" id="settings-btn" type="button" title="Settings, totals and backup" aria-label="Settings">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 1h2l.4 2 1.3.6 1.7-1.2 1.4 1.4-1.2 1.7.6 1.3 2 .4v2l-2 .4-.6 1.3 1.2 1.7-1.4 1.4-1.7-1.2-1.3.6L9 15H7l-.4-2-1.3-.6-1.7 1.2-1.4-1.4 1.2-1.7L2.8 9.4.8 9V7l2-.4.6-1.3-1.2-1.7 1.4-1.4 1.7 1.2L6.6 3zM8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <main>
+      <!-- Lookup -->
+      <section class="view" id="view-lookup" hidden>
+        <form class="search" id="lookup-form" autocomplete="off">
+          <input id="lookup-name" class="input" maxlength="12" placeholder="Username" spellcheck="false" aria-label="Username">
+          <button class="btn" type="submit">Look up</button>
+        </form>
+        <div class="chips" id="lookup-chips"></div>
+        <div class="msg" id="lookup-msg" hidden></div>
+        <div id="lookup-result"></div>
+      </section>
+
+      <!-- Compare -->
+      <section class="view" id="view-compare" hidden>
+        <form class="search" id="compare-form" autocomplete="off">
+          <input id="compare-name" class="input" maxlength="12" placeholder="Add a player (up to 5)" spellcheck="false" aria-label="Player to add">
+          <button class="btn" type="submit">Add</button>
+        </form>
+        <div class="chips" id="compare-chips"></div>
+        <div class="bar">
+          <div class="seg" id="compare-mode" role="group" aria-label="Show">
+            <button type="button" data-mode="level">Level</button>
+            <button type="button" data-mode="xp">XP</button>
+            <button type="button" data-mode="rank">Rank</button>
+            <button type="button" data-mode="top">Top %</button>
+          </div>
+          <span class="grow"></span>
+          <button class="btn small" id="compare-refresh" type="button" title="Fetch everyone again">Refresh</button>
+          <button class="btn small" id="compare-clear" type="button">Clear</button>
+        </div>
+        <div class="msg" id="compare-msg" hidden></div>
+        <div id="compare-result"></div>
+      </section>
+
+      <!-- Gains -->
+      <section class="view" id="view-gains" hidden>
+        <div class="bar wrap">
+          <label class="field">Player <select id="gains-player" class="input small"></select></label>
+          <label class="field">Since <select id="gains-since" class="input small"></select></label>
+          <button class="btn small" id="gains-update" type="button">Update now</button>
+          <label class="check"><input type="checkbox" id="gains-hide-zero"> Only skills that changed</label>
+        </div>
+        <div class="msg" id="gains-msg" hidden></div>
+        <div id="gains-result"></div>
+      </section>
+
+      <!-- Leaderboard -->
+      <section class="view" id="view-leaders" hidden>
+        <div class="skill-picker" id="leaders-skills" role="group" aria-label="Skill"></div>
+        <div class="leaders-head" id="leaders-head"></div>
+        <div class="bar wrap">
+          <button class="btn small" id="lb-first" type="button" title="First page">‹‹</button>
+          <button class="btn small" id="lb-prev" type="button">‹ Prev</button>
+          <span class="page-label" id="lb-page"></span>
+          <button class="btn small" id="lb-next" type="button">Next ›</button>
+          <button class="btn small" id="lb-last" type="button" title="Last page">››</button>
+          <form class="inline" id="lb-rank-form" autocomplete="off">
+            <input id="lb-rank" class="input small num" inputmode="numeric" placeholder="Rank" aria-label="Go to rank">
+            <button class="btn small" type="submit">Go</button>
+          </form>
+          <form class="inline" id="lb-find-form" autocomplete="off">
+            <input id="lb-find" class="input small" maxlength="12" placeholder="Find player" spellcheck="false" aria-label="Find player">
+            <button class="btn small" type="submit">Find</button>
+          </form>
+        </div>
+        <div class="msg" id="leaders-msg" hidden></div>
+        <div id="leaders-result"></div>
+      </section>
+    </main>
+
+    <footer class="status">
+      <span id="status-api"></span>
+      <span id="status-totals"></span>
+    </footer>
+  </div>
+
+  <dialog id="settings" class="panel-dialog">
+    <div class="dialog-head">
+      <span>Settings</span>
+      <button class="icon-btn" id="settings-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="dialog-body">
+      <h3>Percentile totals</h3>
+      <p class="note">"Top X%" is your rank divided by the number of players ranked in that skill.
+        A skill only appears on the hiscores at level 15, so those counts differ per skill.
+        The counts are refreshed twice a day by the site's GitHub job; this browser refreshes them itself if they get older than a day and a half.</p>
+      <div id="totals-table"></div>
+      <div class="bar wrap">
+        <button class="btn small" id="totals-refresh" type="button">Refresh stale now</button>
+        <button class="btn small" id="totals-refresh-all" type="button">Re-check all</button>
+        <button class="btn small" id="totals-stop" type="button" hidden>Stop</button>
+      </div>
+
+      <h3>Your data</h3>
+      <p class="note" id="data-summary"></p>
+      <div class="bar wrap">
+        <button class="btn small" id="backup-copy" type="button">Copy backup</button>
+        <button class="btn small" id="backup-download" type="button">Download backup</button>
+        <button class="btn small" id="backup-restore-toggle" type="button">Restore…</button>
+        <button class="btn small danger" id="data-clear" type="button">Clear everything</button>
+      </div>
+      <div id="restore-box" hidden>
+        <textarea id="restore-text" class="input" rows="4" placeholder="Paste a backup here"></textarea>
+        <div class="bar"><button class="btn small" id="restore-go" type="button">Restore</button></div>
+      </div>
+      <div class="msg" id="settings-msg" hidden></div>
+
+      <h3>About</h3>
+      <p class="note">Hiscores+ reads the <a href="https://2004.lostcity.rs/hiscores" target="_blank" rel="noopener">Lost City hiscores</a> API,
+        which allows one request every two seconds, so lookups queue up politely.
+        Hiscores update when a player logs out. Skill icons and fonts come from
+        <a href="https://github.com/LostHQ/LostKit-Electron" target="_blank" rel="noopener">LostKit</a> (GPL-3.0); RuneScape is © Jagex.</p>
+      <p class="note" id="about-version"></p>
+    </div>
+  </dialog>
+</body>
+</html>

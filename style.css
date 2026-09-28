@@ -1,0 +1,422 @@
+/* Hiscores+ — styled to sit next to LostKit's own panels. */
+
+@font-face { font-family: 'RS-Bold'; src: url('../fonts/RuneScape-Bold-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
+@font-face { font-family: 'RS-Plain'; src: url('../fonts/RuneScape-Plain-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
+/* Small print uses the plain face; the bold face closes up below ~12px. */
+@font-face { font-family: 'RS-Small'; src: url('../fonts/RuneScape-Plain-12.otf') format('opentype'); font-weight: normal; }
+@font-face { font-family: 'RS-Small'; src: url('../fonts/RuneScape-Bold-12.otf') format('opentype'); font-weight: bold; }
+
+:root {
+  --bg: #222222;
+  --panel: #1a1a1a;
+  --row: #201c14;
+  --row-alt: #1c1912;
+  --line: #3a2e12;
+  --gold: #8b6914;
+  --gold-dim: #5a4510;
+  --gold-hi: #f0c419;
+  --text: #f0e68c;
+  --muted: #b8a060;
+  --faint: #8a7a4a;
+  --level: #4caf50;
+  --xp: #f0e68c;
+  --rank: #ff9800;
+  --top: #7fd0ff;
+  --win: #51cf66;
+  --lose: #ff6b6b;
+  --even: #74a0ff;
+  --shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  --tex: url('../img/button.jpg');
+  --small: 'RS-Small', 'RS-Plain', sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'RS-Bold', sans-serif;
+  font-size: 14px;
+  text-shadow: var(--shadow);
+  -webkit-font-smoothing: none;
+}
+
+body { min-height: 100vh; }
+a { color: var(--top); }
+[hidden] { display: none !important; }
+
+* { scrollbar-width: thin; scrollbar-color: var(--gold-dim) var(--panel); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--panel); }
+::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 4px; }
+
+#app {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 8px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+main { flex: 1; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  background: var(--panel);
+  border: 2px solid var(--gold);
+  border-radius: 8px;
+}
+.brand { display: flex; align-items: center; gap: 6px; font-size: 15px; color: var(--gold-hi); white-space: nowrap; }
+.brand img { image-rendering: pixelated; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; flex: 1 1 auto; }
+.top-right { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+
+/* ── Buttons (LostKit's stone texture) ──────────────────────────────────── */
+.btn, .tab, .chip, .skill-btn {
+  font-family: 'RS-Bold', sans-serif;
+  font-size: 14px;
+  line-height: 1.1;
+  color: var(--text);
+  text-shadow: var(--shadow);
+  background: var(--tex) repeat;
+  background-size: cover;
+  border: 2px outset var(--gold);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: transform 0.08s ease, background-color 0.08s ease;
+}
+.btn:hover, .tab:hover, .chip:hover, .skill-btn:hover { border-style: inset; background-color: rgba(139, 105, 20, 0.3); }
+.btn:active, .tab:active, .chip:active, .skill-btn:active { transform: translateY(1px); }
+.btn:focus-visible, .tab:focus-visible, .chip:focus-visible, .skill-btn:focus-visible, .seg button:focus-visible, .icon-btn:focus-visible {
+  outline: 2px solid var(--gold-hi);
+  outline-offset: 1px;
+}
+.btn.small { font-size: 12px; padding: 4px 8px; }
+.btn:disabled { opacity: 0.45; cursor: default; transform: none; border-style: outset; }
+.btn.danger { color: #ffb0a0; }
+.tab { font-size: 13px; padding: 5px 10px; }
+.tab.active { border-style: inset; color: #fff; box-shadow: inset 0 -3px 0 var(--gold-hi), inset 0 0 0 40px rgba(0, 0, 0, 0.25); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text);
+  background: #2a2a2a;
+  border: 1px solid var(--gold-dim);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+}
+.icon-btn:hover { background: #3a3a3a; color: #fff; }
+
+/* Segmented control, same as LostKit's compare window */
+.seg { display: inline-flex; border: 1px solid var(--gold-dim); border-radius: 3px; overflow: hidden; flex-shrink: 0; }
+.seg button {
+  padding: 5px 10px;
+  background: #2a2a2a;
+  border: none;
+  border-right: 1px solid var(--gold-dim);
+  color: #b8a86a;
+  font-family: var(--small);
+  font-size: 12px;
+  text-shadow: var(--shadow);
+  cursor: pointer;
+}
+.seg button:last-child { border-right: none; }
+.seg button:hover { background: #3a3a3a; color: var(--text); }
+.seg button.on { background: linear-gradient(to bottom, #6b5010, #4a3708); color: #fff; font-weight: bold; }
+
+/* ── Inputs ─────────────────────────────────────────────────────────────── */
+.input {
+  padding: 7px 10px;
+  background: #2a2a2a;
+  border: 2px inset var(--gold);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: 'RS-Bold', sans-serif;
+  font-size: 14px;
+  text-shadow: var(--shadow);
+  min-width: 0;
+}
+.input::placeholder { color: #888; }
+.input:focus { outline: none; border-color: var(--level); background: #333; }
+.input.small { font-size: 12px; padding: 4px 6px; }
+.input.num { width: 76px; }
+select.input { cursor: pointer; }
+textarea.input { width: 100%; font-family: var(--small); font-size: 12px; resize: vertical; }
+
+.search { display: flex; gap: 6px; margin-bottom: 6px; }
+.search .input { flex: 1; max-width: 360px; }
+form.inline { display: inline-flex; gap: 4px; }
+
+.bar { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.bar.wrap { flex-wrap: wrap; }
+.grow { flex: 1; }
+.field { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.check { display: inline-flex; align-items: center; gap: 5px; font-family: var(--small); font-size: 12px; color: var(--muted); cursor: pointer; }
+.check input { accent-color: var(--gold); }
+
+/* Player chips */
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 8px; min-height: 0; }
+.chips:empty { display: none; }
+.chips .label { font-family: var(--small); font-size: 12px; color: var(--faint); margin-right: 2px; }
+.chips .label:not(:first-child) { margin-left: 8px; }
+.chip { font-size: 12px; padding: 3px 8px; }
+.chip.saved::before { content: '★ '; color: var(--gold-hi); }
+.chip.added { border-style: inset; border-color: var(--level); color: #fff; box-shadow: inset 0 0 0 40px rgba(76, 175, 80, 0.22); }
+.chip.added::after { content: ' ✓'; color: var(--win); }
+.chip .x { margin-left: 6px; color: var(--lose); }
+
+/* Messages */
+.msg {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--gold-dim);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  color: var(--muted);
+}
+.msg.error { color: var(--lose); border-color: #6b2a2a; }
+.msg.ok { color: var(--win); }
+.banner {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 2px solid #6b2a2a;
+  border-radius: 6px;
+  background: #2a1a1a;
+  color: #ffb0a0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.empty {
+  padding: 28px 10px;
+  text-align: center;
+  font-family: var(--small);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+/* ── Player card ────────────────────────────────────────────────────────── */
+.card {
+  background: var(--panel);
+  border: 2px solid var(--gold);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.pc-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pc-name { font-size: 18px; color: #fff; }
+.star {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--faint);
+  text-shadow: var(--shadow);
+}
+.star.on { color: var(--gold-hi); }
+.star:hover { color: #fff; }
+.pc-combat { margin-left: auto; font-size: 14px; color: var(--muted); }
+.pc-combat b { color: #fff; font-size: 17px; font-weight: normal; }
+.pc-sub { margin-top: 4px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.pc-foot { margin-top: 6px; font-family: var(--small); font-size: 12px; color: var(--faint); display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.linkish { background: none; border: none; padding: 0; color: var(--top); font: inherit; text-shadow: inherit; cursor: pointer; text-decoration: underline; }
+
+.c-level { color: var(--level); }
+.c-xp { color: var(--xp); }
+.c-rank { color: var(--rank); }
+.c-top { color: var(--top); }
+.c-muted { color: var(--muted); }
+.c-faint { color: var(--faint); }
+.c-win { color: var(--win); }
+.c-lose { color: var(--lose); }
+
+/* ── Skill tiles (LostKit's hiscores panel, plus Top %) ─────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 4px;
+}
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px 5px;
+  background: var(--tex) repeat;
+  background-size: cover;
+  border: 1px solid var(--gold);
+  border-radius: 3px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.15;
+  min-width: 0;
+}
+.tile-icon { height: 20px; width: auto; max-width: 26px; image-rendering: pixelated; margin-bottom: 3px; object-fit: contain; }
+.tile .v { white-space: nowrap; }
+.tile .top-line { color: var(--top); white-space: normal; }
+.tile .top-line .of { font-family: var(--small); font-size: 11px; color: var(--faint); }
+.tile .next { font-family: var(--small); font-size: 11px; color: var(--muted); margin-top: 1px; }
+.tile .next.maxed { color: var(--gold-hi); font-weight: bold; }
+.tile.unranked { opacity: 0.55; }
+.tile.unranked .v { color: var(--faint); }
+.tile.overall { border-color: var(--gold-hi); }
+.pbar { width: 100%; height: 5px; margin-top: 5px; background: rgba(0, 0, 0, 0.55); border: 1px solid var(--gold-dim); overflow: hidden; }
+.pbar > div { height: 100%; background: var(--level); transition: width 0.3s ease; }
+.pbar.maxed > div { background: var(--gold-hi); }
+.pending { color: var(--faint) !important; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.45; } }
+
+/* ── Combat card ────────────────────────────────────────────────────────── */
+.cc-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.cc-head .big { font-size: 22px; color: #fff; }
+.cc-style { font-family: var(--small); font-size: 12px; color: var(--muted); }
+.cc-bar { height: 7px; margin: 6px 0 2px; background: rgba(0, 0, 0, 0.55); border: 1px solid var(--gold-dim); }
+.cc-bar > div { height: 100%; background: var(--gold-hi); }
+.cc-line { font-family: var(--small); font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+.cc-line b { color: var(--text); font-weight: bold; }
+.cc-next { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.cc-next .need {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--gold-dim);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+.cc-next .need img { height: 14px; image-rendering: pixelated; }
+.calc { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.calc summary { cursor: pointer; color: var(--text); font-size: 13px; }
+.calc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; margin-top: 8px; }
+.calc-grid label { display: flex; align-items: center; gap: 6px; font-family: var(--small); font-size: 12px; color: var(--muted); }
+.calc-grid label img { height: 16px; image-rendering: pixelated; }
+.calc-grid input { width: 56px; }
+.calc-out { margin-top: 8px; font-size: 14px; }
+.calc-out b { color: #fff; font-size: 18px; font-weight: normal; }
+
+/* ── Tables (compare, gains, leaderboard, totals) ───────────────────────── */
+.table-wrap { overflow-x: auto; border: 2px solid var(--gold); border-radius: 8px; background: var(--panel); }
+.table-wrap.fit { max-width: 880px; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th, table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+table.grid th { position: sticky; top: 0; background: #241e10; color: var(--muted); font-weight: normal; font-size: 12px; font-family: var(--small); z-index: 1; }
+table.grid tbody tr:nth-child(even) td { background: var(--row-alt); }
+table.grid tbody tr:hover td { background: rgba(139, 105, 20, 0.14); }
+table.grid .l { text-align: left; }
+table.grid .c { text-align: center; }
+table.grid td.sk { text-align: left; }
+.sk-cell { display: inline-flex; align-items: center; gap: 6px; }
+.sk-cell img { width: 18px; height: 18px; object-fit: contain; image-rendering: pixelated; }
+table.grid tr.hl td { background: rgba(240, 196, 25, 0.13) !important; }
+table.grid tr.dim td { opacity: 0.45; }
+.sub { display: block; font-family: var(--small); font-size: 11px; color: var(--faint); }
+
+/* Compare */
+table.cmp td.p { text-align: center; min-width: 96px; }
+table.cmp th.p { text-align: center; vertical-align: bottom; min-width: 96px; }
+table.cmp .pname { display: block; color: #fff; font-family: 'RS-Bold', sans-serif; font-size: 14px; }
+table.cmp .x { background: none; border: none; color: var(--faint); cursor: pointer; font: inherit; padding: 0 0 0 4px; text-shadow: inherit; }
+table.cmp .x:hover { color: var(--lose); }
+table.cmp .val { font-size: 14px; color: var(--text); }
+table.cmp td.best { background: rgba(81, 207, 102, 0.12) !important; }
+table.cmp td.best .val { color: var(--win); }
+table.cmp td.none .val { color: #6a5a2a; }
+table.cmp tr.combat td, table.cmp tr.overall td { border-bottom: 2px solid var(--gold-dim); }
+table.cmp tfoot td { background: #241e10; font-size: 12px; }
+.lead-count { color: var(--win); }
+
+/* Gains */
+.gain-up { color: var(--win); }
+.gain-down { color: var(--lose); }
+.gain-zero { color: var(--faint); }
+.summary { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 2px 8px; font-size: 13px; color: var(--muted); }
+.summary b { color: #fff; font-weight: normal; }
+
+/* Leaderboard */
+.skill-picker { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 6px; }
+.skill-btn { padding: 3px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; }
+.skill-btn img { max-width: 24px; max-height: 24px; image-rendering: pixelated; }
+.skill-btn.on { border-style: inset; border-color: var(--gold-hi); box-shadow: inset 0 0 0 40px rgba(240, 196, 25, 0.18); }
+.leaders-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 2px; }
+.leaders-head .title { font-size: 17px; color: #fff; }
+.leaders-head .meta { font-family: var(--small); font-size: 12px; color: var(--faint); }
+.page-label { font-family: var(--small); font-size: 12px; color: var(--muted); min-width: 110px; text-align: center; }
+.namebtn { background: none; border: none; padding: 0; font: inherit; color: var(--text); text-shadow: inherit; cursor: pointer; }
+.namebtn:hover { color: #fff; text-decoration: underline; }
+.mini {
+  font-family: var(--small);
+  font-size: 11px;
+  padding: 2px 6px;
+  color: var(--muted);
+  background: #2a2a2a;
+  border: 1px solid var(--gold-dim);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.mini:hover { color: #fff; background: #3a3a3a; }
+
+/* ── Status bar ─────────────────────────────────────────────────────────── */
+.status {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 8px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--line);
+  font-family: var(--small);
+  font-size: 11px;
+  color: var(--faint);
+}
+.status .busy { color: var(--text); }
+
+/* ── Settings dialog ────────────────────────────────────────────────────── */
+.panel-dialog {
+  width: min(640px, calc(100vw - 24px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  color: var(--text);
+  background: var(--panel);
+  border: 2px solid var(--gold);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
+}
+.panel-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--gold-dim); font-size: 16px; }
+.dialog-body { padding: 4px 12px 12px; overflow: auto; max-height: calc(100vh - 90px); }
+.dialog-body h3 { margin: 14px 0 4px; font-weight: normal; font-size: 15px; color: var(--gold-hi); }
+.note { font-family: var(--small); font-size: 12px; line-height: 1.5; color: var(--muted); margin: 4px 0 8px; }
+#totals-table .table-wrap { max-height: 260px; overflow: auto; }
+
+/* ── Narrow (LostKit side windows) ──────────────────────────────────────── */
+@media (max-width: 520px) {
+  #app { padding: 4px; }
+  .top { padding: 5px 6px; }
+  .brand span { display: none; }
+  .tab { font-size: 12px; padding: 4px 7px; }
+  .stats-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+  .pc-combat { margin-left: 0; }
+  table.grid th, table.grid td { padding: 4px 5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

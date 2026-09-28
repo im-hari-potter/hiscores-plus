@@ -1,0 +1,27 @@
+{
+  "updated": "2026-09-28T00:48:11.701Z",
+  "source": "measured by hand when the tool was built",
+  "note": "Players ranked per hiscores category. A skill only has a hiscores row at level 15+. The GitHub Action writes fresher numbers to totals.json.",
+  "totals": {
+    "0": 20482,
+    "1": 14138,
+    "2": 9115,
+    "3": 13709,
+    "4": 13581,
+    "5": 8164,
+    "6": 8942,
+    "7": 11573,
+    "8": 11441,
+    "9": 13250,
+    "10": 7107,
+    "11": 11595,
+    "12": 8671,
+    "13": 8488,
+    "14": 10672,
+    "15": 13760,
+    "16": 4344,
+    "17": 8490,
+    "18": 7754,
+    "21": 4679
+  }
+}
