@@ -9,17 +9,39 @@ import { Totals, topPercent, formatPercent } from './totals.js';
 import { rankParamForPage, pageOfRank, pageCount } from './totals-core.js';
 import { store, players, snapshots, exportBackup, importBackup } from './store.js';
 
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const MAX_COMPARE = 5;
 
-// ?api=local points the page at /api/hiscores on its own server (used by the tests).
+// How to reach the API:
+//  - inside LostKit: straight to Lost City (LostKit lets its tool pages do that)
+//  - in a browser: straight to Lost City first (works if they ever allow other
+//    websites), then the relay on this site's own address, ./api/hiscores,
+//    which exists when the site is hosted on Netlify (see the _redirects file)
+//  - ?api=local: only the local test server
 const params = new URLSearchParams(location.search);
-const API_BASE = params.get('api') === 'local' ? new URL('api/hiscores', location.href).href : LIVE_API;
-const api = new HiscoresApi({ base: API_BASE });
+const RELAY = new URL('api/hiscores', location.href).href;
+const ROUTES = params.get('api') === 'local' ? [RELAY] : isElectron() ? [LIVE_API] : [LIVE_API, RELAY];
+const api = new HiscoresApi({ routes: ROUTES });
 const totals = new Totals(api);
 
 // ── State ────────────────────────────────────────────────────────────────
 const prefs = store.get('prefs', {});
+const DEFAULT_ORDER = [0, ...SKILL_IDS];
+
+// The Lookup tiles can be dragged into any order; this keeps every id exactly once.
+function normalizeOrder(order) {
+  const valid = Array.isArray(order) ? order.filter((id, i) => DEFAULT_ORDER.includes(id) && order.indexOf(id) === i) : [];
+  return [...valid, ...DEFAULT_ORDER.filter(id => !valid.includes(id))];
+}
+
+// Leaderboard columns you can sort by, and which way each sorts first.
+const LB_SORTS = {
+  rank:  { first: 1,  label: 'Rank',     get: r => r.rank },
+  name:  { first: 1,  label: 'Player',   get: r => r.name.toLowerCase() },
+  level: { first: -1, label: 'Level',    get: r => r.level },
+  xp:    { first: -1, label: 'XP',       get: r => r.xp },
+  top:   { first: 1,  label: 'Top %',    get: r => r.rank },
+};
 const state = {
   tab: ['lookup', 'compare', 'gains', 'leaders'].includes(prefs.tab) ? prefs.tab : 'lookup',
   filter: prefs.filter === 'combat' ? 'combat' : 'all',
@@ -34,7 +56,9 @@ const state = {
     type: SKILL_BY_ID.has(prefs.lbType) ? prefs.lbType : 0,
     page: Number.isInteger(prefs.lbPage) && prefs.lbPage > 0 ? prefs.lbPage : 1,
     rows: null, highlight: null, loading: false, loadedKey: null,
+    sort: prefs.lbSort && LB_SORTS[prefs.lbSort.key] ? { key: prefs.lbSort.key, dir: prefs.lbSort.dir === -1 ? -1 : 1 } : { key: 'rank', dir: 1 },
   },
+  tileOrder: normalizeOrder(prefs.tileOrder),
   calc: null,              // { levels, source } for the combat calculator
 };
 
@@ -49,6 +73,8 @@ function savePrefs() {
     gainsHideZero: state.gains.hideZero,
     lbType: state.leaders.type,
     lbPage: state.leaders.page,
+    lbSort: state.leaders.sort,
+    tileOrder: state.tileOrder,
     lastLookup: state.lookup.profile?.name || prefs.lastLookup || null,
   });
 }
@@ -61,9 +87,11 @@ const fmt = n => nf.format(n);
 const dtf = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const when = t => dtf.format(new Date(t));
 const iconSrc = skill => `${skill.icon}.webp`;
-const iconImg = (skill, cls = '') => `<img class="${cls}" src="${iconSrc(skill)}" alt="" title="${esc(skill.name)}" decoding="sync">`;
+const iconImg = (skill, cls = '') => `<img class="ico ${cls}" src="${iconSrc(skill)}" alt="" title="${esc(skill.name)}" decoding="sync">`;
+// Crossed swords for the combat level (its own icon, not the Attack sword).
+const COMBAT = { name: 'Combat level', icon: 'combat' };
 // Keep every icon decoded in memory, so views that re-render don't flicker.
-const ICON_CACHE = SKILLS.map(s => Object.assign(new Image(), { src: iconSrc(s), decoding: 'sync' }));
+const ICON_CACHE = [...SKILLS, COMBAT].map(s => Object.assign(new Image(), { src: iconSrc(s), decoding: 'sync' }));
 const visibleIds = (withOverall = true) => (state.filter === 'combat' ? COMBAT_IDS : withOverall ? [0, ...SKILL_IDS] : SKILL_IDS);
 
 function ago(t) {
@@ -102,8 +130,18 @@ function showMsg(id, html, kind = '') {
 
 function errorText(e) {
   if (!e) return 'Something went wrong.';
-  if (e.kind === 'blocked') return 'The hiscores API refused this page. Open Hiscores+ from inside LostKit (Add tool), where it is allowed.';
+  if (e.kind === 'blocked') { showBlockedBanner(); return 'This browser is not allowed to read the hiscores from here (see the note at the top).'; }
   return esc(e.message || String(e));
+}
+
+function showBlockedBanner() {
+  const b = $('banner');
+  if (!b.hidden) return;
+  b.innerHTML = `<b>Your browser won't let this page read the Lost City hiscores.</b>
+    Lost City's API tells browsers that only its own website may read it. LostKit's tool tabs are allowed
+    through, so this page works there. For normal browsers the site needs the small relay described in the README
+    (hosting on Netlify turns it on), or Lost City would have to allow other websites.`;
+  b.hidden = false;
 }
 
 function levelsOf(profile) {
@@ -230,7 +268,7 @@ function renderPlayerCard() {
       <div class="pc-top">
         <span class="pc-name">${esc(p.name)}</span>
         <button type="button" class="star${saved ? ' on' : ''}" data-star="${esc(p.name)}" title="${saved ? 'Remove from saved players' : 'Save this player'}" aria-pressed="${saved}">★</button>
-        <span class="pc-combat" title="${combat.min === combat.max ? '' : 'Some combat skills are below 15 and not on the hiscores, so the exact level is unknown'}">Combat <b>${combatText(combat)}</b></span>
+        <span class="pc-combat" title="${combat.min === combat.max ? 'Combat level' : 'Some combat skills are below 15 and not on the hiscores, so the exact level is unknown'}">${iconImg(COMBAT)} Combat <b>${combatText(combat)}</b></span>
       </div>
       ${overall ? `
       <div class="pc-sub">
@@ -263,17 +301,100 @@ function renderTiles() {
   const p = state.lookup.profile;
   if (!el) return;
   if (!p) { el.innerHTML = ''; return; }
+  if (tileDrag?.active) { tileDrag.stale = true; return; }   // don't pull tiles out from under a drag
   const levels = levelsOf(p);
   const bounds = boundUnrankedLevels(levels, p.stats[0]?.level);
-  el.innerHTML = `<div class="stats-grid">${visibleIds(true).map(id => tileHtml(SKILL_BY_ID.get(id), p.stats[id], bounds)).join('')}</div>`;
+  const shown = visibleIds(true);
+  const ids = state.tileOrder.filter(id => shown.includes(id));
+  const custom = state.tileOrder.some((id, i) => id !== DEFAULT_ORDER[i]);
+  el.innerHTML = `<div class="tiles-bar"><span>Drag the tiles to arrange them.</span>${custom ? `<button type="button" class="linkish" data-action="tiles-reset">Reset layout</button>` : ''}</div>
+    <div class="stats-grid" id="tiles-grid">${ids.map(id => tileHtml(SKILL_BY_ID.get(id), p.stats[id], bounds)).join('')}</div>`;
+}
+
+// ── Dragging tiles around ────────────────────────────────────────────────
+// Mouse: press and move. Touch: hold for a moment, then move (a quick swipe still scrolls).
+let tileDrag = null;
+
+function wireTileDrag() {
+  const root = $('lookup-result');
+  root.addEventListener('pointerdown', e => {
+    const tile = e.target.closest('#tiles-grid .tile');
+    if (!tile || e.button !== 0 || tileDrag) return;
+    tileDrag = { tile, id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, active: false, touch: e.pointerType !== 'mouse' };
+    if (tileDrag.touch) tileDrag.timer = setTimeout(() => tileDrag && !tileDrag.active && startTileDrag(), 350);
+  });
+  window.addEventListener('pointermove', e => {
+    const d = tileDrag;
+    if (!d || e.pointerId !== d.id) return;
+    d.x = e.clientX; d.y = e.clientY;
+    if (!d.active) {
+      const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
+      if (d.touch) { if (moved > 10) endTileDrag(false); return; }  // moved before the hold: it's a scroll
+      if (moved < 6) return;
+      startTileDrag();
+    }
+    moveTileDrag();
+    e.preventDefault();
+  }, { passive: false });
+  window.addEventListener('touchmove', e => { if (tileDrag?.active) e.preventDefault(); }, { passive: false });
+  window.addEventListener('pointerup', e => { if (tileDrag && e.pointerId === tileDrag.id) endTileDrag(true); });
+  window.addEventListener('pointercancel', e => { if (tileDrag && e.pointerId === tileDrag.id) endTileDrag(false); });
+  window.addEventListener('keydown', e => { if (e.key === 'Escape' && tileDrag?.active) endTileDrag(false); });
+}
+
+function startTileDrag() {
+  const d = tileDrag;
+  const rect = d.tile.getBoundingClientRect();
+  d.active = true;
+  d.dx = d.x0 - rect.left; d.dy = d.y0 - rect.top;
+  d.before = [...d.tile.parentNode.children];
+  d.ghost = d.tile.cloneNode(true);
+  d.ghost.classList.add('tile-ghost');
+  Object.assign(d.ghost.style, { width: rect.width + 'px', height: rect.height + 'px' });
+  document.body.appendChild(d.ghost);
+  d.tile.classList.add('tile-placeholder');
+  document.body.classList.add('tiles-dragging');
+  moveTileDrag();
+}
+
+function moveTileDrag() {
+  const d = tileDrag;
+  d.ghost.style.left = (d.x - d.dx) + 'px';
+  d.ghost.style.top = (d.y - d.dy) + 'px';
+  const over = document.elementFromPoint(d.x, d.y)?.closest('#tiles-grid .tile');
+  if (!over || over === d.tile) return;
+  const tiles = [...d.tile.parentNode.children];
+  if (tiles.indexOf(d.tile) < tiles.indexOf(over)) over.after(d.tile); else over.before(d.tile);
+}
+
+function endTileDrag(keep) {
+  const d = tileDrag;
+  tileDrag = null;
+  if (!d) return;
+  clearTimeout(d.timer);
+  if (!d.active) return;
+  d.ghost.remove();
+  d.tile.classList.remove('tile-placeholder');
+  document.body.classList.remove('tiles-dragging');
+  const grid = d.tile.parentNode;
+  if (!keep) {                                   // put everything back where it was
+    for (const t of d.before) grid.appendChild(t);
+  } else {
+    const moved = [...grid.children].map(t => Number(t.dataset.id));
+    const slots = new Set(moved);
+    let k = 0;
+    state.tileOrder = state.tileOrder.map(id => (slots.has(id) ? moved[k++] : id));
+    savePrefs();
+  }
+  if (d.stale || keep) renderTiles();
 }
 
 function tileHtml(skill, stat, bounds) {
   if (!stat) {
     const b = bounds[skill.key];
     const lvl = !b ? `&lt;${MIN_RANKED_LEVEL}` : b.min === b.max ? b.min : `${b.min}–${b.max}`;
-    return `<div class="tile unranked" title="${esc(skill.name)}: below level ${MIN_RANKED_LEVEL}, so not on the hiscores">
-      ${iconImg(skill, 'tile-icon')}
+    return `<div class="tile unranked" data-id="${skill.id}" title="${esc(skill.name)}: below level ${MIN_RANKED_LEVEL}, so not on the hiscores">
+      ${iconImg(skill)}
       <div class="v">Level: ${lvl}</div>
       <div class="v">Not ranked</div>
       <div class="next">Ranks at ${MIN_RANKED_LEVEL}</div>
@@ -291,8 +412,8 @@ function tileHtml(skill, stat, bounds) {
       : `<div class="next">Next: ${fmt(pr.remaining)} XP</div>
          <div class="pbar" title="${fmt(pr.remaining)} XP to level ${pr.nextLevel} (${pr.pct.toFixed(1)}%)"><div style="width:${pr.pct.toFixed(1)}%"></div></div>`;
   }
-  return `<div class="tile${skill.id === 0 ? ' overall' : ''}" title="${esc(skill.name)}">
-    ${iconImg(skill, 'tile-icon')}
+  return `<div class="tile${skill.id === 0 ? ' overall' : ''}" data-id="${skill.id}" title="${esc(skill.name)}">
+    ${iconImg(skill)}
     <div class="v c-level">Level: ${fmt(stat.level)}</div>
     <div class="v c-xp">XP: ${fmt(stat.xp)}</div>
     <div class="v c-rank">Rank: ${fmt(stat.rank)}</div>
@@ -346,7 +467,6 @@ function renderCombatLive() {
   const next = levelsToNextCombat(L);
   const real = p ? combatFromProfile(levelsOf(p), p.stats[0]?.level) : null;
   const differs = p && real && (COMBAT_KEYS.some(k => L[k] !== real.low[k]));
-  const styleName = { melee: 'Melee', ranged: 'Ranged', magic: 'Magic' }[b.style];
   const f2 = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 });
   const needs = COMBAT_KEYS
     .filter(k => next[k] != null)
@@ -362,7 +482,7 @@ function renderCombatLive() {
   const unknown = p && !differs && real.min !== real.max
     ? `<div class="cc-line">Some combat skills are below 15, so they're not on the hiscores. Their lowest possible levels are used below, and you can change them in the calculator.</div>` : '';
   el.innerHTML = `
-    <div class="cc-head">${head} <span class="cc-style">${styleName} build</span></div>
+    <div class="cc-head">${iconImg(COMBAT)} ${head}</div>
     <div class="cc-bar" title="${Math.round(b.progress * 100)}% of the way to ${b.level + 1}"><div style="width:${(b.progress * 100).toFixed(1)}%"></div></div>
     ${unknown}
     <div class="cc-line">Base: ¼ × (Defence <b>${L.defence}</b> + Hitpoints <b>${L.hitpoints}</b> + half of Prayer <b>${L.prayer}</b> = <b>${Math.floor(L.prayer / 2)}</b>) = <b>${f2(b.base)}</b></div>
@@ -465,12 +585,11 @@ function renderCompare() {
   // Combat level row
   const combats = cols.map(c => c.p ? combatFromProfile(levelsOf(c.p), c.p.stats[0]?.level) : null);
   const bestCombat = Math.max(...combats.map(c => (c ? c.min : -1)));
-  rows.push(`<tr class="combat"><td class="sk"><span class="sk-cell">${iconImg(SKILL_BY_ID.get(1))} Combat</span></td>${cols.map((c, i) => {
+  rows.push(`<tr class="combat"><td class="sk"><span class="sk-cell">${iconImg(COMBAT)} Combat</span></td>${cols.map((c, i) => {
     const cb = combats[i];
     if (!cb) return `<td class="p none"><span class="val">–</span></td>`;
-    const style = combatBreakdown(cb.low).style;
     const best = cols.filter(x => x.p).length > 1 && cb.min === bestCombat;
-    return `<td class="p${best ? ' best' : ''}"><span class="val">${combatText(cb)}</span><span class="sub">${style}</span></td>`;
+    return `<td class="p${best ? ' best' : ''}"><span class="val">${combatText(cb)}</span></td>`;
   }).join('')}</tr>`);
 
   const ids = visibleIds(true);
@@ -703,7 +822,7 @@ function renderLeaders() {
     picker.dataset.ids = ids.join(',');
     picker.innerHTML = ids.map(id => {
       const s = SKILL_BY_ID.get(id);
-      return `<button type="button" class="skill-btn" data-lb-type="${id}" title="${esc(s.name)}" aria-label="${esc(s.name)}"><img src="${iconSrc(s)}" alt="" decoding="sync"></button>`;
+      return `<button type="button" class="skill-btn" data-lb-type="${id}" title="${esc(s.name)}" aria-label="${esc(s.name)}"><img class="ico" src="${iconSrc(s)}" alt="" decoding="sync"></button>`;
     }).join('');
   }
   picker.querySelectorAll('.skill-btn').forEach(b => {
@@ -714,7 +833,7 @@ function renderLeaders() {
   const skill = SKILL_BY_ID.get(lb.type);
   const t = totals.get(lb.type);
   const pages = t ? pageCount(t.total) : null;
-  $('leaders-head').innerHTML = `${iconImg(skill, 'tile-icon')}<span class="title">${esc(skill.name)}</span>
+  $('leaders-head').innerHTML = `${iconImg(skill)}<span class="title">${esc(skill.name)}</span>
     <span class="meta">${t ? `${fmt(t.total)} ${lb.type === 0 ? 'ranked accounts' : `players with ${MIN_RANKED_LEVEL}+ ${esc(skill.name)}`} · counted ${ago(t.at)}` : 'Counting players…'}</span>`;
   $('lb-page').textContent = `Page ${fmt(lb.page)}${pages ? ` of ${fmt(pages)}` : ''}`;
   $('lb-prev').disabled = $('lb-first').disabled = lb.page <= 1 || lb.loading;
@@ -725,7 +844,20 @@ function renderLeaders() {
   if (!lb.rows && lb.loading) { box.innerHTML = `<div class="empty pending">Loading page ${fmt(lb.page)}…</div>`; return; }
   if (!lb.rows) { box.innerHTML = ''; return; }
   const hl = lb.highlight;
-  const body = lb.rows.map(r => {
+  const { key, dir } = lb.sort;
+  const get = LB_SORTS[key].get;
+  const rows = [...lb.rows].sort((a, b) => {
+    const x = get(a), y = get(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * dir || a.rank - b.rank;
+  });
+  const th = (k, cls = '') => {
+    const on = key === k;
+    const label = k === 'level' && lb.type === 0 ? 'Total level' : LB_SORTS[k].label;
+    return `<th class="${cls}" aria-sort="${on ? (dir === 1 ? 'ascending' : 'descending') : 'none'}"><button type="button" class="th-sort${on ? ' on' : ''}" data-sort="${k}" title="Sort by ${label}">${label}<span class="arrow">${on ? (dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
+  };
+  const sortedNote = key === 'rank' && dir === 1 ? ''
+    : `<div class="sort-note">Sorted by ${LB_SORTS[key].label}, ${dir === 1 ? 'lowest' : 'highest'} first, within this page. <button type="button" class="linkish" data-sort-reset>Back to rank order</button></div>`;
+  const body = rows.map(r => {
     const top = topFor(lb.type, r.rank);
     const on = hl && (hl === r.safe || hl === r.rank);
     return `<tr class="${on ? 'hl' : ''}">
@@ -737,8 +869,8 @@ function renderLeaders() {
       <td class="c"><button type="button" class="mini" data-add="${esc(r.name)}" title="Add to compare">+ Compare</button></td>
     </tr>`;
   }).join('');
-  box.innerHTML = `<div class="table-wrap fit${lb.loading ? ' pending' : ''}"><table class="grid lb">
-    <thead><tr><th>Rank</th><th class="l">Player</th><th>${lb.type === 0 ? 'Total level' : 'Level'}</th><th>XP</th><th>Top %</th><th></th></tr></thead>
+  box.innerHTML = `${sortedNote}<div class="table-wrap fit${lb.loading ? ' pending' : ''}"><table class="grid lb">
+    <thead><tr>${th('rank')}${th('name', 'l')}${th('level')}${th('xp')}${th('top')}<th></th></tr></thead>
     <tbody>${body || `<tr><td class="l" colspan="6">No players here.</td></tr>`}</tbody></table></div>`;
 }
 
@@ -788,7 +920,7 @@ function renderSettings() {
   const tracked = snapshots.tracked();
   const snapCount = tracked.reduce((a, t) => a + t.count, 0);
   $('data-summary').textContent = `${players.saved().length} saved players · ${tracked.length} tracked players · ${snapCount} snapshots. Stored in this browser only; a backup lets you move it or keep it safe.`;
-  $('about-version').textContent = `Version ${VERSION}${API_BASE !== LIVE_API ? ` · test API: ${API_BASE}` : ''}`;
+  $('about-version').textContent = `Version ${VERSION} · reading the API ${api.base === LIVE_API ? 'directly' : `through ${api.base}`}`;
 }
 
 // ── URL hash (so a view can be bookmarked or reopened) ──────────────────
@@ -824,6 +956,7 @@ function applyHash() {
 
 // ── Events ───────────────────────────────────────────────────────────────
 function wire() {
+  wireTileDrag();
   document.querySelector('.tabs').addEventListener('click', e => {
     const b = e.target.closest('.tab');
     if (b) setTab(b.dataset.tab);
@@ -905,6 +1038,15 @@ function wire() {
     }
     const lbType = t.closest('[data-lb-type]');
     if (lbType) { goLeaders(Number(lbType.dataset.lbType), 1); return; }
+    const sortBtn = t.closest('[data-sort]');
+    if (sortBtn) {
+      const k = sortBtn.dataset.sort;
+      const cur = state.leaders.sort;
+      state.leaders.sort = cur.key === k ? { key: k, dir: -cur.dir } : { key: k, dir: LB_SORTS[k].first };
+      savePrefs(); renderLeaders();
+      return;
+    }
+    if (t.closest('[data-sort-reset]')) { state.leaders.sort = { key: 'rank', dir: 1 }; savePrefs(); renderLeaders(); return; }
     const act = t.closest('[data-action]');
     if (!act) return;
     const p = state.lookup.profile;
@@ -921,6 +1063,10 @@ function wire() {
         break;
       case 'refresh-lookup':
         if (p) doLookup(p.name, { force: true });
+        break;
+      case 'tiles-reset':
+        state.tileOrder = [...DEFAULT_ORDER];
+        savePrefs(); renderTiles();
         break;
       case 'calc-reset':
         state.calc = null;
@@ -1022,13 +1168,6 @@ function afterRoute() {
 // ── Start ────────────────────────────────────────────────────────────────
 function start() {
   wire();
-  if (!isElectron() && API_BASE === LIVE_API) {
-    const b = $('banner');
-    b.innerHTML = `<b>Open this inside LostKit.</b> The Lost City hiscores API only answers requests from its own website.
-      LostKit's tool tabs are allowed through, a normal browser tab isn't, so lookups here will fail.
-      In LostKit: <i>Add tool</i> → paste this page's address.`;
-    b.hidden = false;
-  }
   const routed = location.hash.length > 1 && applyHash();
   if (!routed && state.tab === 'lookup' && prefs.lastLookup) $('lookup-name').value = prefs.lastLookup;
   render();

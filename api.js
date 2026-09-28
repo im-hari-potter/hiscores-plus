@@ -73,10 +73,25 @@ export function parseProfile(name, rows, fetchedAt = Date.now()) {
 }
 
 // ── The queue ─────────────────────────────────────────────────────────────
+// `routes` are the ways to reach the API, tried in order until one works:
+//   - straight to 2004.lostcity.rs (always works inside LostKit; in a normal
+//     browser only if Lost City allows other websites to read it)
+//   - a relay on this page's own site, at ./api/hiscores (set up by the
+//     _redirects file when the site is hosted on Netlify)
+// The route that worked is remembered for a day.
+const ROUTE_KEY = 'lchs.api.route';
+const ROUTE_TTL = 24 * 3600e3;
+
 export class HiscoresApi extends EventTarget {
-  constructor({ base = LIVE_API, minGapMs = 2100, cacheMs = 60_000, timeoutMs = 20_000 } = {}) {
+  constructor({ routes = [LIVE_API], minGapMs = 2100, cacheMs = 60_000, timeoutMs = 20_000 } = {}) {
     super();
-    this.base = base.replace(/\/+$/, '');
+    this.routes = routes.map(r => r.replace(/\/+$/, ''));
+    this.route = 0;
+    try {
+      const saved = JSON.parse(localStorage.getItem(ROUTE_KEY) || 'null');
+      const i = saved ? this.routes.indexOf(saved.route) : -1;
+      if (i >= 0 && Date.now() - saved.at < ROUTE_TTL) this.route = i;
+    } catch (e) { /* no storage */ }
     this.minGapMs = minGapMs;
     this.cacheMs = cacheMs;
     this.timeoutMs = timeoutMs;
@@ -84,10 +99,12 @@ export class HiscoresApi extends EventTarget {
     this.nextAt = 0;
     this.pumping = false;
     this.active = null;
-    this.cache = new Map();
-    this.inflight = new Map();
+    this.cache = new Map();      // path -> { at, data }
+    this.inflight = new Map();   // path -> promise
     this.stats = { requests: 0, limited: 0 };
   }
+
+  get base() { return this.routes[this.route]; }
 
   status() {
     return {
@@ -99,28 +116,32 @@ export class HiscoresApi extends EventTarget {
 
   #emit() { this.dispatchEvent(new CustomEvent('queue', { detail: this.status() })); }
 
-  // GET a path under the API base; resolves to parsed JSON.
+  #useRoute(i) {
+    this.route = i;
+    try { localStorage.setItem(ROUTE_KEY, JSON.stringify({ route: this.routes[i], at: Date.now() })); } catch (e) { /* ignore */ }
+  }
+
+  // GET a path under the API (e.g. "/player/zezima"); resolves to parsed JSON.
   get(path, { priority = 'fg', cacheMs = this.cacheMs, force = false } = {}) {
-    const url = this.base + path;
-    const hit = this.cache.get(url);
+    const hit = this.cache.get(path);
     if (!force && hit && Date.now() - hit.at < cacheMs) return Promise.resolve(hit.data);
-    const pending = this.inflight.get(url);
+    const pending = this.inflight.get(path);
     if (pending) {
       // Someone asked for the same thing already; a foreground ask promotes it.
-      if (priority === 'fg') this.#promote(url);
+      if (priority === 'fg') this.#promote(path);
       return pending;
     }
     const promise = new Promise((resolve, reject) => {
-      this.queues[priority].push({ url, priority, resolve, reject, attempts: 0 });
-    }).finally(() => this.inflight.delete(url));
-    this.inflight.set(url, promise);
+      this.queues[priority].push({ path, priority, resolve, reject, attempts: 0 });
+    }).finally(() => this.inflight.delete(path));
+    this.inflight.set(path, promise);
     this.#emit();
     this.#pump();
     return promise;
   }
 
-  #promote(url) {
-    const i = this.queues.bg.findIndex(item => item.url === url);
+  #promote(path) {
+    const i = this.queues.bg.findIndex(item => item.path === path);
     if (i >= 0) {
       const [item] = this.queues.bg.splice(i, 1);
       item.priority = 'fg';
@@ -155,9 +176,9 @@ export class HiscoresApi extends EventTarget {
     }
   }
 
-  // If the tool is open in more than one LostKit tab or window, they share one
-  // rate limit (it's per connection), so they take turns: a Web Lock makes
-  // them go one at a time, and the next allowed moment is shared in storage.
+  // If the tool is open in more than one tab or window, they share one rate
+  // limit (it's per connection), so they take turns: a Web Lock makes them go
+  // one at a time, and the next allowed moment is shared in storage.
   async #run(item) {
     const shared = 'lchs.api.nextAt';
     const turn = async () => {
@@ -172,6 +193,16 @@ export class HiscoresApi extends EventTarget {
     else await turn();
   }
 
+  // This route can't be used from here: move on to the next one, if any.
+  #nextRoute(item) {
+    if (this.route < this.routes.length - 1) {
+      this.#useRoute(this.route + 1);
+      this.queues[item.priority].unshift(item);
+      return true;
+    }
+    return false;
+  }
+
   async #send(item) {
     item.attempts++;
     this.stats.requests++;
@@ -180,18 +211,28 @@ export class HiscoresApi extends EventTarget {
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     let res;
     try {
-      res = await fetch(item.url, { headers: { Accept: 'application/json' }, signal: ctrl.signal, cache: 'no-store' });
+      res = await fetch(this.base + item.path, { headers: { Accept: 'application/json' }, signal: ctrl.signal, cache: 'no-store' });
     } catch (e) {
       clearTimeout(timer);
-      this.nextAt = Date.now() + this.minGapMs;
+      this.nextAt = Date.now() + (ctrl.signal.aborted ? this.minGapMs : 300);
+      // A browser refusing a cross-site read looks exactly like this, so try the next route.
+      if (!ctrl.signal.aborted && this.#nextRoute(item)) return;
       if (item.priority === 'bg' && item.attempts < 3) { this.queues.bg.push(item); return; }
-      const blocked = !isElectron() && !/localhost|127\.0\.0\.1/.test(item.url);
-      item.reject(blocked
-        ? new ApiError('blocked', 'The hiscores API only answers pages opened inside LostKit.')
+      item.reject(!isElectron() && !ctrl.signal.aborted
+        ? new ApiError('blocked', 'This browser is not allowed to read the Lost City hiscores from this address.')
         : new ApiError('network', ctrl.signal.aborted ? 'The hiscores API took too long to answer.' : 'Could not reach the hiscores API.'));
       return;
     }
     clearTimeout(timer);
+
+    // A relay that isn't set up answers with the host's own 404 page.
+    const type = res.headers.get('content-type') || '';
+    if ((res.status === 404 || res.status === 405) && !type.includes('json')) {
+      this.nextAt = Date.now() + 300;
+      if (this.#nextRoute(item)) return;
+      item.reject(new ApiError('blocked', 'This browser is not allowed to read the Lost City hiscores from this address.', res.status));
+      return;
+    }
 
     // Pace the next request from what the API told us, or fall back to the known limit.
     const remaining = Number(res.headers.get('x-ratelimit-remaining'));
@@ -218,9 +259,11 @@ export class HiscoresApi extends EventTarget {
     }
     try {
       const data = await res.json();
-      this.cache.set(item.url, { at: Date.now(), data });
+      this.cache.set(item.path, { at: Date.now(), data });
+      if (this.routes.length > 1) this.#useRoute(this.route);   // remember what worked
       item.resolve(data);
     } catch (e) {
+      if (this.#nextRoute(item)) return;   // e.g. an HTML page where JSON was expected
       item.reject(new ApiError('server', 'The hiscores API sent something unreadable.'));
     }
   }

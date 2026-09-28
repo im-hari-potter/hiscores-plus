@@ -1,0 +1,4 @@
+# Netlify: serve Lost City's hiscores API from this site's own address, so the page
+# works in any browser (browsers only let a page read its own site or sites that allow it).
+# GitHub Pages ignores this file.
+/api/hiscores/*  https://2004.lostcity.rs/api/hiscores/:splat  200

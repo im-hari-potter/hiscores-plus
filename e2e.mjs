@@ -35,7 +35,7 @@ await check('lookup shows 20 tiles with LostKit numbers and Top %', async () => 
   await page.waitForSelector('.tile', { timeout: 15000 });
   assert.equal(await page.locator('.stats-grid .tile').count(), 20);
   assert.match(await text('.pc-name'), /Demo Main/);
-  assert.match(await text('.pc-combat'), /Combat 86/);
+  assert.match(await text('.pc-combat'), /Combat\s+86/);
   assert.match(await text('.pc-sub'), /Total level 1,460/);
   const attack = await page.locator('.tile').nth(1).innerText();
   assert.match(attack, /Level: 60/);
@@ -57,7 +57,8 @@ await check('combat filter shows 7 tiles, the formula and next-level hints', asy
   assert.equal(await page.locator('.stats-grid .tile').count(), 7);
   const card = await text('.combat-card');
   assert.match(card, /Combat level\s*86/);
-  assert.match(card, /Melee build/);
+  assert.doesNotMatch(card, /build/i);
+  assert.ok(await page.locator('.combat-card img[src="combat.webp"]').count() >= 1, 'crossed swords on the combat card');
   assert.match(card, /Attack \+1/);
   assert.match(card, /86\.75/);
 });
@@ -77,7 +78,7 @@ await check('unranked combat skills give a combat range and bounded tiles', asyn
   await page.click('#lookup-form button');
   await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.includes('Lowbie'), null, { timeout: 15000 });
   const combat = await text('.pc-combat');
-  assert.match(combat, /Combat \d+(–\d+)?/);
+  assert.match(combat, /Combat\s+\d+(–\d+)?/);
   assert.ok(await page.locator('.tile.unranked').count() >= 3);
 });
 await page.screenshot({ path: `${SHOTS}/3-lowbie-combat.png`, fullPage: true });
@@ -93,6 +94,10 @@ await check('compare 5 players with leaders highlighted', async () => {
   assert.equal(await page.locator('table.cmp tbody tr').count(), 21); // combat + overall + 19 skills
   assert.ok(await page.locator('table.cmp td.best').count() >= 19);
   assert.match(await text('table.cmp tfoot'), /Skills led/);
+  const combatRow = page.locator('table.cmp tr.combat');
+  assert.doesNotMatch(await combatRow.innerText(), /melee|ranged|magic/i);
+  assert.equal(await combatRow.locator('img[src="combat.webp"]').count(), 1);
+  assert.equal(await page.locator('table.cmp tr:not(.combat) img[src="combat.webp"]').count(), 0);
   await page.fill('#compare-name', 'Zezima');
   await page.click('#compare-form button');
   assert.match(await text('#compare-msg'), /holds 5 players/);
@@ -155,6 +160,53 @@ await check('last page is short and corrects the player count for free', async (
   await page.waitForFunction(t => document.querySelector('#leaders-head').innerText.includes(t), mock.totals['1'].toLocaleString('en-US'), { timeout: 15000 });
 });
 
+await check('leaderboard columns sort when their header is clicked', async () => {
+  await page.click('.tab[data-tab="leaders"]');
+  await page.click('[data-lb-type="1"]');
+  await page.waitForFunction(() => document.querySelectorAll('table.lb tbody tr').length > 0, null, { timeout: 15000 });
+  const col = async i => page.$$eval('table.lb tbody tr', (trs, i) => trs.map(tr => tr.children[i].innerText), i);
+  const num = v => Number(v.replace(/[^\d]/g, ''));
+  await page.click('[data-sort="xp"]');                       // highest first
+  let xs = (await col(3)).map(num);
+  assert.deepEqual(xs, [...xs].sort((a, b) => b - a));
+  await page.click('[data-sort="xp"]');                       // again: lowest first
+  xs = (await col(3)).map(num);
+  assert.deepEqual(xs, [...xs].sort((a, b) => a - b));
+  assert.match(await text('.sort-note'), /lowest first/);
+  await page.click('[data-sort="name"]');
+  const names = await col(1);
+  assert.deepEqual(names, [...names].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1));
+  await page.click('[data-sort-reset]');
+  const ranks = (await col(0)).map(num);
+  assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b));
+  assert.equal(await page.locator('.sort-note').count(), 0);
+});
+await page.screenshot({ path: `${SHOTS}/6b-leaders-sorted.png` });
+
+await check('lookup tiles can be dragged into a new order that sticks', async () => {
+  await page.click('.tab[data-tab="lookup"]');
+  await page.fill('#lookup-name', 'demo main');
+  await page.click('#lookup-form button');
+  await page.waitForSelector('#tiles-grid .tile');
+  const order = () => page.$$eval('#tiles-grid .tile', ts => ts.map(t => Number(t.dataset.id)));
+  const before = await order();
+  const src = await page.locator('#tiles-grid .tile[data-id="21"]').boundingBox();   // Runecraft
+  const dst = await page.locator('#tiles-grid .tile[data-id="1"]').boundingBox();    // Attack
+  await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(src.x + src.width / 2 + 20, src.y + src.height / 2, { steps: 4 });
+  await page.mouse.move(dst.x + dst.width / 2 - 10, dst.y + dst.height / 2, { steps: 12 });
+  await page.mouse.up();
+  const after = await order();
+  assert.notDeepEqual(after, before);
+  assert.equal(after.indexOf(21), before.indexOf(1), 'Runecraft took Attack\'s place');
+  await page.reload();
+  await page.waitForSelector('#tiles-grid .tile');
+  assert.deepEqual(await order(), after, 'order survives a reload');
+  await page.click('[data-action="tiles-reset"]');
+  assert.deepEqual(await order(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21]);
+});
+
 await check('settings shows totals and makes a backup that restores', async () => {
   await page.click('#settings-btn');
   await page.waitForSelector('#settings[open]');
@@ -210,12 +262,38 @@ await check('two open copies of the tool take turns instead of tripping the limi
   await other.close();
 });
 
-await check('outside LostKit the banner explains why lookups fail', async () => {
-  const p2 = await ctx.newPage();
-  await p2.goto(BASE + '/#lookup');
-  await p2.waitForSelector('#banner:not([hidden])');
-  assert.match(await p2.locator('#banner').innerText(), /inside LostKit/);
-  await p2.close();
+await check('in a normal browser the page falls back to the relay on its own site', async () => {
+  const c = await browser.newContext();
+  const p2 = await c.newPage();
+  await p2.goto(BASE + '/#lookup');                  // no ?api=local: the straight route fails here, the relay answers
+  await p2.fill('#lookup-name', 'old badger');
+  await p2.click('#lookup-form button');
+  await p2.waitForSelector('.tile', { timeout: 20000 });
+  assert.equal(await p2.locator('#banner').isHidden(), true);
+  const route = await p2.evaluate(() => JSON.parse(localStorage.getItem('lchs.api.route')).route);
+  assert.match(route, /localhost:8787\/api\/hiscores$/);
+  await c.close();
+});
+
+await check('without a relay, a browser shows why it cannot read the hiscores', async () => {
+  const { createServer } = await import('node:http');
+  const { readFile } = await import('node:fs/promises');
+  const root = new URL('.', import.meta.url);
+  const types = { html: 'text/html', js: 'text/javascript', css: 'text/css', json: 'application/json', webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg', otf: 'font/otf' };
+  const plain = createServer(async (req, res) => {            // like GitHub Pages: files only
+    const path = new URL(req.url, 'http://x').pathname.slice(1) || 'index.html';
+    try { const body = await readFile(new URL(path, root)); res.writeHead(200, { 'Content-Type': types[path.split('.').pop()] || 'text/plain' }); res.end(body); }
+    catch (e) { res.writeHead(404, { 'Content-Type': 'text/html' }); res.end('<h1>404</h1>'); }
+  }).listen(8799);
+  const c = await browser.newContext();
+  const p2 = await c.newPage();
+  await p2.goto('http://localhost:8799/#lookup');
+  await p2.fill('#lookup-name', 'old badger');
+  await p2.click('#lookup-form button');
+  await p2.waitForSelector('#banner:not([hidden])', { timeout: 20000 });
+  assert.match(await p2.locator('#banner').innerText(), /LostKit/);
+  await c.close();
+  plain.close();
 });
 
 // Stale counts: pretend the bundled file is old; the page should re-measure every
