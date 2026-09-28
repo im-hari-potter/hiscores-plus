@@ -1,0 +1,70 @@
+# Publishes Hiscores+ to GitHub Pages and keeps the player counts fresh.
+#
+#  - Runs when you upload or change files, twice a day on a schedule,
+#    and whenever you press "Run workflow" on the Actions tab.
+#  - The scheduled and manual runs re-count how many players are ranked in
+#    every skill (usually a minute or two: one polite request every ~2 s),
+#    save the numbers to totals.json, then publish the site.
+#
+# Needs: Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+
+name: Publish site and update player counts
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 5,17 * * *'   # 05:17 and 17:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write     # save totals.json back to the repository
+  pages: write        # publish to GitHub Pages
+  id-token: write     # required by the Pages deploy step
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Count ranked players in every skill
+        id: count
+        if: github.event_name != 'push'
+        continue-on-error: true   # if the API is unreachable, still publish with the last counts
+        run: node update-totals.mjs
+
+      - name: Save the counts to the repository
+        if: steps.count.outcome == 'success'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add totals.json totals-history.csv
+          if git diff --cached --quiet; then
+            echo "No changes to save."
+          else
+            git commit -m "Update player counts"
+            git pull --rebase
+            git push
+          fi
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
