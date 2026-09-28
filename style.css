@@ -311,7 +311,8 @@ form.inline { display: inline-flex; gap: 4px; }
   transform: rotate(2deg) scale(1.05);
 }
 body.tiles-dragging, body.tiles-dragging * { cursor: grabbing !important; user-select: none; }
-.tiles-bar { display: flex; align-items: center; gap: 10px; margin: 0 2px 4px; font-family: var(--small); font-size: 11px; color: var(--faint); }
+.tiles-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0 2px 6px; font-family: var(--small); font-size: 12px; color: var(--faint); }
+.tiles-bar .seg button { padding: 3px 9px; }
 .tile.unranked .v { color: var(--faint); }
 .tile.overall { border-color: var(--gold-hi); }
 .pbar { width: 100%; height: 5px; margin-top: 5px; background: rgba(0, 0, 0, 0.55); border: 1px solid var(--gold-dim); overflow: hidden; }
@@ -361,6 +362,8 @@ table.grid .l { text-align: left; }
 table.grid .c { text-align: center; }
 table.grid td.sk { text-align: left; }
 .sk-cell { display: inline-flex; align-items: center; gap: 6px; }
+.sk-cell .pos { display: inline-block; min-width: 18px; text-align: right; font-family: var(--small); font-size: 12px; color: var(--faint); }
+.sk-cell .pos.top10 { color: var(--gold-hi); font-weight: bold; }
 
 table.grid tr.hl td { background: rgba(240, 196, 25, 0.13) !important; }
 table.grid tr.dim td { opacity: 0.45; }

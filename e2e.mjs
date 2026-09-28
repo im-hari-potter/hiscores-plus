@@ -9,7 +9,7 @@ const SHOTS = process.env.SHOTS || '/tmp';
 const results = [];
 const check = async (name, fn) => {
   try { await fn(); results.push(['ok', name]); }
-  catch (e) { results.push(['FAIL', name, e.message.split('\n').slice(0, 3).join(' | ')]); }
+  catch (e) { results.push(['FAIL', name, e.message.split('\n').slice(0, 30).join(' | ')]); }
 };
 
 const browser = await chromium.launch();
@@ -114,10 +114,21 @@ await check('compare modes switch', async () => {
 
 await check('compare sorts skills by a player, keeping Combat and Overall on top', async () => {
   await page.click('#compare-mode [data-mode="level"]');
-  const skillNames = () => page.$$eval('table.cmp tbody tr', trs => trs.map(tr => tr.children[0].innerText.trim()));
+  const skillNames = () => page.$$eval('table.cmp tbody tr', trs => trs.map(tr => tr.children[0].innerText.replace(/^\s*\d+\s*/, '').trim()));
   const levels = () => page.$$eval('table.cmp tbody tr', trs => trs.slice(2).map(tr => Number(tr.children[1].querySelector('.val').innerText.replace(/[^\d]/g, ''))));
+  const positions = () => page.$$eval('table.cmp tbody tr', trs => trs.map(tr => {
+    const p = tr.querySelector('.pos');
+    return p ? [p.innerText.trim(), p.classList.contains('top10')] : null;
+  }));
+  let pos = await positions();
+  assert.deepEqual(pos.slice(0, 3), [['', false], ['', false], ['1', false]], 'numbered 1.. from the first skill, no gold unsorted');
   await page.click('[data-csort="p:demo_main"]');
   assert.deepEqual((await skillNames()).slice(0, 2), ['Combat', 'Overall']);
+  pos = await positions();
+  assert.deepEqual(pos.slice(2).map(p => p[0]), Array.from({ length: 19 }, (_, i) => String(i + 1)), 'always 1 to 19 top to bottom');
+  assert.equal(pos.slice(2).filter(p => p[1]).length, 10, 'top 10 picked out while sorted by a player');
+  assert.equal(pos[11][1], true);
+  assert.equal(pos[12][1], false);
   let lv = await levels();
   assert.deepEqual(lv, [...lv].sort((a, b) => b - a), 'highest level first');
   assert.match(await text('.sort-note'), /Demo Main's level, highest first/);
@@ -214,6 +225,45 @@ await check('lookup tiles can be dragged into a new order that sticks', async ()
   assert.deepEqual(await order(), after, 'order survives a reload');
   await page.click('[data-action="tiles-reset"]');
   assert.deepEqual(await order(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21]);
+});
+
+await check('lookup tiles sort by level/XP/rank/Top %, Overall first, and can be dragged after', async () => {
+  await page.click('.tab[data-tab="lookup"]');
+  await page.waitForSelector('#tiles-grid .tile');
+  const tiles = () => page.$$eval('#tiles-grid .tile', ts => ts.map(t => ({ id: Number(t.dataset.id), text: t.innerText })));
+  const lvl = t => Number((t.text.match(/Level: ([\d,]+)/) || [])[1]?.replace(/,/g, ''));
+  assert.equal(await page.locator('#tiles-grid .pos').count(), 0, 'no position numbers on Lookup tiles');
+  await page.click('[data-tsort="level"]');
+  let ts = await tiles();
+  assert.equal(ts[0].id, 0, 'Overall stays first');
+  let levels = ts.slice(1).map(lvl);
+  assert.deepEqual(levels, [...levels].sort((a, b) => b - a), 'highest level first');
+  assert.match(await text('[data-tsort="level"]'), /▼/);
+  await page.click('[data-tsort="level"]');
+  levels = (await tiles()).slice(1).map(lvl);
+  assert.deepEqual(levels, [...levels].sort((a, b) => a - b), 'lowest first after a second click');
+  await page.click('[data-tsort="xp"]');
+  const xps = (await tiles()).slice(1).map(t => Number(t.text.match(/XP: ([\d,]+)/)[1].replace(/,/g, '')));
+  assert.deepEqual(xps, [...xps].sort((a, b) => b - a));
+  await page.screenshot({ path: `${SHOTS}/1b-lookup-sorted.png` });
+  // drag after sorting: the sorted order becomes a layout you can adjust
+  const sortedIds = (await tiles()).map(t => t.id);
+  const a = await page.locator(`#tiles-grid .tile[data-id="${sortedIds[5]}"]`).boundingBox();
+  const b = await page.locator(`#tiles-grid .tile[data-id="${sortedIds[2]}"]`).boundingBox();
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(a.x + a.width / 2 + 15, a.y + a.height / 2, { steps: 3 });
+  await page.mouse.move(b.x + b.width / 2 - 10, b.y + b.height / 2, { steps: 10 });
+  await page.mouse.up();
+  const afterDrag = (await tiles()).map(t => t.id);
+  assert.equal(afterDrag[2], sortedIds[5], 'the dragged tile landed where it was dropped');
+  assert.deepEqual([...afterDrag].sort((x, y) => x - y), [...sortedIds].sort((x, y) => x - y));
+  assert.equal(await page.locator('.tiles-bar .seg button.on').count(), 0, 'no sort is active once you drag');
+  await page.reload();
+  await page.waitForSelector('#tiles-grid .tile');
+  assert.deepEqual((await tiles()).map(t => t.id), afterDrag, 'the adjusted layout survives a reload');
+  await page.click('[data-action="tiles-reset"]');
+  assert.deepEqual((await tiles()).map(t => t.id), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21]);
 });
 
 await check('settings shows totals and makes a backup that restores', async () => {

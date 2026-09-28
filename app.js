@@ -9,7 +9,7 @@ import { Totals, topPercent, formatPercent } from './totals.js';
 import { rankParamForPage, pageOfRank, pageCount } from './totals-core.js';
 import { store, players, snapshots, exportBackup, importBackup } from './store.js';
 
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -52,6 +52,9 @@ const state = {
     rows: null, highlight: null, loading: false, loadedKey: null,
   },
   tileOrder: normalizeOrder(prefs.tileOrder),
+  // Lookup tiles sorted by the shown player's numbers ({ key: 'level'|'xp'|'rank'|'top', dir }),
+  // or null for the dragged/default layout. Dragging a tile turns a sort into a layout.
+  tileSort: prefs.tileSort && ['level', 'xp', 'rank', 'top'].includes(prefs.tileSort.key) ? { key: prefs.tileSort.key, dir: prefs.tileSort.dir === -1 ? -1 : 1 } : null,
   calc: null,              // { levels, source } for the combat calculator
 };
 
@@ -68,6 +71,7 @@ function savePrefs() {
     lbType: state.leaders.type,
     lbPage: state.leaders.page,
     tileOrder: state.tileOrder,
+    tileSort: state.tileSort,
     lastLookup: state.lookup.profile?.name || prefs.lastLookup || null,
   });
 }
@@ -298,10 +302,27 @@ function renderTiles() {
   const levels = levelsOf(p);
   const bounds = boundUnrankedLevels(levels, p.stats[0]?.level);
   const shown = visibleIds(true);
-  const ids = state.tileOrder.filter(id => shown.includes(id));
-  const custom = state.tileOrder.some((id, i) => id !== DEFAULT_ORDER[i]);
-  el.innerHTML = `<div class="tiles-bar"><span>Drag the tiles to arrange them.</span>${custom ? `<button type="button" class="linkish" data-action="tiles-reset">Reset layout</button>` : ''}</div>
+  const ids = fullTileOrder(p).filter(id => shown.includes(id));
+  const custom = state.tileSort || state.tileOrder.some((id, i) => id !== DEFAULT_ORDER[i]);
+  const ts = state.tileSort;
+  const sortBtn = (k, label) => {
+    const on = ts?.key === k;
+    return `<button type="button" class="${on ? 'on' : ''}" data-tsort="${k}" title="Sort the tiles by ${label}${on ? ' (click again to flip)' : ''}">${label}${on ? (ts.dir === 1 ? ' ▼' : ' ▲') : ''}</button>`;
+  };
+  el.innerHTML = `<div class="tiles-bar">
+      <span>Sort by</span>
+      <div class="seg" role="group" aria-label="Sort tiles">${sortBtn('level', 'Level')}${sortBtn('xp', 'XP')}${sortBtn('rank', 'Rank')}${sortBtn('top', 'Top %')}</div>
+      <span>or drag the tiles.</span>
+      ${custom ? `<button type="button" class="linkish" data-action="tiles-reset">Reset layout</button>` : ''}
+    </div>
     <div class="stats-grid" id="tiles-grid">${ids.map(id => tileHtml(SKILL_BY_ID.get(id), p.stats[id], bounds)).join('')}</div>`;
+}
+
+// Every tile id in the order they're shown: sorted by the player's numbers (Overall
+// first), or the saved drag layout.
+function fullTileOrder(p) {
+  if (!state.tileSort || !p) return state.tileOrder;
+  return [0, ...sortSkillsBy(SKILL_IDS, p.stats, state.tileSort.key, state.tileSort.dir)];
 }
 
 // ── Dragging tiles around ────────────────────────────────────────────────
@@ -376,7 +397,8 @@ function endTileDrag(keep) {
     const moved = [...grid.children].map(t => Number(t.dataset.id));
     const slots = new Set(moved);
     let k = 0;
-    state.tileOrder = state.tileOrder.map(id => (slots.has(id) ? moved[k++] : id));
+    state.tileOrder = fullTileOrder(state.lookup.profile).map(id => (slots.has(id) ? moved[k++] : id));
+    state.tileSort = null;                       // it's your own layout now
     savePrefs();
   }
   if (d.stale || keep) renderTiles();
@@ -584,7 +606,7 @@ function renderCompare() {
   // Combat level row
   const combats = cols.map(c => c.p ? combatFromProfile(levelsOf(c.p), c.p.stats[0]?.level) : null);
   const bestCombat = Math.max(...combats.map(c => (c ? c.min : -1)));
-  rows.push(`<tr class="combat"><td class="sk"><span class="sk-cell">${iconImg(COMBAT)} Combat</span></td>${cols.map((c, i) => {
+  rows.push(`<tr class="combat"><td class="sk"><span class="sk-cell"><span class="pos"></span>${iconImg(COMBAT)} Combat</span></td>${cols.map((c, i) => {
     const cb = combats[i];
     if (!cb) return `<td class="p none"><span class="val">–</span></td>`;
     const best = cols.filter(x => x.p).length > 1 && cb.min === bestCombat;
@@ -594,6 +616,10 @@ function renderCompare() {
   const ids = visibleIds(true);
   const leads = cols.map(() => 0);
   const order = [...ids.filter(id => id === 0), ...sortCompareSkills(ids.filter(id => id !== 0), cols, mode)];
+  // Position down the list, 1 to 19 (Combat and Overall aren't counted). When the table is
+  // sorted by a player, the top 10 are picked out in gold.
+  const byPlayer = state.compare.sort.key.startsWith('p:') && cols.some(c => 'p:' + c.safe === state.compare.sort.key && c.p);
+  let position = 0;
   for (const id of order) {
     const skill = SKILL_BY_ID.get(id);
     const keys = cols.map(c => leadKey(id, c.p?.stats[id]));
@@ -618,7 +644,9 @@ function renderCompare() {
       const title = `${c.p.name} · ${skill.name}\nLevel ${fmt(st.level)} · ${fmt(st.xp)} XP · Rank ${fmt(st.rank)}${top ? `\nTop ${top.text}% (of ${fmt(top.total)})` : ''}${behind}`;
       return `<td class="p${leaders[i] && loaded > 1 ? ' best' : ''}" title="${esc(title)}"><span class="val">${val}</span><span class="sub">${sub}</span></td>`;
     }).join('');
-    rows.push(`<tr class="${id === 0 ? 'overall' : ''}"><td class="sk"><span class="sk-cell">${iconImg(skill)} ${esc(skill.name)}</span></td>${cells}</tr>`);
+    const pos = id === 0 ? '' : ++position;
+    const posHtml = `<span class="pos${byPlayer && pos && pos <= 10 ? ' top10' : ''}">${pos}</span>`;
+    rows.push(`<tr class="${id === 0 ? 'overall' : ''}"><td class="sk"><span class="sk-cell">${posHtml}${iconImg(skill)} ${esc(skill.name)}</span></td>${cells}</tr>`);
   }
 
   const foot = cols.filter(c => c.p).length > 1
@@ -633,8 +661,14 @@ function sortCompareSkills(ids, cols, mode) {
   if (key === 'skill') return [...ids].sort((a, b) => SKILL_BY_ID.get(a).name.localeCompare(SKILL_BY_ID.get(b).name) * dir);
   const col = key.startsWith('p:') ? cols.find(c => 'p:' + c.safe === key) : null;
   if (!col?.p) return ids;
+  return sortSkillsBy(ids, col.p.stats, mode, dir);
+}
+
+// Skills ordered by one player's level / xp / rank / Top %: dir 1 = best first.
+// Skills below 15 (no hiscores row) always go last, whichever way.
+function sortSkillsBy(ids, stats, mode, dir) {
   const score = id => {                       // bigger is better; null = not ranked
-    const st = col.p.stats[id];
+    const st = stats[id];
     if (!st) return null;
     if (mode === 'level') return st.level * 1e10 + st.xp;
     if (mode === 'xp') return st.xp;
@@ -644,7 +678,7 @@ function sortCompareSkills(ids, cols, mode) {
   };
   return [...ids].sort((a, b) => {
     const x = score(a), y = score(b);
-    if (x === null || y === null) return (x === null) - (y === null) || ids.indexOf(a) - ids.indexOf(b); // unranked last
+    if (x === null || y === null) return (x === null) - (y === null) || ids.indexOf(a) - ids.indexOf(b);
     return (y - x) * dir || ids.indexOf(a) - ids.indexOf(b);
   });
 }
@@ -1062,6 +1096,13 @@ function wire() {
     }
     const lbType = t.closest('[data-lb-type]');
     if (lbType) { goLeaders(Number(lbType.dataset.lbType), 1); return; }
+    const tsort = t.closest('[data-tsort]');
+    if (tsort) {
+      const k = tsort.dataset.tsort;
+      state.tileSort = state.tileSort?.key === k ? { key: k, dir: -state.tileSort.dir } : { key: k, dir: 1 };
+      savePrefs(); renderTiles();
+      return;
+    }
     const csort = t.closest('[data-csort]');
     if (csort) {
       const k = csort.dataset.csort;
@@ -1090,6 +1131,7 @@ function wire() {
         break;
       case 'tiles-reset':
         state.tileOrder = [...DEFAULT_ORDER];
+        state.tileSort = null;
         savePrefs(); renderTiles();
         break;
       case 'calc-reset':

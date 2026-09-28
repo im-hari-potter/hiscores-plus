@@ -5,12 +5,14 @@ A hiscores tool for [Lost City](https://2004.lostcity.rs), built to live inside
 
 - **Lookup**: every skill, laid out like LostKit's own hiscores panel, plus
   **Top %** for each skill: your rank ÷ the number of players ranked in that skill.
-  Drag the tiles into any order you like (**Reset layout** puts them back).
+  Sort the tiles by Level, XP, Rank or Top % (click again to flip), or drag them into any
+  order you like, including after sorting. **Reset layout** puts them back.
 - **Combat filter**: just the 7 combat skills, the combat level worked out with the
   game's own formula, what one skill needs to reach the next level, and a what-if calculator.
 - **Compare**: up to 5 players side by side, with the leader of each skill highlighted.
   Click a player's name to sort the skills by their numbers, or **Skill** to sort A–Z.
-  Combat and Overall always stay on top.
+  Combat and Overall always stay on top. The skills are numbered 1–19 down the list, and
+  the top 10 are marked in gold while you're sorting by a player.
 - **Gains**: every lookup saves a snapshot, so you can see XP, levels and rank gained
   since the last lookup, a day ago, a week ago and so on.
 - **Leaderboard**: browse any skill's hiscores 21 at a time, with Top % next to every rank.
