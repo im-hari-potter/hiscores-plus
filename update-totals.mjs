@@ -1,18 +1,18 @@
 // Run by the GitHub Action (see .github/workflows/pages.yml) twice a day.
 // Works out how many players are ranked in every hiscores category and writes
-// data/totals.json, which the page reads for its "Top X%" numbers. One run
+// totals.json, which the page reads for its "Top X%" numbers. One run
 // here saves every user of the tool from doing ~200 slow requests themselves.
 //
-// Run it yourself with Node 18+:  node scripts/update-totals.mjs
+// Run it yourself with Node 18+:  node update-totals.mjs
 
 import { readFile, writeFile, appendFile, access } from 'node:fs/promises';
-import { findTotal, PAGE_SIZE } from '../js/totals-core.js';
-import { CATEGORY_IDS, SKILL_BY_ID } from '../js/skills.js';
+import { findTotal, PAGE_SIZE } from './totals-core.js';
+import { CATEGORY_IDS, SKILL_BY_ID } from './skills.js';
 
 const API = process.env.HISCORES_API || 'https://2004.lostcity.rs/api/hiscores';
-const OUT = new URL('../data/totals.json', import.meta.url);
-const SEED = new URL('../data/totals-seed.json', import.meta.url);
-const HISTORY = new URL('../data/totals-history.csv', import.meta.url);
+const OUT = new URL('./totals.json', import.meta.url);
+const SEED = new URL('./totals-seed.json', import.meta.url);
+const HISTORY = new URL('./totals-history.csv', import.meta.url);
 const REPO = process.env.GITHUB_REPOSITORY ? `https://github.com/${process.env.GITHUB_REPOSITORY}` : 'local run';
 const USER_AGENT = `LC-Hiscores-Plus totals job (${REPO})`;
 

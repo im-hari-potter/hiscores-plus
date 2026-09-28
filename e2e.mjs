@@ -1,5 +1,5 @@
 // End-to-end check against the mock API.
-//   RATE_MS=300 node test/mock-server.mjs 8787 &   then   node test/e2e.mjs
+//   RATE_MS=300 node mock-server.mjs 8787 &   then   node e2e.mjs
 import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright'); // resolved from NODE_PATH / global install
 import assert from 'node:assert/strict';
@@ -168,7 +168,7 @@ await check('settings shows totals and makes a backup that restores', async () =
   });
   assert.ok(Object.keys(backup).some(k => k.startsWith('lchs.snap.demo_main')));
   if (await page.locator('#restore-box').isHidden()) await page.click('#backup-restore-toggle');
-  const exported = await page.evaluate(async () => (await import('./js/store.js')).exportBackup());
+  const exported = await page.evaluate(async () => (await import('./store.js')).exportBackup());
   await page.fill('#restore-text', exported);
   await page.click('#restore-go');
   assert.match(await text('#settings-msg'), /Restored/);
@@ -224,7 +224,7 @@ await check('stale player counts are re-measured in the background', async () =>
   const ctx2 = await browser.newContext();
   const p3 = await ctx2.newPage();
   p3.on('pageerror', e => problems.push('pageerror(p3): ' + e.message));
-  await p3.route('**/data/totals-seed.json', async route => {
+  await p3.route('**/totals-seed.json', async route => {
     const res = await route.fetch();
     const json = await res.json();
     json.updated = '2026-01-01T00:00:00Z';

@@ -4,7 +4,7 @@
 #    and whenever you press "Run workflow" on the Actions tab.
 #  - The scheduled and manual runs re-count how many players are ranked in
 #    every skill (usually a minute or two: one polite request every ~2 s),
-#    save the numbers to data/totals.json, then publish the site.
+#    save the numbers to totals.json, then publish the site.
 #
 # Needs: Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
 
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write     # save data/totals.json back to the repository
+  contents: write     # save totals.json back to the repository
   pages: write        # publish to GitHub Pages
   id-token: write     # required by the Pages deploy step
 
@@ -44,14 +44,14 @@ jobs:
         id: count
         if: github.event_name != 'push'
         continue-on-error: true   # if the API is unreachable, still publish with the last counts
-        run: node scripts/update-totals.mjs
+        run: node update-totals.mjs
 
       - name: Save the counts to the repository
         if: steps.count.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/totals.json data/totals-history.csv
+          git add totals.json totals-history.csv
           if git diff --cached --quiet; then
             echo "No changes to save."
           else

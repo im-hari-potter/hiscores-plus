@@ -1,11 +1,11 @@
-// Run with:  node --test test/
+// Run with:  node --test
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findTotal, pageOfRank, rankParamForPage, pageCount } from '../js/totals-core.js';
+import { findTotal, pageOfRank, rankParamForPage, pageCount } from './totals-core.js';
 import {
   xpForLevel, levelForXp, combatLevel, combatBreakdown, levelsToNextCombat,
   boundUnrankedLevels, combatFromProfile, levelProgress, apiXp,
-} from '../js/skills.js';
+} from './skills.js';
 
 // Behaves like the live endpoint: offset = max(P - 21, 0), limit 21.
 function fakeProbe(total, counter) {

@@ -3,7 +3,7 @@
 // "skills only ranked at 15+" rule, and the same 1-request-per-window limit
 // with x-ratelimit-* headers and 429s. Also serves the site's files.
 //
-//   node test/mock-server.mjs [port]          RATE_MS=2000 by default
+//   node mock-server.mjs [port]          RATE_MS=2000 by default
 //   POST /__mock/bump?name=x&type=1&xp=500    give a player XP (for gains tests)
 //   POST /__mock/grow?type=1&n=30             add n fresh players ranked in a skill
 
@@ -11,9 +11,9 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SKILLS, levelForXp, xpForLevel } from '../js/skills.js';
+import { SKILLS, levelForXp, xpForLevel } from './skills.js';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.argv[2] || process.env.PORT || 8787);
 const RATE_MS = Number(process.env.RATE_MS || 2000);
 const SKILL_IDS = SKILLS.filter(s => s.id !== 0).map(s => s.id);

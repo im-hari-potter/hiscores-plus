@@ -1,7 +1,7 @@
 // How many players are ranked in each category, i.e. the bottom half of
 // "Top X%". Sources, freshest wins:
-//   data/totals.json       written twice a day by the GitHub Action
-//   data/totals-seed.json  shipped with the tool
+//   totals.json       written twice a day by the GitHub Action
+//   totals-seed.json  shipped with the tool
 //   localStorage           anything this browser measured itself
 // When everything is older than STALE_MS (the Action isn't running), the tool
 // measures stale categories itself, slowly, behind anything you click on.
@@ -22,7 +22,7 @@ export class Totals extends EventTarget {
   }
 
   async #load() {
-    for (const [file, source] of [['data/totals.json', 'daily job'], ['data/totals-seed.json', 'bundled']]) {
+    for (const [file, source] of [['totals.json', 'daily job'], ['totals-seed.json', 'bundled']]) {
       try {
         const res = await fetch(file, { cache: 'no-cache' });
         if (!res.ok) continue;

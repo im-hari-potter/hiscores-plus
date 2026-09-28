@@ -9,7 +9,7 @@ import { Totals, topPercent, formatPercent } from './totals.js';
 import { rankParamForPage, pageOfRank, pageCount } from './totals-core.js';
 import { store, players, snapshots, exportBackup, importBackup } from './store.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const MAX_COMPARE = 5;
 
 // ?api=local points the page at /api/hiscores on its own server (used by the tests).
@@ -60,7 +60,7 @@ const nf = new Intl.NumberFormat();
 const fmt = n => nf.format(n);
 const dtf = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const when = t => dtf.format(new Date(t));
-const iconSrc = skill => `img/skills/${skill.icon}.webp`;
+const iconSrc = skill => `${skill.icon}.webp`;
 const iconImg = (skill, cls = '') => `<img class="${cls}" src="${iconSrc(skill)}" alt="" title="${esc(skill.name)}" decoding="sync">`;
 // Keep every icon decoded in memory, so views that re-render don't flicker.
 const ICON_CACHE = SKILLS.map(s => Object.assign(new Image(), { src: iconSrc(s), decoding: 'sync' }));

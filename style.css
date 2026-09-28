@@ -1,10 +1,10 @@
 /* Hiscores+ — styled to sit next to LostKit's own panels. */
 
-@font-face { font-family: 'RS-Bold'; src: url('../fonts/RuneScape-Bold-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
-@font-face { font-family: 'RS-Plain'; src: url('../fonts/RuneScape-Plain-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
+@font-face { font-family: 'RS-Bold'; src: url('RuneScape-Bold-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
+@font-face { font-family: 'RS-Plain'; src: url('RuneScape-Plain-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
 /* Small print uses the plain face; the bold face closes up below ~12px. */
-@font-face { font-family: 'RS-Small'; src: url('../fonts/RuneScape-Plain-12.otf') format('opentype'); font-weight: normal; }
-@font-face { font-family: 'RS-Small'; src: url('../fonts/RuneScape-Bold-12.otf') format('opentype'); font-weight: bold; }
+@font-face { font-family: 'RS-Small'; src: url('RuneScape-Plain-12.otf') format('opentype'); font-weight: normal; }
+@font-face { font-family: 'RS-Small'; src: url('RuneScape-Bold-12.otf') format('opentype'); font-weight: bold; }
 
 :root {
   --bg: #222222;
@@ -26,7 +26,7 @@
   --lose: #ff6b6b;
   --even: #74a0ff;
   --shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
-  --tex: url('../img/button.jpg');
+  --tex: url('button.jpg');
   --small: 'RS-Small', 'RS-Plain', sans-serif;
   color-scheme: dark;
 }
