@@ -58,7 +58,7 @@ await check('combat filter shows 7 tiles, the formula and next-level hints', asy
   const card = await text('.combat-card');
   assert.match(card, /Combat level\s*86/);
   assert.doesNotMatch(card, /build/i);
-  assert.ok(await page.locator('.combat-card img[src="combat.webp"]').count() >= 1, 'crossed swords on the combat card');
+  assert.ok(await page.locator('.combat-card .ico-combat').count() >= 1, 'crossed swords on the combat card');
   assert.match(card, /Attack \+1/);
   assert.match(card, /86\.75/);
 });
@@ -96,8 +96,8 @@ await check('compare 5 players with leaders highlighted', async () => {
   assert.match(await text('table.cmp tfoot'), /Skills led/);
   const combatRow = page.locator('table.cmp tr.combat');
   assert.doesNotMatch(await combatRow.innerText(), /melee|ranged|magic/i);
-  assert.equal(await combatRow.locator('img[src="combat.webp"]').count(), 1);
-  assert.equal(await page.locator('table.cmp tr:not(.combat) img[src="combat.webp"]').count(), 0);
+  assert.equal(await combatRow.locator('.ico-combat').count(), 1);
+  assert.equal(await page.locator('table.cmp tr:not(.combat) .ico-combat').count(), 0);
   await page.fill('#compare-name', 'Zezima');
   await page.click('#compare-form button');
   assert.match(await text('#compare-msg'), /holds 5 players/);
@@ -111,6 +111,29 @@ await check('compare modes switch', async () => {
   assert.match(await page.locator('table.cmp tbody tr').nth(2).innerText(), /295,920/);
   await page.click('#compare-mode [data-mode="level"]');
 });
+
+await check('compare sorts skills by a player, keeping Combat and Overall on top', async () => {
+  await page.click('#compare-mode [data-mode="level"]');
+  const skillNames = () => page.$$eval('table.cmp tbody tr', trs => trs.map(tr => tr.children[0].innerText.trim()));
+  const levels = () => page.$$eval('table.cmp tbody tr', trs => trs.slice(2).map(tr => Number(tr.children[1].querySelector('.val').innerText.replace(/[^\d]/g, ''))));
+  await page.click('[data-csort="p:demo_main"]');
+  assert.deepEqual((await skillNames()).slice(0, 2), ['Combat', 'Overall']);
+  let lv = await levels();
+  assert.deepEqual(lv, [...lv].sort((a, b) => b - a), 'highest level first');
+  assert.match(await text('.sort-note'), /Demo Main's level, highest first/);
+  await page.click('[data-csort="p:demo_main"]');
+  lv = await levels();
+  assert.deepEqual(lv, [...lv].sort((a, b) => a - b), 'lowest level first after a second click');
+  await page.click('[data-csort="skill"]');
+  const names = (await skillNames()).slice(2);
+  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)));
+  await page.click('[data-csort-reset]');
+  assert.equal((await skillNames())[2], 'Attack');
+  assert.equal(await page.locator('.sort-note').count(), 0);
+});
+await page.click('[data-csort="p:demo_main"]');
+await page.screenshot({ path: `${SHOTS}/4b-compare-sorted.png` });
+await page.click('[data-csort-reset]');
 
 await check('gains shows XP gained after the player trains', async () => {
   await fetch(BASE + '/__mock/bump?name=demo_main&type=1&xp=12345', { method: 'POST' });
@@ -160,28 +183,14 @@ await check('last page is short and corrects the player count for free', async (
   await page.waitForFunction(t => document.querySelector('#leaders-head').innerText.includes(t), mock.totals['1'].toLocaleString('en-US'), { timeout: 15000 });
 });
 
-await check('leaderboard columns sort when their header is clicked', async () => {
+await check('leaderboard headers are plain (no sorting there)', async () => {
   await page.click('.tab[data-tab="leaders"]');
   await page.click('[data-lb-type="1"]');
   await page.waitForFunction(() => document.querySelectorAll('table.lb tbody tr').length > 0, null, { timeout: 15000 });
-  const col = async i => page.$$eval('table.lb tbody tr', (trs, i) => trs.map(tr => tr.children[i].innerText), i);
-  const num = v => Number(v.replace(/[^\d]/g, ''));
-  await page.click('[data-sort="xp"]');                       // highest first
-  let xs = (await col(3)).map(num);
-  assert.deepEqual(xs, [...xs].sort((a, b) => b - a));
-  await page.click('[data-sort="xp"]');                       // again: lowest first
-  xs = (await col(3)).map(num);
-  assert.deepEqual(xs, [...xs].sort((a, b) => a - b));
-  assert.match(await text('.sort-note'), /lowest first/);
-  await page.click('[data-sort="name"]');
-  const names = await col(1);
-  assert.deepEqual(names, [...names].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1));
-  await page.click('[data-sort-reset]');
-  const ranks = (await col(0)).map(num);
+  assert.equal(await page.locator('table.lb [data-sort], table.lb .th-sort').count(), 0);
+  const ranks = await page.$$eval('table.lb tbody tr', trs => trs.map(tr => Number(tr.children[0].innerText.replace(/[^\d]/g, ''))));
   assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b));
-  assert.equal(await page.locator('.sort-note').count(), 0);
 });
-await page.screenshot({ path: `${SHOTS}/6b-leaders-sorted.png` });
 
 await check('lookup tiles can be dragged into a new order that sticks', async () => {
   await page.click('.tab[data-tab="lookup"]');

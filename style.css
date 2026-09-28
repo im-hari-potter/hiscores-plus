@@ -269,7 +269,30 @@ form.inline { display: inline-flex; gap: 4px; }
   line-height: 1.15;
   min-width: 0;
 }
-.ico { width: 26px; height: 26px; object-fit: none; image-rendering: pixelated; flex-shrink: 0; vertical-align: middle; }
+/* Icons are CSS backgrounds drawn at their own pixel size, so a re-rendered table reuses
+   the already-decoded image instead of flashing empty for a frame. */
+.ico { display: inline-block; width: 26px; height: 26px; background: center / auto no-repeat; image-rendering: pixelated; flex-shrink: 0; vertical-align: middle; }
+.ico-stats { background-image: url('stats.webp'); }
+.ico-attack { background-image: url('attack.webp'); }
+.ico-defence { background-image: url('defence.webp'); }
+.ico-strength { background-image: url('strength.webp'); }
+.ico-hitpoints { background-image: url('hitpoints.webp'); }
+.ico-ranged { background-image: url('ranged.webp'); }
+.ico-prayer { background-image: url('prayer.webp'); }
+.ico-magic { background-image: url('magic.webp'); }
+.ico-cooking { background-image: url('cooking.webp'); }
+.ico-woodcutting { background-image: url('woodcutting.webp'); }
+.ico-fletching { background-image: url('fletching.webp'); }
+.ico-fishing { background-image: url('fishing.webp'); }
+.ico-firemaking { background-image: url('firemaking.webp'); }
+.ico-crafting { background-image: url('crafting.webp'); }
+.ico-smithing { background-image: url('smithing.webp'); }
+.ico-mining { background-image: url('mining.webp'); }
+.ico-herblore { background-image: url('herblore.webp'); }
+.ico-agility { background-image: url('agility.webp'); }
+.ico-thieving { background-image: url('thieving.webp'); }
+.ico-runecraft { background-image: url('runecraft.webp'); }
+.ico-combat { background-image: url('combat.webp'); }
 .tile .ico { margin-bottom: 1px; }
 .tile .v { white-space: nowrap; }
 .tile .top-line { color: var(--top); white-space: normal; }

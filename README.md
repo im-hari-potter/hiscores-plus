@@ -9,10 +9,11 @@ A hiscores tool for [Lost City](https://2004.lostcity.rs), built to live inside
 - **Combat filter**: just the 7 combat skills, the combat level worked out with the
   game's own formula, what one skill needs to reach the next level, and a what-if calculator.
 - **Compare**: up to 5 players side by side, with the leader of each skill highlighted.
+  Click a player's name to sort the skills by their numbers, or **Skill** to sort A–Z.
+  Combat and Overall always stay on top.
 - **Gains**: every lookup saves a snapshot, so you can see XP, levels and rank gained
   since the last lookup, a day ago, a week ago and so on.
 - **Leaderboard**: browse any skill's hiscores 21 at a time, with Top % next to every rank.
-  Click a column header to sort the page by it; click again to flip the order.
 - **Saved players**: star players for one-click lookups.
 
 ## Setting it up (no installs needed)

@@ -9,7 +9,7 @@ import { Totals, topPercent, formatPercent } from './totals.js';
 import { rankParamForPage, pageOfRank, pageCount } from './totals-core.js';
 import { store, players, snapshots, exportBackup, importBackup } from './store.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.1';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -34,14 +34,6 @@ function normalizeOrder(order) {
   return [...valid, ...DEFAULT_ORDER.filter(id => !valid.includes(id))];
 }
 
-// Leaderboard columns you can sort by, and which way each sorts first.
-const LB_SORTS = {
-  rank:  { first: 1,  label: 'Rank',     get: r => r.rank },
-  name:  { first: 1,  label: 'Player',   get: r => r.name.toLowerCase() },
-  level: { first: -1, label: 'Level',    get: r => r.level },
-  xp:    { first: -1, label: 'XP',       get: r => r.xp },
-  top:   { first: 1,  label: 'Top %',    get: r => r.rank },
-};
 const state = {
   tab: ['lookup', 'compare', 'gains', 'leaders'].includes(prefs.tab) ? prefs.tab : 'lookup',
   filter: prefs.filter === 'combat' ? 'combat' : 'all',
@@ -50,13 +42,14 @@ const state = {
     names: Array.isArray(prefs.compare) ? prefs.compare.slice(0, MAX_COMPARE) : [],
     profiles: {}, errors: {}, loading: new Set(),
     mode: ['level', 'xp', 'rank', 'top'].includes(prefs.compareMode) ? prefs.compareMode : 'level',
+    // 'default' (game order), 'skill' (A-Z) or 'p:<name>' (that player's numbers); dir 1 = A-Z / best first
+    sort: prefs.compareSort && typeof prefs.compareSort.key === 'string' ? { key: prefs.compareSort.key, dir: prefs.compareSort.dir === -1 ? -1 : 1 } : { key: 'default', dir: 1 },
   },
   gains: { player: prefs.gainsPlayer || null, since: prefs.gainsSince || 'prev', hideZero: !!prefs.gainsHideZero, loading: false },
   leaders: {
     type: SKILL_BY_ID.has(prefs.lbType) ? prefs.lbType : 0,
     page: Number.isInteger(prefs.lbPage) && prefs.lbPage > 0 ? prefs.lbPage : 1,
     rows: null, highlight: null, loading: false, loadedKey: null,
-    sort: prefs.lbSort && LB_SORTS[prefs.lbSort.key] ? { key: prefs.lbSort.key, dir: prefs.lbSort.dir === -1 ? -1 : 1 } : { key: 'rank', dir: 1 },
   },
   tileOrder: normalizeOrder(prefs.tileOrder),
   calc: null,              // { levels, source } for the combat calculator
@@ -68,12 +61,12 @@ function savePrefs() {
     filter: state.filter,
     compare: state.compare.names,
     compareMode: state.compare.mode,
+    compareSort: state.compare.sort,
     gainsPlayer: state.gains.player,
     gainsSince: state.gains.since,
     gainsHideZero: state.gains.hideZero,
     lbType: state.leaders.type,
     lbPage: state.leaders.page,
-    lbSort: state.leaders.sort,
     tileOrder: state.tileOrder,
     lastLookup: state.lookup.profile?.name || prefs.lastLookup || null,
   });
@@ -87,7 +80,7 @@ const fmt = n => nf.format(n);
 const dtf = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const when = t => dtf.format(new Date(t));
 const iconSrc = skill => `${skill.icon}.webp`;
-const iconImg = (skill, cls = '') => `<img class="ico ${cls}" src="${iconSrc(skill)}" alt="" title="${esc(skill.name)}" decoding="sync">`;
+const iconImg = (skill, cls = '') => `<span class="ico ico-${skill.icon} ${cls}" role="img" aria-label="${esc(skill.name)}" title="${esc(skill.name)}"></span>`;
 // Crossed swords for the combat level (its own icon, not the Attack sword).
 const COMBAT = { name: 'Combat level', icon: 'combat' };
 // Keep every icon decoded in memory, so views that re-render don't flicker.
@@ -511,6 +504,7 @@ function addToCompare(rawName) {
 function removeFromCompare(name) {
   const safe = toSafeName(name);
   state.compare.names = state.compare.names.filter(n => toSafeName(n) !== safe);
+  if (state.compare.sort.key === 'p:' + safe) state.compare.sort = { key: 'default', dir: 1 };
   delete state.compare.profiles[safe];
   delete state.compare.errors[safe];
   savePrefs();
@@ -578,8 +572,13 @@ function renderCompare() {
       sub = `Combat ${combatText(cb)} · Total ${c.p.stats[0] ? fmt(c.p.stats[0].level) : '?'}`;
     } else if (c.loading) sub = '<span class="pending">Loading…</span>';
     else sub = `<span class="c-lose">${esc(c.err || 'Not loaded')}</span>`;
-    return `<th class="p"><span class="pname">${esc(c.p ? c.p.name : c.name)}<button type="button" class="x" data-remove="${esc(c.name)}" title="Remove" aria-label="Remove ${esc(c.name)}">✕</button></span><span class="sub">${sub}</span></th>`;
+    const key = 'p:' + c.safe;
+    const on = state.compare.sort.key === key;
+    const name = esc(c.p ? c.p.name : c.name);
+    return `<th class="p" aria-sort="${on ? (state.compare.sort.dir === 1 ? 'descending' : 'ascending') : 'none'}"><span class="pname"><button type="button" class="th-sort${on ? ' on' : ''}" data-csort="${esc(key)}" title="Sort the skills by ${name}'s numbers">${name}<span class="arrow">${on ? (state.compare.sort.dir === 1 ? '▼' : '▲') : ''}</span></button><button type="button" class="x" data-remove="${esc(c.name)}" title="Remove" aria-label="Remove ${name}">✕</button></span><span class="sub">${sub}</span></th>`;
   }).join('');
+  const skillOn = state.compare.sort.key === 'skill';
+  const skillHead = `<th class="l" aria-sort="${skillOn ? (state.compare.sort.dir === 1 ? 'ascending' : 'descending') : 'none'}"><button type="button" class="th-sort${skillOn ? ' on' : ''}" data-csort="skill" title="Sort the skills by name">Skill<span class="arrow">${skillOn ? (state.compare.sort.dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
 
   const rows = [];
   // Combat level row
@@ -594,7 +593,8 @@ function renderCompare() {
 
   const ids = visibleIds(true);
   const leads = cols.map(() => 0);
-  for (const id of ids) {
+  const order = [...ids.filter(id => id === 0), ...sortCompareSkills(ids.filter(id => id !== 0), cols, mode)];
+  for (const id of order) {
     const skill = SKILL_BY_ID.get(id);
     const keys = cols.map(c => leadKey(id, c.p?.stats[id]));
     const loaded = cols.filter(c => c.p).length;
@@ -624,7 +624,44 @@ function renderCompare() {
   const foot = cols.filter(c => c.p).length > 1
     ? `<tfoot><tr><td class="sk">Skills led</td>${cols.map((c, i) => `<td class="p">${c.p ? `<span class="lead-count">${leads[i]}</span> / ${ids.filter(id => id !== 0).length}` : ''}</td>`).join('')}</tr></tfoot>`
     : '';
-  box.innerHTML = `<div class="table-wrap"><table class="grid cmp"><thead><tr><th class="l">Skill</th>${head}</tr></thead><tbody>${rows.join('')}</tbody>${foot}</table></div>`;
+  box.innerHTML = `${compareSortNote(cols, mode)}<div class="table-wrap"><table class="grid cmp"><thead><tr>${skillHead}${head}</tr></thead><tbody>${rows.join('')}</tbody>${foot}</table></div>`;
+}
+
+// Skills (never Combat or Overall, which stay on top) in the order the table is sorted by.
+function sortCompareSkills(ids, cols, mode) {
+  const { key, dir } = state.compare.sort;
+  if (key === 'skill') return [...ids].sort((a, b) => SKILL_BY_ID.get(a).name.localeCompare(SKILL_BY_ID.get(b).name) * dir);
+  const col = key.startsWith('p:') ? cols.find(c => 'p:' + c.safe === key) : null;
+  if (!col?.p) return ids;
+  const score = id => {                       // bigger is better; null = not ranked
+    const st = col.p.stats[id];
+    if (!st) return null;
+    if (mode === 'level') return st.level * 1e10 + st.xp;
+    if (mode === 'xp') return st.xp;
+    if (mode === 'rank') return -st.rank;
+    const t = topFor(id, st.rank);
+    return t ? -t.p : null;
+  };
+  return [...ids].sort((a, b) => {
+    const x = score(a), y = score(b);
+    if (x === null || y === null) return (x === null) - (y === null) || ids.indexOf(a) - ids.indexOf(b); // unranked last
+    return (y - x) * dir || ids.indexOf(a) - ids.indexOf(b);
+  });
+}
+
+function compareSortNote(cols, mode) {
+  const { key, dir } = state.compare.sort;
+  if (key === 'default') return '';
+  let what;
+  if (key === 'skill') what = `by skill name, ${dir === 1 ? 'A to Z' : 'Z to A'}`;
+  else {
+    const col = cols.find(c => 'p:' + c.safe === key);
+    if (!col) return '';
+    const label = { level: 'level', xp: 'XP', rank: 'rank', top: 'Top %' }[mode];
+    const best = mode === 'level' || mode === 'xp' ? ['highest', 'lowest'] : ['best', 'worst'];
+    what = `by ${esc(col.p ? col.p.name : col.name)}'s ${label}, ${dir === 1 ? best[0] : best[1]} first`;
+  }
+  return `<div class="sort-note">Skills sorted ${what}. Combat and Overall stay on top. <button type="button" class="linkish" data-csort-reset>Back to skill order</button></div>`;
 }
 
 // ── Gains ────────────────────────────────────────────────────────────────
@@ -822,7 +859,7 @@ function renderLeaders() {
     picker.dataset.ids = ids.join(',');
     picker.innerHTML = ids.map(id => {
       const s = SKILL_BY_ID.get(id);
-      return `<button type="button" class="skill-btn" data-lb-type="${id}" title="${esc(s.name)}" aria-label="${esc(s.name)}"><img class="ico" src="${iconSrc(s)}" alt="" decoding="sync"></button>`;
+      return `<button type="button" class="skill-btn" data-lb-type="${id}" title="${esc(s.name)}" aria-label="${esc(s.name)}">${iconImg(s)}</button>`;
     }).join('');
   }
   picker.querySelectorAll('.skill-btn').forEach(b => {
@@ -844,20 +881,7 @@ function renderLeaders() {
   if (!lb.rows && lb.loading) { box.innerHTML = `<div class="empty pending">Loading page ${fmt(lb.page)}…</div>`; return; }
   if (!lb.rows) { box.innerHTML = ''; return; }
   const hl = lb.highlight;
-  const { key, dir } = lb.sort;
-  const get = LB_SORTS[key].get;
-  const rows = [...lb.rows].sort((a, b) => {
-    const x = get(a), y = get(b);
-    return (x < y ? -1 : x > y ? 1 : 0) * dir || a.rank - b.rank;
-  });
-  const th = (k, cls = '') => {
-    const on = key === k;
-    const label = k === 'level' && lb.type === 0 ? 'Total level' : LB_SORTS[k].label;
-    return `<th class="${cls}" aria-sort="${on ? (dir === 1 ? 'ascending' : 'descending') : 'none'}"><button type="button" class="th-sort${on ? ' on' : ''}" data-sort="${k}" title="Sort by ${label}">${label}<span class="arrow">${on ? (dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
-  };
-  const sortedNote = key === 'rank' && dir === 1 ? ''
-    : `<div class="sort-note">Sorted by ${LB_SORTS[key].label}, ${dir === 1 ? 'lowest' : 'highest'} first, within this page. <button type="button" class="linkish" data-sort-reset>Back to rank order</button></div>`;
-  const body = rows.map(r => {
+  const body = lb.rows.map(r => {
     const top = topFor(lb.type, r.rank);
     const on = hl && (hl === r.safe || hl === r.rank);
     return `<tr class="${on ? 'hl' : ''}">
@@ -869,8 +893,8 @@ function renderLeaders() {
       <td class="c"><button type="button" class="mini" data-add="${esc(r.name)}" title="Add to compare">+ Compare</button></td>
     </tr>`;
   }).join('');
-  box.innerHTML = `${sortedNote}<div class="table-wrap fit${lb.loading ? ' pending' : ''}"><table class="grid lb">
-    <thead><tr>${th('rank')}${th('name', 'l')}${th('level')}${th('xp')}${th('top')}<th></th></tr></thead>
+  box.innerHTML = `<div class="table-wrap fit${lb.loading ? ' pending' : ''}"><table class="grid lb">
+    <thead><tr><th>Rank</th><th class="l">Player</th><th>${lb.type === 0 ? 'Total level' : 'Level'}</th><th>XP</th><th>Top %</th><th></th></tr></thead>
     <tbody>${body || `<tr><td class="l" colspan="6">No players here.</td></tr>`}</tbody></table></div>`;
 }
 
@@ -1038,15 +1062,15 @@ function wire() {
     }
     const lbType = t.closest('[data-lb-type]');
     if (lbType) { goLeaders(Number(lbType.dataset.lbType), 1); return; }
-    const sortBtn = t.closest('[data-sort]');
-    if (sortBtn) {
-      const k = sortBtn.dataset.sort;
-      const cur = state.leaders.sort;
-      state.leaders.sort = cur.key === k ? { key: k, dir: -cur.dir } : { key: k, dir: LB_SORTS[k].first };
-      savePrefs(); renderLeaders();
+    const csort = t.closest('[data-csort]');
+    if (csort) {
+      const k = csort.dataset.csort;
+      const cur = state.compare.sort;
+      state.compare.sort = cur.key === k ? { key: k, dir: -cur.dir } : { key: k, dir: 1 };
+      savePrefs(); renderCompare();
       return;
     }
-    if (t.closest('[data-sort-reset]')) { state.leaders.sort = { key: 'rank', dir: 1 }; savePrefs(); renderLeaders(); return; }
+    if (t.closest('[data-csort-reset]')) { state.compare.sort = { key: 'default', dir: 1 }; savePrefs(); renderCompare(); return; }
     const act = t.closest('[data-action]');
     if (!act) return;
     const p = state.lookup.profile;
