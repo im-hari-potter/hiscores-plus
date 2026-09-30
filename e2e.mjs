@@ -41,7 +41,12 @@ await check('lookup shows 20 tiles with LostKit numbers and Top %', async () => 
   assert.match(attack, /Level: 60/);
   assert.match(attack, /XP: 295,920/);
   assert.match(attack, /Next: 6,368 XP/);
-  assert.match(attack, /Top [\d.]+% of 14,138/);
+  // Player counts come from the freshest of totals.json (the daily job) and the bundled seed.
+  const counts = await page.evaluate(async () => {
+    const files = await Promise.all(['totals.json', 'totals-seed.json'].map(f => fetch(f).then(r => r.ok ? r.json() : null).catch(() => null)));
+    return files.filter(Boolean).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated))[0].totals;
+  });
+  assert.match(attack, new RegExp(`Top [\\d.]+% of ${Number(counts['1']).toLocaleString('en-US')}`));
 });
 await page.screenshot({ path: `${SHOTS}/1-lookup.png`, fullPage: true });
 
@@ -266,6 +271,136 @@ await check('lookup tiles sort by level/XP/rank/Top %, Overall first, and can be
   assert.deepEqual((await tiles()).map(t => t.id), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21]);
 });
 
+// ── Planner: Goals, Bank, Prices ────────────────────────────────────────
+const goalText = () => page.locator('.goal').first().innerText();
+
+await check('goals: a Herblore level goal shows the XP left from the hiscores', async () => {
+  await page.click('.tab[data-tab="goals"]');
+  await page.waitForSelector('#view-goals:not([hidden])');
+  assert.equal(await page.locator('#filter-seg').isHidden(), true, 'All/Combat is hidden on planner tabs');
+  await page.fill('#plan-account input[name=account]', 'demo main');
+  await page.click('#plan-account button[type=submit]');
+  await page.waitForFunction(() => document.querySelector('#plan-account').innerText.includes('XP from the hiscores'), null, { timeout: 15000 });
+  await page.click('[data-nskill="herblore"]');
+  await page.click('[data-ntype="level"]');
+  await page.fill('#goal-new input[name=value]', '78');
+  await page.click('#goal-new button[type=submit]');
+  await page.waitForSelector('.goal .plan');
+  const t = await goalText();
+  assert.match(t, /Level 74 → 78/);
+  assert.match(t, /433,173 XP to go/);
+  assert.match(t, /4 levels/);
+});
+
+await check('goals: a goal that is already reached is not added', async () => {
+  await page.click('[data-nskill="woodcutting"]');
+  await page.fill('#goal-new input[name=value]', '80');
+  await page.click('#goal-new button[type=submit]');
+  assert.match(await text('#goals-msg'), /already level 93 in Woodcutting/);
+  assert.equal(await page.locator('.goal').count(), 1);
+});
+
+await check('bank: amounts typed in are kept and valued', async () => {
+  await page.click('.tab[data-tab="bank"]');
+  await page.waitForSelector('[data-bank="ranarr_weed"]');
+  await page.fill('[data-bank="ranarr_weed"]', '1k');
+  await page.press('[data-bank="ranarr_weed"]', 'Tab');
+  await page.fill('[data-bank="snape_grass"]', '700');
+  await page.press('[data-bank="snape_grass"]', 'Tab');
+  assert.equal(await page.inputValue('[data-bank="ranarr_weed"]'), '1,000', '1k is read as 1,000');
+  assert.match(await text('#bank-head'), /2 kinds of item/);
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.bank.demo_main')));
+  assert.deepEqual(stored.items, { ranarr_weed: 1000, snape_grass: 700 });
+});
+await page.screenshot({ path: `${SHOTS}/9-bank.png`, fullPage: true });
+
+await check("goals: Ostap's example, 700 potions from the bank, 4,251 more and 300 snape grass to balance", async () => {
+  await page.click('.tab[data-tab="goals"]');
+  await page.waitForSelector('.goal .plan');
+  const t = await goalText();
+  assert.match(t, /700 × Prayer potion \+61,250 XP/);
+  assert.match(t, /4,251 × Prayer potion/);
+  assert.match(t, /3,951\s*Ranarr weed/);
+  assert.match(t, /4,251\s*Snape grass/);
+  assert.match(t, /collect\s*300\s*Snape grass[\s\S]*makes\s*1,000\s*Prayer potion instead of 700/);
+  const row = await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText();
+  const cells = row.split('\t').map(c => c.trim());
+  assert.equal(cells[3], '4,951', 'to goal');
+  assert.equal(cells[4], '700', 'from bank');
+  assert.equal(cells[5], '4,251', 'still to make');
+});
+await page.screenshot({ path: `${SHOTS}/10-goal-plan.png`, fullPage: true });
+
+await check('goals: picking another potion and leaving the bank out change the plan', async () => {
+  await page.click('tr[data-method="hb_3doserangerspotion"] td:nth-child(2)');
+  await page.waitForFunction(() => /2,289 × Ranging potion/.test(document.querySelector('.goal').innerText));
+  assert.equal(await page.inputValue('.goal select[data-gopt="fill"]'), 'hb_3doserangerspotion');
+  await page.selectOption('.goal select[data-gopt="fill"]', 'hb_3doseprayerrestore');
+  await page.waitForFunction(() => /4,251 × Prayer potion/.test(document.querySelector('.goal').innerText));
+  await page.uncheck('.goal input[data-gopt="useBank"]');
+  await page.waitForFunction(() => !/From your bank/.test(document.querySelector('.goal').innerText));
+  assert.match(await goalText(), /4,951 × Prayer potion/);
+  await page.check('.goal input[data-gopt="useBank"]');
+  await page.waitForFunction(() => /From your bank/.test(document.querySelector('.goal').innerText));
+});
+
+await check('prices: sales medians, placeholder prices fixed from notes, 4-dose fallback and your own price', async () => {
+  await page.click('.tab[data-tab="prices"]');
+  await page.waitForFunction(() => {
+    const t = document.querySelector('#prices-body').innerText;
+    return /Ranarr weed\s*3,000\s*median of 6 sales/.test(t) && /Prayer potion\(3\)\s*[\d,.]+[KM]?\s*¾ of the 4-dose price/.test(t);
+  }, null, { timeout: 60000 });
+  await page.fill('[data-price="snape_grass"]', '450');
+  await page.press('[data-price="snape_grass"]', 'Tab');
+  await page.waitForFunction(() => /Snape grass\s*450\s*your price/.test(document.querySelector('#prices-body').innerText));
+  const overrides = await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.priceOverrides')));
+  assert.deepEqual(overrides, { snape_grass: 450 });
+});
+await page.screenshot({ path: `${SHOTS}/11-prices.png`, fullPage: true });
+
+await check('goals: with prices known the plan shows cost, value and profit', async () => {
+  await page.click('.tab[data-tab="goals"]');
+  await page.waitForSelector('.goal .money');
+  const money = await page.locator('.goal .money').innerText();
+  assert.match(money, /Buying it all: [\d.,]+[KM]? gp/);
+  assert.match(money, /worth: [\d.,]+[KM]? gp/);
+  assert.match(money, /Net: [+−][\d.,]+[KM]? gp/);
+  assert.doesNotMatch(await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText(), /\?/);
+});
+
+await check('goals: a rank goal looks up who holds that rank', async () => {
+  await page.click('[data-nskill="herblore"]');
+  await page.click('[data-ntype="rank"]');
+  await page.fill('#goal-new input[name=value]', '500');
+  await page.click('#goal-new button[type=submit]');
+  await page.waitForFunction(() => /beat .+ \(rank 500, checked/.test(document.querySelectorAll('.goal')[1]?.innerText || ''), null, { timeout: 15000 });
+  assert.match(await page.locator('.goal').nth(1).innerText(), /Rank 568 → 500/);
+});
+
+await check('lookup tiles show the goal of the planned account', async () => {
+  await page.click('.tab[data-tab="lookup"]');
+  await page.fill('#lookup-name', 'demo main');
+  await page.click('#lookup-form button');
+  await page.waitForSelector('#tiles-grid .tile[data-id="16"] .goal-line', { timeout: 15000 });
+  assert.match(await text('#tiles-grid .tile[data-id="16"] .goal-line'), /Goal 78 · 433K XP to go/);
+  await page.fill('#lookup-name', 'old badger');
+  await page.click('#lookup-form button');
+  await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.includes('Old Badger'), null, { timeout: 15000 });
+  assert.equal(await page.locator('.goal-line').count(), 0, "another player's tiles have no goal lines");
+});
+
+await check('planner tabs fit a narrow window', async () => {
+  await page.setViewportSize({ width: 340, height: 800 });
+  for (const tab of ['goals', 'bank', 'prices']) {
+    await page.click(`.tab[data-tab="${tab}"]`);
+    await page.waitForSelector(`#view-${tab}:not([hidden])`);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(overflow <= 0, `${tab}: horizontal overflow ${overflow}px`);
+  }
+  await page.screenshot({ path: `${SHOTS}/12-narrow-goals.png`, fullPage: false });
+  await page.setViewportSize({ width: 1000, height: 900 });
+});
+
 await check('settings shows totals and makes a backup that restores', async () => {
   await page.click('#settings-btn');
   await page.waitForSelector('#settings[open]');
@@ -278,8 +413,13 @@ await check('settings shows totals and makes a backup that restores', async () =
     return data;
   });
   assert.ok(Object.keys(backup).some(k => k.startsWith('lchs.snap.demo_main')));
+  assert.ok(backup['lchs.goals.demo_main'] && backup['lchs.bank.demo_main'], 'goals and bank are stored');
   if (await page.locator('#restore-box').isHidden()) await page.click('#backup-restore-toggle');
   const exported = await page.evaluate(async () => (await import('./store.js')).exportBackup());
+  const parsed = JSON.parse(exported);
+  assert.ok(parsed.data['goals.demo_main']?.length >= 2, 'goals are in the backup');
+  assert.equal(parsed.data['bank.demo_main']?.items?.ranarr_weed, 1000, 'the bank is in the backup');
+  assert.equal(parsed.data.prices, undefined, 'the price cache is left out');
   await page.fill('#restore-text', exported);
   await page.click('#restore-go');
   assert.match(await text('#settings-msg'), /Restored/);
@@ -361,6 +501,7 @@ await check('stale player counts are re-measured in the background', async () =>
   const ctx2 = await browser.newContext();
   const p3 = await ctx2.newPage();
   p3.on('pageerror', e => problems.push('pageerror(p3): ' + e.message));
+  await p3.route('**/totals.json', route => route.fulfill({ status: 404, body: 'gone' }));   // as if the daily job never ran
   await p3.route('**/totals-seed.json', async route => {
     const res = await route.fetch();
     const json = await res.json();

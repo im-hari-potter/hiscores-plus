@@ -1,4 +1,4 @@
-/* Hiscores+ — styled to sit next to LostKit's own panels. */
+/* Skills+ (formerly Hiscores+) — styled to sit next to LostKit's own panels. */
 
 @font-face { font-family: 'RS-Bold'; src: url('RuneScape-Bold-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
 @font-face { font-family: 'RS-Plain'; src: url('RuneScape-Plain-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
@@ -426,6 +426,99 @@ table.cmp tfoot td { background: #241e10; font-size: 12px; }
 }
 .mini:hover { color: #fff; background: #3a3a3a; }
 
+/* ── Planner: Goals, Bank, Prices ───────────────────────────────────────── */
+.tab-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--gold-dim); }
+.small-note { font-family: var(--small); font-size: 12px; }
+.input.bad { border-color: var(--lose); }
+
+/* Item icons: one 32x32 sprite each in items.png, drawn at their own pixel size */
+.item { display: inline-block; width: 32px; height: 32px; background: url('items.png') no-repeat; image-rendering: pixelated; flex-shrink: 0; vertical-align: middle; }
+.item.sm { width: 16px; height: 16px; }
+
+.plan-account { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.plan-account form { align-items: center; gap: 6px; }
+.plan-account .input { width: 150px; }
+.acct-status { font-family: var(--small); font-size: 12px; color: var(--faint); }
+
+.goal-new .skill-picker { margin-bottom: 4px; }
+.skill-btn { position: relative; }
+.calc-dot { position: absolute; top: 2px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: var(--gold-hi); box-shadow: 0 0 0 1px #000; }
+.goal-skill { display: inline-flex; align-items: center; gap: 5px; color: #fff; }
+.goal-new form .input.num { width: 110px; }
+
+.goal-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.goal-name { font-size: 16px; color: #fff; }
+.goal-title { font-size: 14px; color: var(--muted); }
+.goal-title b { color: var(--gold-hi); font-weight: normal; }
+.goal .x { background: none; border: none; color: var(--faint); cursor: pointer; font: inherit; text-shadow: inherit; padding: 0 2px; }
+.goal .x:hover, .goal .x.armed { color: var(--lose); }
+.goal-sub { margin-top: 4px; font-family: var(--small); font-size: 12px; color: var(--muted); line-height: 1.5; }
+.goal-sub b { color: var(--xp); }
+.pbar.goal-bar { height: 7px; margin-top: 6px; }
+.pbar.goal-bar > div { background: var(--gold-hi); }
+.pbar.goal-bar.maxed > div { background: var(--win); }
+
+.plan { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.plan-opts { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; font-family: var(--small); font-size: 12px; }
+.plan-sec { margin-top: 10px; }
+.plan-sec h4 { margin: 0 0 6px; font-weight: normal; font-size: 14px; color: var(--gold-hi); }
+.plan-sec h4 .c-faint, .plan-sec h4 .c-level, .plan-sec h4 .c-win { font-family: var(--small); font-size: 12px; }
+.steps { display: flex; flex-direction: column; gap: 3px; }
+.step { display: flex; align-items: center; gap: 8px; padding: 2px 6px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--line); border-radius: 3px; }
+.step-main { font-size: 13px; line-height: 1.35; }
+.step-main b { color: #fff; font-weight: normal; }
+.goal-flag { display: inline-block; margin-left: 4px; padding: 0 5px; border: 1px solid var(--gold); border-radius: 3px; font-family: var(--small); font-size: 11px; color: var(--gold-hi); }
+.collect { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; }
+.it-chip { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; white-space: nowrap; }
+.it-chip b { color: #fff; font-weight: normal; }
+td .it-chip { margin-right: 4px; font-size: 12px; }
+.money { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 16px; font-family: var(--small); font-size: 12px; color: var(--muted); }
+.money b { color: #fff; font-weight: normal; font-family: 'RS-Bold', sans-serif; font-size: 13px; }
+.tip .it-chip { margin-right: 2px; }
+.tip { margin-top: 6px; padding: 5px 8px; border-left: 3px solid var(--gold); background: rgba(240, 196, 25, 0.07); font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+
+table.plan-t td, table.plan-t th { padding: 3px 6px; }
+table.plan-t tbody tr[data-method] { cursor: pointer; }
+table.plan-t tr.grp td { background: #241e10 !important; color: var(--gold-hi); font-size: 12px; text-align: left; padding: 3px 8px; }
+table.plan-t tr.off td { opacity: 0.5; }
+table.plan-t tr.hl td:first-child { box-shadow: inset 3px 0 0 var(--gold-hi); }
+table.plan-t input[type=checkbox] { accent-color: var(--gold); cursor: pointer; }
+
+.bank-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 13px; color: var(--muted); }
+.bank-sum b { color: #fff; font-weight: normal; }
+.bank-group h4 { margin: 0 0 6px; font-weight: normal; font-size: 14px; color: var(--gold-hi); }
+.bank-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 4px; }
+.bank-cell {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  grid-template-rows: auto auto auto;
+  column-gap: 6px;
+  align-items: center;
+  padding: 3px 5px;
+  background: var(--tex) repeat;
+  background-size: cover;
+  border: 1px solid var(--gold-dim);
+  border-radius: 3px;
+}
+.bank-cell .item { grid-row: 1 / span 3; }
+.bank-cell .bn { font-family: var(--small); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bank-cell .input { width: 100%; max-width: 92px; }
+.bank-cell .bv { grid-column: 2; font-family: var(--small); font-size: 11px; color: var(--faint); min-height: 0; }
+.bank-cell.has { border-color: var(--gold); }
+.bank-cell.has .bn { color: var(--text); }
+
+.price-wrap { margin-bottom: 8px; }
+table.prices-t { table-layout: fixed; }
+table.prices-t th:nth-child(1) { width: 34%; }
+table.prices-t th:nth-child(2) { width: 12%; }
+table.prices-t th:nth-child(3) { width: 30%; }
+table.prices-t th:nth-child(4) { width: 11%; }
+table.prices-t th:nth-child(5) { width: 13%; }
+table.prices-t td { overflow: hidden; text-overflow: ellipsis; }
+table.prices-t td .input.num { width: 100%; max-width: 96px; }
+
+.tile .goal-line { margin-top: 3px; font-family: var(--small); font-size: 11px; color: var(--gold-hi); white-space: normal; }
+
 /* ── Status bar ─────────────────────────────────────────────────────────── */
 .status {
   display: flex;
@@ -467,6 +560,14 @@ table.cmp tfoot td { background: #241e10; font-size: 12px; }
   .tab { font-size: 12px; padding: 4px 7px; }
   .stats-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
   .pc-combat { margin-left: 0; }
+  .tab-sep { display: none; }
+  .bank-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  table.prices-t th:nth-child(4), table.prices-t td:nth-child(4) { display: none; }
+  table.prices-t th:nth-child(1) { width: 38%; }
+  table.prices-t th:nth-child(2) { width: 18%; }
+  table.prices-t th:nth-child(3) { width: 26%; }
+  table.prices-t th:nth-child(5) { width: 18%; }
+  table.prices-t td:nth-child(3) { white-space: normal; }
   table.grid th, table.grid td { padding: 4px 5px; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -1,4 +1,5 @@
-// Hiscores+ — the page. Views: Lookup, Compare, Gains, Leaderboard.
+// Skills+ (formerly Hiscores+) — the page. Views: Lookup, Compare, Gains, Leaderboard,
+// and the planner: Goals, Bank, Prices (planner-ui.js).
 
 import {
   SKILLS, SKILL_BY_ID, SKILL_IDS, COMBAT_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL,
@@ -8,8 +9,10 @@ import { HiscoresApi, LIVE_API, isElectron, toSafeName, toDisplayName, checkName
 import { Totals, topPercent, formatPercent } from './totals.js';
 import { rankParamForPage, pageOfRank, pageCount } from './totals-core.js';
 import { store, players, snapshots, exportBackup, importBackup } from './store.js';
+import { Prices, LIVE_MARKET } from './prices.js';
+import { createPlanner } from './planner-ui.js';
 
-const VERSION = '1.3.0';
+const VERSION = '2.0.0';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -23,6 +26,15 @@ const RELAY = new URL('api/hiscores', location.href).href;
 const ROUTES = params.get('api') === 'local' ? [RELAY] : isElectron() ? [LIVE_API] : [LIVE_API, RELAY];
 const api = new HiscoresApi({ routes: ROUTES });
 const totals = new Totals(api);
+// Market prices: LostKit may read the market's item pages (with sales); a normal
+// browser only gets its JSON API (open offers). ?api=local uses the test server.
+const LOCAL = params.get('api') === 'local';
+const prices = new Prices(LOCAL
+  ? { origin: new URL('market', location.href).href, routes: ['page', 'api'], gapMs: 50 }
+  : { origin: LIVE_MARKET, routes: isElectron() ? ['page', 'api'] : ['api'] });
+if (LOCAL) window.__skills = { prices };                   // for the test scripts
+const TABS = ['lookup', 'compare', 'gains', 'leaders', 'goals', 'bank', 'prices'];
+const PLAN_TABS = ['goals', 'bank', 'prices'];
 
 // ── State ────────────────────────────────────────────────────────────────
 const prefs = store.get('prefs', {});
@@ -35,7 +47,7 @@ function normalizeOrder(order) {
 }
 
 const state = {
-  tab: ['lookup', 'compare', 'gains', 'leaders'].includes(prefs.tab) ? prefs.tab : 'lookup',
+  tab: TABS.includes(prefs.tab) ? prefs.tab : 'lookup',
   filter: prefs.filter === 'combat' ? 'combat' : 'all',
   lookup: { profile: null, previous: null, snapSaved: false },
   compare: {
@@ -165,15 +177,29 @@ function topFor(id, rank) {
   return { p, text: formatPercent(p), total: t.total, title };
 }
 
+// ── Planner (Goals, Bank, Prices) ────────────────────────────────────────
+const planner = createPlanner({
+  api, totals, prices, esc, fmt, ago, iconImg, showMsg, errorText,
+  fullMarket: LOCAL || isElectron(),
+  defaultAccount: () => prefs.lastLookup || players.saved()[0] || null,
+  lookupProfile: () => state.lookup.profile,
+  // Fetching the planned account's XP is a lookup like any other: keep a snapshot for Gains.
+  onProfile: profile => { snapshots.add(profile); players.pushRecent(profile.name); },
+  onChange: () => { if (state.tab === 'lookup') renderTiles(); },
+  goTab: tab => setTab(tab),
+});
+
 // ── Rendering: shared bits ───────────────────────────────────────────────
 function render() {
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === state.tab));
   document.querySelectorAll('#filter-seg button').forEach(b => b.classList.toggle('on', b.dataset.filter === state.filter));
-  for (const v of ['lookup', 'compare', 'gains', 'leaders']) $('view-' + v).hidden = v !== state.tab;
+  $('filter-seg').hidden = PLAN_TABS.includes(state.tab);        // All/Combat only means something for the hiscores views
+  for (const v of TABS) $('view-' + v).hidden = v !== state.tab;
   if (state.tab === 'lookup') renderLookup();
   if (state.tab === 'compare') renderCompare();
   if (state.tab === 'gains') renderGains();
   if (state.tab === 'leaders') renderLeaders();
+  if (PLAN_TABS.includes(state.tab)) planner.render(state.tab);
   renderStatus();
   updateHash();
 }
@@ -185,6 +211,7 @@ function setTab(tab) {
   if (tab === 'compare') loadCompareMissing();
   if (tab === 'leaders') loadLeaders();
   if (tab === 'gains') maybeAutoUpdateGains();
+  if (PLAN_TABS.includes(tab)) planner.show(tab);
 }
 
 // Chips for saved and recent players. mode 'lookup' opens them, 'compare' toggles them.
@@ -278,6 +305,7 @@ function renderPlayerCard() {
         <span>Fetched ${ago(p.fetchedAt)}</span>
         <span>${gain}</span>
         <button type="button" class="linkish" data-action="to-gains">Gains</button>
+        <button type="button" class="linkish" data-action="to-goals" title="Plan goals for ${esc(p.name)}">Goals</button>
         <button type="button" class="linkish" data-action="add-compare">Add to compare</button>
         <button type="button" class="linkish" data-action="refresh-lookup">Refresh</button>
       </div>
@@ -413,6 +441,7 @@ function tileHtml(skill, stat, bounds) {
       <div class="v">Level: ${lvl}</div>
       <div class="v">Not ranked</div>
       <div class="next">Ranks at ${MIN_RANKED_LEVEL}</div>
+      ${planner.tileGoal(state.lookup.profile, skill)}
     </div>`;
   }
   const top = topFor(skill.id, stat.rank);
@@ -434,6 +463,7 @@ function tileHtml(skill, stat, bounds) {
     <div class="v c-rank">Rank: ${fmt(stat.rank)}</div>
     ${topHtml}
     ${tail}
+    ${skill.id !== 0 ? planner.tileGoal(state.lookup.profile, skill) : ''}
   </div>`;
 }
 
@@ -958,6 +988,8 @@ function renderStatus() {
   if (q.fg > 0) left = `<span class="busy">Fetching… ${q.fg > 1 ? `${q.fg} requests queued` : ''}${q.waitMs > 300 ? ` (next in ${(q.waitMs / 1000).toFixed(1)} s)` : ''}</span>`;
   else if (job) left = `<span class="busy">Updating player counts ${job.done + 1}/${job.count}${job.current != null ? ` (${esc(SKILL_BY_ID.get(job.current).name)})` : ''}</span>`;
   else left = 'Ready · the API allows 1 request every 2 s';
+  const ps = prices.status();
+  if (ps.busy || ps.queued) left += ` · <span class="busy">Prices ${fmt(Math.min(ps.done + 1, ps.total))}/${fmt(ps.total)}</span>`;
   $('status-api').innerHTML = left;
   const oldest = totals.newest();
   $('status-totals').textContent = oldest ? `Player counts from ${ago(oldest)}` : 'Player counts: loading';
@@ -977,7 +1009,8 @@ function renderSettings() {
   $('totals-refresh').disabled = $('totals-refresh-all').disabled = !!job;
   const tracked = snapshots.tracked();
   const snapCount = tracked.reduce((a, t) => a + t.count, 0);
-  $('data-summary').textContent = `${players.saved().length} saved players · ${tracked.length} tracked players · ${snapCount} snapshots. Stored in this browser only; a backup lets you move it or keep it safe.`;
+  const plan = planner.summary();
+  $('data-summary').textContent = `${players.saved().length} saved players · ${tracked.length} tracked players · ${snapCount} snapshots · ${plan.goals} goals · ${plan.banks} bank${plan.banks === 1 ? '' : 's'}. Stored in this browser only; a backup lets you move it or keep it safe.`;
   $('about-version').textContent = `Version ${VERSION} · reading the API ${api.base === LIVE_API ? 'directly' : `through ${api.base}`}`;
 }
 
@@ -988,7 +1021,7 @@ function updateHash() {
   else if (state.tab === 'compare' && state.compare.names.length) h = `compare/${state.compare.names.map(toSafeName).join(',')}`;
   else if (state.tab === 'gains' && state.gains.player) h = `gains/${toSafeName(state.gains.player)}`;
   else if (state.tab === 'leaders') h = `leaders/${state.leaders.type}/${state.leaders.page}`;
-  else h = state.tab;
+  else h = state.tab;                                         // goals, bank, prices and empty views
   const want = '#' + h;
   if (location.hash !== want) history.replaceState(null, '', want);
 }
@@ -1008,7 +1041,7 @@ function applyHash() {
     if (Number(b) > 0) state.leaders.page = Math.floor(Number(b));
     return true;
   }
-  if (['lookup', 'compare', 'gains', 'leaders'].includes(tab)) { state.tab = tab; return true; }
+  if (TABS.includes(tab)) { state.tab = tab; return true; }
   return false;
 }
 
@@ -1120,6 +1153,10 @@ function wire() {
         if (p) { state.gains.player = p.name; state.gains.since = 'prev'; }
         setTab('gains');
         break;
+      case 'to-goals':
+        if (p && planner.account !== p.name) planner.setAccount(p.name);
+        setTab('goals');
+        break;
       case 'add-compare':
         if (p) {
           if (!state.compare.names.some(n => toSafeName(n) === p.safe)) addToCompare(p.name);
@@ -1189,7 +1226,7 @@ function wire() {
     const blob = new Blob([exportBackup()], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `hiscores-plus-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `skills-plus-backup-${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   });
@@ -1197,7 +1234,7 @@ function wire() {
   $('restore-go').addEventListener('click', () => {
     try {
       const res = importBackup($('restore-text').value);
-      showMsg('settings-msg', `Restored: ${res.snaps} snapshots, ${res.playersAdded} saved players added.`, 'ok');
+      showMsg('settings-msg', `Restored: ${res.snaps} snapshots, ${res.playersAdded} saved players, ${res.goals} goals and ${res.banks} bank${res.banks === 1 ? '' : 's'} added.`, 'ok');
       renderSettings(); render();
     } catch (err) { showMsg('settings-msg', esc(err.message), 'error'); }
   });
@@ -1209,11 +1246,13 @@ function wire() {
     state.lookup = { profile: null, previous: null, snapSaved: false };
     state.compare.names = []; state.compare.profiles = {};
     state.gains.player = null;
+    planner.reset();
     showMsg('settings-msg', 'Everything this tool stored has been removed.', 'ok');
     renderSettings(); render();
   });
 
   api.addEventListener('queue', renderStatus);
+  prices.addEventListener('update', renderStatus);
   totals.addEventListener('update', () => {
     renderStatus();
     if (state.tab === 'lookup') { renderPlayerCard(); renderTiles(); }
@@ -1229,6 +1268,7 @@ function afterRoute() {
   if (state.tab === 'compare') loadCompareMissing();
   if (state.tab === 'leaders') loadLeaders();
   if (state.tab === 'gains') maybeAutoUpdateGains();
+  if (PLAN_TABS.includes(state.tab)) planner.show(state.tab);
 }
 
 // ── Start ────────────────────────────────────────────────────────────────
