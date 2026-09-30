@@ -122,10 +122,13 @@ export const snapshots = {
 };
 
 // ── Backup ────────────────────────────────────────────────────────────────
+// Caches that are cheap to rebuild aren't worth carrying around.
+const NOT_BACKED_UP = key => key === 'totals' || key === 'prices' || key === 'market.version' || key.startsWith('api.');
+
 export function exportBackup() {
   const data = {};
   for (const key of store.keys()) {
-    if (key === 'totals') continue; // cheap to rebuild, not worth carrying around
+    if (NOT_BACKED_UP(key)) continue;
     data[key] = store.get(key, null);
   }
   return JSON.stringify({ app: 'lc-hiscores-plus', version: 1, exported: new Date().toISOString(), data });
@@ -134,10 +137,11 @@ export function exportBackup() {
 // Merges a backup into what is already here. Returns a short summary.
 export function importBackup(text) {
   const parsed = JSON.parse(text);
+  // Skills+ keeps the Hiscores+ backup format, so old backups restore as they are.
   if (!parsed || parsed.app !== 'lc-hiscores-plus' || typeof parsed.data !== 'object') {
-    throw new Error('That does not look like a Hiscores+ backup.');
+    throw new Error('That does not look like a Skills+ (or Hiscores+) backup.');
   }
-  let snaps = 0, playersAdded = 0;
+  let snaps = 0, playersAdded = 0, goals = 0, banks = 0;
   for (const [key, value] of Object.entries(parsed.data)) {
     if (key.startsWith('snap.') && Array.isArray(value)) {
       const current = store.get(key, []);
@@ -154,7 +158,21 @@ export function importBackup(text) {
       for (const name of value) if (!players.isSaved(name)) { players.toggleSaved(name); playersAdded++; }
     } else if (key === 'prefs' && value && typeof value === 'object') {
       store.set('prefs', { ...store.get('prefs', {}), ...value });
+    } else if (key.startsWith('goals.') && Array.isArray(value)) {
+      // Goals are merged by id; ones already here stay as they are.
+      const current = store.get(key, []);
+      const ids = new Set(current.map(g => g.id));
+      for (const g of value) if (g && g.id && g.skill && !ids.has(g.id)) { current.push(g); goals++; }
+      store.set(key, current);
+    } else if (key.startsWith('bank.') && value && typeof value.items === 'object') {
+      // A bank is one snapshot of what you had: the newer one wins.
+      const current = store.get(key, null);
+      if (!current || !Object.keys(current.items || {}).length || (value.updated || 0) > (current.updated || 0)) { store.set(key, value); banks++; }
+    } else if (key === 'priceOverrides' && value && typeof value === 'object') {
+      store.set(key, { ...value, ...store.get(key, {}) });
+    } else if (key === 'plan.account' && typeof value === 'string' && !store.get(key, null)) {
+      store.set(key, value);
     }
   }
-  return { snaps, playersAdded };
+  return { snaps, playersAdded, goals, banks };
 }

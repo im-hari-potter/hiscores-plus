@@ -61,13 +61,14 @@ export function checkName(input) {
 
 // ── Profiles ──────────────────────────────────────────────────────────────
 // A profile is what we keep for one lookup of one player.
-//   stats: { [categoryId]: { level, xp, rank } }  (skills below 15 are absent)
+//   stats: { [categoryId]: { level, xp, xp10, rank } }  (skills below 15 are absent)
+//   xp10 is the exact XP in tenths, as the API sends it (the planner uses it).
 export function parseProfile(name, rows, fetchedAt = Date.now()) {
   const stats = {};
   for (const r of rows) {
     const type = Number(r.type);
     if (!Number.isFinite(type)) continue;
-    stats[type] = { level: Number(r.level), xp: apiXp(r.value), rank: Number(r.rank) };
+    stats[type] = { level: Number(r.level), xp: apiXp(r.value), xp10: Math.floor(Number(r.value)), rank: Number(r.rank) };
   }
   return { safe: toSafeName(name), name: toDisplayName(name), stats, fetchedAt };
 }
@@ -288,6 +289,7 @@ export class HiscoresApi extends EventTarget {
       name: toDisplayName(r.username),
       level: Number(r.level),
       xp: apiXp(r.value),
+      xp10: Math.floor(Number(r.value)),
       rank: Number(r.rank),
     }));
   }

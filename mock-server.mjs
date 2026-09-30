@@ -6,12 +6,18 @@
 //   node mock-server.mjs [port]          RATE_MS=2000 by default
 //   POST /__mock/bump?name=x&type=1&xp=500    give a player XP (for gains tests)
 //   POST /__mock/grow?type=1&n=30             add n fresh players ranked in a skill
+//
+// It also stands in for markets.lostcity.rs under /market: item pages (HTML with
+// the page data embedded, or JSON when asked with X-Inertia headers) and the JSON
+// API. Prices are made up from each item's shop value. Some items have sales, some
+// only open offers, 3-dose potions have nothing (so the 4-dose price is used).
 
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SKILLS, levelForXp, xpForLevel } from './skills.js';
+import { ITEMS } from './gamedata.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.argv[2] || process.env.PORT || 8787);
@@ -81,7 +87,78 @@ const safeName = s => String(s).trim().toLowerCase().replace(/[^a-z0-9]/g, '_').
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.otf': 'font/otf', '.csv': 'text/csv' };
 let windowEnds = 0;
-export const counters = { api: 0, limited: 0 };
+export const counters = { api: 0, limited: 0, market: 0 };
+
+// ── Market stand-in ───────────────────────────────────────────────────────
+const MARKET_VERSION = 'mock-v1';
+const marketItems = Object.entries(ITEMS).filter(([, it]) => !it.untradeable)
+  .map(([slug, it], i) => ({ id: 1000 + i, game_id: it.id, name: it.name, slug, cost: it.cost, isSet: false }));
+const marketBySlug = new Map(marketItems.map(i => [i.slug, i]));
+const COIN = { id: 1, game_id: 995, name: 'Coins', slug: 'coins', cost: 1 };
+const MULT = { ranarr_weed: 120, snape_grass: 40, '4doseprayerrestore': 30 };
+function marketPrice(slug) {
+  const it = marketBySlug.get(slug);
+  return Math.max(1, Math.round(it.cost * (MULT[slug] || 12)));
+}
+function listing(id, item, type, unit, { soldDaysAgo = null, qty = 100, each = true, notes = '' } = {}) {
+  const day = 864e5;
+  return {
+    id, type, price: null, quantity: qty, notes, username: 'trader' + (id % 17), item,
+    offers: [{ id, listingId: id, title: each ? 'For each item:' : 'For:', items: [{ id, listingOfferId: id, quantity: each ? unit : unit * qty, item_id: 1, item: COIN }] }],
+    updatedAt: new Date(Date.now() - 2 * day).toISOString(),
+    soldAt: soldDaysAgo == null ? null : new Date(Date.now() - soldDaysAgo * day).toISOString(),
+    deletedAt: null, pausedAt: null, canManage: false,
+  };
+}
+// 3-dose potions: nothing. Unfinished potions and unidentified herbs: offers only.
+function marketListings(slug) {
+  const item = marketBySlug.get(slug);
+  const p = marketPrice(slug);
+  if (/^3dose/.test(slug)) return { sold: [], buy: [], sell: [] };
+  const offersOnly = /vial$|^unidentified_/.test(slug) && slug !== 'vial_water';
+  const sold = offersOnly ? [] : [0.95, 1, 1.05, 1.02, 0.98].map((f, i) => listing(10 * item.id + i, item, i % 2 ? 'buy' : 'sell', Math.round(p * f), { soldDaysAgo: i + 1 }));
+  // one placeholder price the screening has to see through
+  if (!offersOnly && slug === 'ranarr_weed') sold.push(listing(10 * item.id + 7, item, 'sell', 3, { soldDaysAgo: 6, notes: `${Math.round(p / 1000)}k each` }));
+  const buy = [listing(10 * item.id + 8, item, 'buy', Math.round(p * 0.9))];
+  const sell = [listing(10 * item.id + 9, item, 'sell', Math.round(p * 1.1), { each: false, qty: 50 })];
+  return { sold, buy, sell };
+}
+const paged = (data, name = 'page') => ({ data, links: [], meta: { current_page: 1, last_page: 1, per_page: 20, total: data.length, next_page_url: null, path: name } });
+
+function marketRoute(req, url, res) {
+  counters.market++;
+  const json = (status, body, headers = {}) => send(res, status, JSON.stringify(body), { 'Content-Type': 'application/json', ...headers });
+  const path = url.pathname.replace(/^\/market/, '');
+  if (path === '/api/items') {
+    const q = (url.searchParams.get('q') || '').toLowerCase();
+    if (!q) return json(200, []);
+    const hits = marketItems.filter(i => i.slug.includes(q.replace(/ /g, '_')) || i.name.toLowerCase().includes(q))
+      .sort((a, b) => (a.slug === q ? -1 : b.slug === q ? 1 : a.name.length - b.name.length)).slice(0, 5);
+    return json(200, hits);
+  }
+  let m = path.match(/^\/api\/items\/(\d+)$/);
+  if (m) {
+    const it = marketItems.find(i => i.id === Number(m[1]));
+    if (!it) return json(404, { message: 'Not found' });
+    const side = url.searchParams.get('type') === 'sell' ? 'sell' : 'buy';
+    return json(200, paged(marketListings(it.slug)[side]));
+  }
+  m = path.match(/^\/items\/([a-z0-9_]+)$/);
+  if (m) {
+    const it = marketBySlug.get(m[1]);
+    const inertia = req.headers['x-inertia'] === 'true';
+    if (!it) return inertia ? json(404, { component: 'errors/index/page', props: { status: 404 }, version: MARKET_VERSION }) : send(res, 404, '<html>404</html>', { 'Content-Type': 'text/html' });
+    if (inertia && req.headers['x-inertia-version'] !== MARKET_VERSION) return send(res, 409, '', { 'X-Inertia-Location': url.href });
+    const side = url.searchParams.get('type') === 'sell' ? 'sell' : 'buy';
+    const l = marketListings(it.slug);
+    const page = { component: 'items/show/page', url: url.pathname + url.search, version: MARKET_VERSION,
+      props: { item: it, listingType: side, listings: paged(l[side]), soldListings: paged(l.sold, 'sold') } };
+    if (inertia) return json(200, page, { 'X-Inertia': 'true', Vary: 'X-Inertia' });
+    const attr = JSON.stringify(page).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#039;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return send(res, 200, `<!DOCTYPE html><html><head><title>${it.name}</title></head><body><div id="app" data-page="${attr}"></div></body></html>`, { 'Content-Type': 'text/html; charset=utf-8' });
+  }
+  return send(res, 404, 'not found');
+}
 
 function send(res, status, body, headers = {}) {
   res.writeHead(status, { 'Access-Control-Allow-Origin': '*', ...headers });
@@ -109,6 +186,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, JSON.stringify({ ...counters, totals: Object.fromEntries(Object.entries(rankings).map(([k, v]) => [k, v.length])) }), { 'Content-Type': 'application/json' });
     }
   }
+
+  if (url.pathname.startsWith('/market/')) return marketRoute(req, url, res);
 
   if (url.pathname.startsWith('/api/hiscores/')) {
     counters.api++;
