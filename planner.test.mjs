@@ -1,7 +1,8 @@
 // Run with:  node --test
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { METHODS, ITEMS, BANK_GROUPS } from './gamedata.js';
+import { METHODS, ITEMS, BANK_GROUPS, UNID_HERBS } from './gamedata.js';
+import { mergeUnids } from './planner-ui.js';
 import {
   xp10ForLevel, levelForXp10, goalTargetXp10, rankForTop, indexMethods, planBank, planGoal,
   methodEconomics, maxRuns, Stock, bankValue,
@@ -36,7 +37,9 @@ test('every method only uses items the catalog knows, and XP is whole tenths', (
   for (const g of BANK_GROUPS.herblore) for (const k of g.items) assert.ok(ITEMS[k], k);
   assert.equal(ix.byId.get('hb_3doseprayerrestore').xp, 875);
   assert.equal(ix.byId.get('hb_3dose2antipoison').xp, 1063);
-  assert.equal(ix.byId.get('hb_id_ranarr_weed').xp, 75);
+  assert.deepEqual(UNID_HERBS, { item: 'unidentified_guam', xpMin: 25, xpMax: 150 });
+  assert.equal(ITEMS.unidentified_guam.name, 'Unid herb');
+  assert.ok(METHODS.every(m => !Object.keys(m.in).some(k => k.startsWith('unidentified_'))), 'no plan starts from unid herbs');
 });
 
 test("Ostap's example: 74 to 78 Herblore with 1,000 ranarr and 700 snape grass", () => {
@@ -68,17 +71,16 @@ test("Ostap's example: 74 to 78 Herblore with 1,000 ranarr and 700 snape grass",
   assert.deepEqual(plan.fill.buy, { ranarr_weed: 3948, snape_grass: 4248, vial_water: 4248 });
 });
 
-test('unidentified herbs are identified on the way, and that XP counts', () => {
-  const res = planBank(ix, { bank: { unidentified_ranarr: 10, snape_grass: 10 }, startXp10: 11_962_500, unlimited: VIALS });
-  assert.equal(res.xp10, 10 * 875 + 10 * 75);
-  assert.equal(res.steps[0].id, 'hb_3doseprayerrestore');
-  assert.deepEqual(res.steps[0].sub, { hb_id_ranarr_weed: 10, hb_unf_ranarr_weed: 10 });
+test('unid herbs sit out of the plan until they are identified', () => {
+  const res = planBank(ix, { bank: { unidentified_guam: 500, snape_grass: 10 }, startXp10: 11_962_500, unlimited: VIALS });
+  assert.equal(res.steps.length, 0);
+  assert.equal(res.leftover.have('unidentified_guam'), 500);
 });
 
-test('leftover unidentified herbs are still identified for the XP', () => {
-  const res = planBank(ix, { bank: { unidentified_ranarr: 25, snape_grass: 10 }, startXp10: 11_962_500, unlimited: VIALS });
-  assert.equal(res.xp10, 10 * 875 + 25 * 75);
-  assert.deepEqual(res.steps.map(s => [s.id, s.runs]), [['hb_3doseprayerrestore', 10], ['hb_id_ranarr_weed', 15]]);
+test('unid herbs saved one kind at a time (v2.0.0) become one Unid herb amount', () => {
+  const old = { unidentified_guam: 5, unidentified_ranarr: 100, unidentified_torstol: 3, ranarr_weed: 7 };
+  assert.deepEqual(mergeUnids(old), { changed: true, items: { unidentified_guam: 108, ranarr_weed: 7 } });
+  assert.deepEqual(mergeUnids({ ranarr_weed: 7 }), { changed: false, items: { ranarr_weed: 7 } });
 });
 
 test('unfinished potions and empty vials in the bank count', () => {

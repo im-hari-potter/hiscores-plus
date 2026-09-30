@@ -389,6 +389,55 @@ await check('lookup tiles show the goal of the planned account', async () => {
   assert.equal(await page.locator('.goal-line').count(), 0, "another player's tiles have no goal lines");
 });
 
+await check('goals: move up and down, and filter by status and skill', async () => {
+  await page.click('.tab[data-tab="goals"]');
+  await page.click('[data-nskill="woodcutting"]');
+  await page.click('[data-ntype="level"]');
+  await page.fill('#goal-new input[name=value]', '94');
+  await page.click('#goal-new button[type=submit]');
+  const order = () => page.$$eval('.goal', els => els.map(e => e.querySelector('.goal-name').innerText + ' ' + e.querySelector('.goal-title').innerText.split('→')[1].trim()));
+  await page.waitForFunction(() => document.querySelectorAll('.goal').length === 3);
+  assert.deepEqual(await order(), ['Herblore 78', 'Herblore 500', 'Woodcutting 94']);
+  assert.equal(await page.locator('.goal').first().locator('[data-act="goal-up"]').isDisabled(), true, 'the first goal cannot go up');
+  await page.locator('.goal').first().locator('[data-act="goal-down"]').click();
+  assert.deepEqual(await order(), ['Herblore 500', 'Herblore 78', 'Woodcutting 94']);
+  await page.locator('.goal').nth(2).locator('[data-act="goal-up"]').click();
+  assert.deepEqual(await order(), ['Herblore 500', 'Woodcutting 94', 'Herblore 78']);
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.goals.demo_main')).map(g => g.skill + ' ' + g.value));
+  assert.deepEqual(stored, ['herblore 500', 'woodcutting 94', 'herblore 78'], 'the order is saved');
+  // only one skill, and moving within that view skips the goals it hides
+  await page.click('.goal-filter [data-gonly="herblore"]');
+  assert.deepEqual(await order(), ['Herblore 500', 'Herblore 78']);
+  await page.locator('.goal').nth(1).locator('[data-act="goal-up"]').click();
+  assert.deepEqual(await order(), ['Herblore 78', 'Herblore 500']);
+  await page.click('.goal-filter [data-gonly="herblore"]');
+  assert.deepEqual(await order(), ['Herblore 78', 'Herblore 500', 'Woodcutting 94']);
+  await page.click('[data-gshow="done"]');
+  assert.equal(await page.locator('.goal').count(), 0);
+  assert.match(await text('#goals-list'), /No goals match/);
+  await page.click('[data-act="show-all-goals"]');
+  assert.equal(await page.locator('.goal').count(), 3);
+  assert.match(await text('.goal-filter'), /In progress\s*3/);
+});
+
+await check('bank: unid herbs are one entry, and older per-herb amounts are folded into it', async () => {
+  await page.evaluate(() => {           // a bank saved by v2.0.0, one kind of unid at a time
+    const b = JSON.parse(localStorage.getItem('lchs.bank.demo_main'));
+    Object.assign(b.items, { unidentified_ranarr: 40, unidentified_torstol: 2 });
+    localStorage.setItem('lchs.bank.demo_main', JSON.stringify(b));
+  });
+  await page.click('.tab[data-tab="bank"]');
+  await page.waitForSelector('[data-bank="unidentified_guam"]');
+  assert.equal(await page.inputValue('[data-bank="unidentified_guam"]'), '42');
+  assert.equal(await page.locator('[data-bank^="unidentified_"]').count(), 1, 'one unid entry');
+  assert.doesNotMatch(await text('#bank-body'), /Unidentified herbs/);
+  const items = await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.bank.demo_main')).items);
+  assert.equal(items.unidentified_guam, 42);
+  assert.equal(items.unidentified_ranarr, undefined);
+  await page.click('.tab[data-tab="goals"]');
+  await page.waitForFunction(() => /You also have\s*42\s*unid herbs\. Identify them first/.test(document.querySelector('.goal').innerText));
+});
+
 await check('planner tabs fit a narrow window', async () => {
   await page.setViewportSize({ width: 340, height: 800 });
   for (const tab of ['goals', 'bank', 'prices']) {

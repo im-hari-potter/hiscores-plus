@@ -29,9 +29,11 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 ### Planner
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
+  - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
+    or only one skill.
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
   - **Herblore** has the full planner so far; the other skills follow in later updates. It shows:
-    - what your bank already makes, best XP first, including unfinished potions and identify XP;
+    - what your bank already makes, best XP first, including unfinished potions;
     - how many potions are left after that, with the method you pick;
     - what to collect or buy, and a tip when your ingredients don't pair up (e.g. "collect 300 snape
       grass and your bank makes 1,000 prayer potions instead of 700");
@@ -39,6 +41,9 @@ LostKit, or remove it and add it again. Your saved data stays either way.
       and gp per XP.
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work). Each account has its own bank.
   The bank's value is shown with market prices.
+  - Unidentified herbs are one "Unid herb" entry, because in-game they're all a plain "Herb". They count
+    toward the bank's value, priced from the market's unid listing. Plans leave them out until you
+    identify them.
 - **Prices** come from player listings on [markets.lostcity.rs](https://markets.lostcity.rs).
   - A price is the median of recent sales. Items with no sales use open offers, and if nobody trades
     an item, its shop value is used.

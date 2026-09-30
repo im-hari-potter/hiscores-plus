@@ -5,7 +5,7 @@
 // file only turns it into LostKit-style panels.
 
 import { SKILLS, SKILL_BY_KEY, SKILL_IDS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels } from './skills.js';
-import { ITEMS, METHODS, BANK_GROUPS, ICONS_PER_ROW, ICON_SIZE } from './gamedata.js';
+import { ITEMS, METHODS, BANK_GROUPS, ICONS_PER_ROW, ICON_SIZE, UNID_HERBS } from './gamedata.js';
 import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, MAX_XP10 } from './planner.js';
 import { store, players } from './store.js';
 import { toSafeName, toDisplayName, checkName } from './api.js';
@@ -21,6 +21,20 @@ const DEFAULT_ASSUME = { herblore: ['vial_water'] };
 const ASSUME_LABEL = { herblore: 'vials of water' };
 const TARGET_TTL = 30 * 60e3;          // re-check who holds a rank after this long
 const PROFILE_TTL = 5 * 60e3;
+
+// Every unidentified herb is one "Unid herb" entry (they're all a plain "Herb"
+// in-game). Banks saved by v2.0.0 kept each kind apart: fold those in.
+export function mergeUnids(items) {
+  const out = { ...items };
+  let changed = false;
+  for (const k of Object.keys(out)) {
+    if (!k.startsWith('unidentified_') || k === UNID_HERBS.item) continue;
+    out[UNID_HERBS.item] = (out[UNID_HERBS.item] || 0) + (Number(out[k]) || 0);
+    delete out[k];
+    changed = true;
+  }
+  return { changed, items: out };
+}
 
 // "1,500", "1.5k", "2m" -> number; '' -> 0; nonsense -> null
 export function parseAmount(text) {
@@ -62,18 +76,27 @@ export function createPlanner(ctx) {
     newGoal: { skill: SKILL_BY_KEY.has(ui.newSkill) ? ui.newSkill : 'herblore', type: ['level', 'xp', 'rank', 'top'].includes(ui.newType) ? ui.newType : 'level' },
     open: new Set(Array.isArray(ui.open) ? ui.open : []),
     sort: ['level', 'xp', 'cheap'].includes(ui.sort) ? ui.sort : 'level',
+    show: ['all', 'active', 'done'].includes(ui.show) ? ui.show : 'all',     // goal filter: status
+    only: SKILL_BY_KEY.has(ui.only) ? ui.only : null,                        // goal filter: one skill
+    visible: [],                                                              // goal ids shown, in order
     bankSkill: 'herblore',
     rankLoading: new Set(),
     goalErr: {},
     tab: null,
   };
-  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort });
+  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only });
 
   // ── Storage per account ─────────────────────────────────────────────────
   const safe = () => (S.account ? toSafeName(S.account) : '');
   const goals = () => (safe() ? store.get('goals.' + safe(), []) : []);
   const saveGoals = list => { store.set('goals.' + safe(), list); ctx.onChange?.(); };
-  const bank = () => (safe() ? store.get('bank.' + safe(), { items: {}, updated: 0 }) : { items: {}, updated: 0 });
+  function bank() {
+    if (!safe()) return { items: {}, updated: 0 };
+    const b = store.get('bank.' + safe(), { items: {}, updated: 0 });
+    const merged = mergeUnids(b.items || {});
+    if (merged.changed) { b.items = merged.items; store.set('bank.' + safe(), b); }
+    return b;
+  }
   const saveBank = b => { b.updated = Date.now(); store.set('bank.' + safe(), b); };
   function updateGoal(id, fn) {
     const list = goals();
@@ -245,6 +268,21 @@ export function createPlanner(ctx) {
   }
 
   // ── Goals view ──────────────────────────────────────────────────────────
+  // Moves a goal past its neighbour among the goals on screen, so it works the
+  // same with a filter on.
+  function moveGoal(id, dir) {
+    const vi = S.visible.indexOf(id);
+    const other = S.visible[vi + dir];
+    if (vi < 0 || !other) return;
+    const list = goals();
+    const i = list.findIndex(g => g.id === id);
+    if (i < 0) return;
+    const [g] = list.splice(i, 1);
+    const j = list.findIndex(x => x.id === other);
+    list.splice(dir < 0 ? j : j + 1, 0, g);
+    saveGoals(list);
+  }
+
   function renderGoals() {
     renderAccount('plan-account', 'goals');
     renderNewGoal();
@@ -261,7 +299,34 @@ export function createPlanner(ctx) {
       for (const g of list) if (g.startXp10 == null) g.startXp10 = currentOf(g.skill)?.xp10 ?? null;
       saveGoals(list);
     }
-    box.innerHTML = list.map(goalCard).join('');
+    // Filter: by status and/or one skill. The order is yours (move goals up and down).
+    const done = g => {
+      const cur = currentOf(g.skill);
+      const t = cur && targetOf(g, cur);
+      return !!(t && !t.pending && (t.reached || t.xp10 <= cur.xp10));
+    };
+    const status = new Map(list.map(g => [g.id, done(g)]));
+    const skills = [...new Set(list.map(g => g.skill))];
+    if (S.only && !skills.includes(S.only)) S.only = null;
+    const shown = list.filter(g => (S.show === 'all' || (S.show === 'done') === status.get(g.id)) && (!S.only || g.skill === S.only));
+    S.visible = shown.map(g => g.id);
+    const count = k => list.filter(g => k === 'all' || (k === 'done') === status.get(g.id)).length;
+    const sBtn = (k, label) => `<button type="button" class="${S.show === k ? 'on' : ''}" data-gshow="${k}">${label} <span class="c-faint">${count(k)}</span></button>`;
+    const anyOpen = shown.some(g => S.open.has(g.id) && hasCalculator(g.skill));
+    const bar = list.length > 1 ? `<div class="goal-filter">
+        <span class="c-muted small-note">Show</span>
+        <div class="seg" role="group" aria-label="Show goals">${sBtn('all', 'All')}${sBtn('active', 'In progress')}${sBtn('done', 'Reached')}</div>
+        ${skills.length > 1 ? `<div class="skill-picker mini" role="group" aria-label="Only one skill">${skills.map(k => {
+          const sk = SKILL_BY_KEY.get(k);
+          const on = S.only === k;
+          return `<button type="button" class="skill-btn${on ? ' on' : ''}" data-gonly="${k}" title="${on ? 'Show every skill' : `Only ${esc(sk.name)}`}" aria-pressed="${on}">${iconImg(sk)}</button>`;
+        }).join('')}</div>` : ''}
+        <span class="grow"></span>
+        ${shown.some(g => hasCalculator(g.skill)) ? `<button type="button" class="linkish" data-act="${anyOpen ? 'close-all' : 'open-all'}">${anyOpen ? 'Hide all plans' : 'Show all plans'}</button>` : ''}
+      </div>` : '';
+    box.innerHTML = bar + (shown.length
+      ? shown.map((g, i) => goalCard(g, i === 0, i === shown.length - 1)).join('')
+      : `<div class="empty">No goals match. <button type="button" class="linkish" data-act="show-all-goals">Show all goals</button></div>`);
     const keys = [...new Set(list.map(g => g.skill).filter(hasCalculator))];
     if (keys.length && S.profile) wantPrices(keys);
   }
@@ -374,7 +439,7 @@ export function createPlanner(ctx) {
     return `Top ${topNow != null ? formatPercent(topNow) + '%' : '?'} → <b>${formatPercent(goal.value)}%</b>${target?.rank ? ` <span class="c-faint">(rank ${fmt(target.rank)})</span>` : ''}`;
   }
 
-  function goalCard(goal) {
+  function goalCard(goal, first = true, last = true) {
     const skill = SKILL_BY_KEY.get(goal.skill);
     const { cur, target, ix, plan } = planFor(goal);
     const open = S.open.has(goal.id);
@@ -404,6 +469,10 @@ export function createPlanner(ctx) {
         <span class="goal-title">${goalTitle(goal, cur, target)}</span>
         <span class="grow"></span>
         ${toggle}
+        <span class="mv-group">
+          <button type="button" class="mv" data-act="goal-up" title="Move up" aria-label="Move ${esc(skill.name)} goal up"${first ? ' disabled' : ''}>▲</button>
+          <button type="button" class="mv" data-act="goal-down" title="Move down" aria-label="Move ${esc(skill.name)} goal down"${last ? ' disabled' : ''}>▼</button>
+        </span>
         <button type="button" class="x" data-act="remove-goal" title="Remove this goal" aria-label="Remove goal">✕</button>
       </div>
       <div class="goal-sub">${sub}</div>
@@ -427,11 +496,20 @@ export function createPlanner(ctx) {
     return `<div class="plan">${opts}${useBank ? bankHtml(goal, plan, ix) : ''}${thenHtml(goal, plan, ix)}${tableHtml(goal, plan, ix, cur)}</div>`;
   }
 
+  // Unid herbs can't be planned with (which herb they are is only known once
+  // identified), so they get a note instead.
+  function unidNote(goal) {
+    const n = goal.skill === 'herblore' ? bank().items[UNID_HERBS.item] || 0 : 0;
+    if (!n) return '';
+    return `<div class="tip">${itemIcon(UNID_HERBS.item, true)} You also have <b>${fmt(n)}</b> unid herb${n === 1 ? '' : 's'}. Identify them first
+      (${xpText(UNID_HERBS.xpMin)}–${xpText(UNID_HERBS.xpMax)} XP each, depending on the herb), then add the herbs to your bank.</div>`;
+  }
+
   function bankHtml(goal, plan, ix) {
     const fb = plan.fromBank;
     if (!fb.steps.length) {
       return `<div class="plan-sec"><h4>From your bank</h4><div class="c-faint small-note">Nothing in your bank makes ${esc(SKILL_BY_KEY.get(goal.skill).name)} XP at your level yet.
-        Add herbs, unfinished potions and secondaries in the <button type="button" class="linkish" data-act="to-bank">Bank</button> tab.</div></div>`;
+        Add herbs, unfinished potions and secondaries in the <button type="button" class="linkish" data-act="to-bank">Bank</button> tab.</div>${unidNote(goal)}</div>`;
     }
     const rows = fb.steps.map((s, i) => {
       const m = ix.byId.get(s.id);
@@ -450,7 +528,7 @@ export function createPlanner(ctx) {
       ? `<div class="tip">Also uses ${itemList(fb.assumed, { small: true, named: true })} that ${Object.keys(fb.assumed).length === 1 ? "isn't" : "aren't"} in your bank.</div>` : '';
     const reach = fb.goalReached ? `<span class="c-win">That reaches your goal.</span>` : '';
     return `<div class="plan-sec"><h4>From your bank <span class="c-level">+${xpText(fb.xp10)} XP</span> <span class="c-faint">→ level ${fb.endLevel}</span> ${reach}</h4>
-      <div class="steps">${rows}</div>${assumed}</div>`;
+      <div class="steps">${rows}</div>${assumed}${unidNote(goal)}</div>`;
   }
 
   function thenHtml(goal, plan, ix) {
@@ -545,7 +623,7 @@ export function createPlanner(ctx) {
       <button type="button" class="btn small danger" data-act="bank-clear">Clear bank</button>
     </div>
     <p class="note">Type what you have: 1500, 1.5k or 2m all work. Only the items the planner uses are listed; more skills come in later updates.
-      Unidentified herbs all look the same in-game (a plain "Herb"), so check which is which before typing them in.</p>`;
+      Unid herbs are one entry: every "Herb" in your bank, whatever it turns out to be.</p>`;
   }
 
   function bankCell(slug) {
@@ -621,10 +699,16 @@ export function createPlanner(ctx) {
     try { if (keep.start != null) el.setSelectionRange(keep.start, keep.end); } catch (e) { /* not a text field */ }
   }
   let rerenderTimer = null;
+  // A button pressed while the view is rebuilt would lose its click: wait for
+  // the press to finish. Same for an open drop-down, which would snap shut.
+  let pressing = false;
+  document.addEventListener('pointerdown', () => { pressing = true; }, true);
+  document.addEventListener('pointerup', () => setTimeout(() => { pressing = false; }, 0), true);
+  document.addEventListener('pointercancel', () => { pressing = false; }, true);
   function rerender() {
     if (!S.tab || $('view-' + S.tab)?.hidden) return;
     clearTimeout(rerenderTimer);
-    // An open drop-down would snap shut: wait until it's closed.
+    if (pressing) { rerenderTimer = setTimeout(rerender, 250); return; }
     if (document.activeElement?.tagName === 'SELECT') { rerenderTimer = setTimeout(rerender, 1000); return; }
     rerenderTimer = setTimeout(() => render(S.tab), 30);
   }
@@ -635,11 +719,11 @@ export function createPlanner(ctx) {
     if (tab === 'prices') wantPrices(Object.keys(BANK_GROUPS));
   }
 
-  // Price updates arrive one item at a time; redraw at most twice a second.
+  // Price updates arrive one item at a time; redraw about once a second.
   let priceTimer = null;
   prices.addEventListener('update', () => {
     if (priceTimer) return;
-    priceTimer = setTimeout(() => { priceTimer = null; rerender(); }, 500);
+    priceTimer = setTimeout(() => { priceTimer = null; rerender(); }, 1000);
   });
 
   // ── Events ──────────────────────────────────────────────────────────────
@@ -667,6 +751,10 @@ export function createPlanner(ctx) {
     if (nskill) { S.newGoal.skill = nskill.dataset.nskill; saveUi(); showMsg('goals-msg', ''); renderNewGoal(); return; }
     const ntype = t.closest('[data-ntype]');
     if (ntype) { S.newGoal.type = ntype.dataset.ntype; saveUi(); showMsg('goals-msg', ''); renderNewGoal(); return; }
+    const gshow = t.closest('[data-gshow]');
+    if (gshow) { S.show = gshow.dataset.gshow; saveUi(); renderGoals(); return; }
+    const gonly = t.closest('[data-gonly]');
+    if (gonly) { S.only = S.only === gonly.dataset.gonly ? null : gonly.dataset.gonly; saveUi(); renderGoals(); return; }
     const psort = t.closest('[data-tsort-plan]');
     if (psort) { S.sort = psort.dataset.tsortPlan; saveUi(); renderGoals(); return; }
     const card = t.closest('[data-goal]');
@@ -680,6 +768,23 @@ export function createPlanner(ctx) {
     if (!act) return;
     switch (act.dataset.act) {
       case 'refresh-xp': S.goalErr = {}; loadProfile({ force: true }); break;
+      case 'goal-up':
+      case 'goal-down': {
+        moveGoal(card.dataset.goal, act.dataset.act === 'goal-up' ? -1 : 1);
+        renderGoals();
+        // keep the button under the keyboard, so pressing again keeps moving it
+        document.querySelector(`[data-goal="${card.dataset.goal}"] [data-act="${act.dataset.act}"]:not([disabled])`)?.focus({ preventScroll: true });
+        document.querySelector(`[data-goal="${card.dataset.goal}"]`)?.scrollIntoView({ block: 'nearest' });
+        break;
+      }
+      case 'open-all':
+      case 'close-all':
+        for (const id of S.visible) {
+          if (act.dataset.act === 'open-all') S.open.add(id); else S.open.delete(id);
+        }
+        saveUi(); renderGoals();
+        break;
+      case 'show-all-goals': S.show = 'all'; S.only = null; saveUi(); renderGoals(); break;
       case 'toggle-plan': {
         const id = card.dataset.goal;
         if (S.open.has(id)) S.open.delete(id); else S.open.add(id);
