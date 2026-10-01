@@ -354,12 +354,24 @@ await check("goals: Ostap's example, 700 potions from the bank, 4,251 more and 3
   assert.match(t, /3,951\s*Ranarr weed/);
   assert.match(t, /4,251\s*Snape grass/);
   assert.match(t, /collect\s*300\s*Snape grass[\s\S]*makes\s*1,000\s*Prayer potion instead of 700/);
+  // with your bank: no To goal; what it makes, evens out, and what's still needed after it
+  const head = await page.locator('.goal >> nth=0 >> .plan-t thead').innerText();
+  assert.match(head, /XP\s*Profit\/item\s*gp\/XP\s*From bank\s*Even out\s*Total profit\s*after even out\s*Still needed\s*Collect\s*Total profit\s*after collect\s*Use/);
+  assert.doesNotMatch(head, /To goal/);
   const row = await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText();
   const cells = row.split('\t').map(c => c.trim());
-  assert.equal(cells[3], '4,951', 'to goal');
-  assert.equal(cells[4], '700', 'from bank');
-  assert.match(cells[5], /^300\s*→\s*1,000$/, 'even out: 300 snape grass, and the bank covers 1,000');
-  assert.equal(cells[6], '4,251', 'still to make');
+  assert.equal(cells[5], '700', 'from bank');
+  assert.match(cells[6], /^300\s*→\s*1,000$/, 'even out: 300 snape grass, and the bank covers 1,000');
+  assert.equal(cells[8], '4,251', 'still needed');
+  assert.match(cells[9], /^3,951\s*4,251$/, 'collect: ranarr and snape grass; vials are bought as you go');
+  // "I'll buy vials of water as I go" leaves them out of what to collect
+  const collectLine = () => page.locator('.goal >> nth=0 >> .collect').first().innerText();
+  assert.doesNotMatch(await collectLine(), /Vial/);
+  await page.uncheck('.goal >> nth=0 >> input[data-gopt="assume"]');
+  await page.waitForFunction(() => /[\d,]+\s*Vial of water/.test(document.querySelector('.goal .collect').innerText));
+  assert.match(await goalText(), /Nothing in your bank makes Herblore XP/, 'no vials in the bank: it makes nothing');
+  await page.check('.goal >> nth=0 >> input[data-gopt="assume"]');
+  await page.waitForFunction(() => !/Vial/.test(document.querySelector('.goal .collect').innerText));
   assert.equal(await page.locator('tr[data-method="hb_3doseprayerrestore"] td.even').getAttribute('title'),
     'Collect 300 Snape grass, and your bank covers 1,000 × Prayer potion instead of 700.');
   assert.equal((await page.locator('tr[data-method="hb_3dose1attack"] td.even').innerText()).trim(), '–', 'nothing for it in the bank: nothing to even out');
@@ -372,22 +384,22 @@ await check('goals: picking another potion and leaving the bank out change the p
   assert.equal(await page.inputValue('.goal select[data-gopt="fill"]'), 'hb_3doserangerspotion');
   await page.selectOption('.goal select[data-gopt="fill"]', 'hb_3doseprayerrestore');
   await page.waitForFunction(() => /4,251 × Prayer potion/.test(document.querySelector('.goal').innerText));
-  // Still and Collect come after everything the bank makes: 700 prayer potions
+  // Still needed comes after everything the bank makes: 700 prayer potions
   // are 61,250 XP, the same as 2,450 attack potions
   const cellsOf = async id => (await page.locator(`.goal >> nth=0 >> tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
   const num = c => Number(c.replace(/,/g, ''));
-  let attack = await cellsOf('hb_3dose1attack');
-  assert.equal(num(attack[6]), num(attack[3]) - 2450, `still ${attack[6]} after to goal ${attack[3]}`);
-  assert.match(attack[7], new RegExp(`${attack[6]}[\\s\\S]*${attack[6]}`), 'collect for those');
+  const attack = await cellsOf('hb_3dose1attack');
+  assert.match(attack[9], new RegExp(`^${attack[8]}\\s*${attack[8]}$`), 'collect: guam and eyes of newt for those');
   await page.uncheck('.goal input[data-gopt="useBank"]');
   await page.waitForFunction(() => !/From your bank/.test(document.querySelector('.goal').innerText));
   assert.match(await goalText(), /4,951 × Prayer potion/);
-  // without the bank: the totals, from scratch
+  // without the bank: how many to the goal, and nothing to collect
   const head = await page.locator('.goal >> nth=0 >> .plan-t thead').innerText();
-  assert.doesNotMatch(head, /From bank|Even out|Still/);
-  const prayer = await cellsOf('hb_3doseprayerrestore');
-  assert.equal(prayer[3], '4,951');
-  assert.match(prayer[4], /^4,951\s*4,951\s*4,951$/, 'ranarr, vials and snape grass for all of them');
+  assert.match(head, /XP\s*Profit\/item\s*gp\/XP\s*To goal\s*Use/);
+  assert.doesNotMatch(head, /From bank|Even out|Still|Collect|Total profit/);
+  const attackOff = await cellsOf('hb_3dose1attack');
+  assert.equal(num(attack[8]), num(attackOff[5]) - 2450, `still needed ${attack[8]}, to goal ${attackOff[5]}`);
+  assert.equal((await cellsOf('hb_3doseprayerrestore'))[5], '4,951');
   await page.check('.goal input[data-gopt="useBank"]');
   await page.waitForFunction(() => /From your bank/.test(document.querySelector('.goal').innerText));
 });
@@ -398,15 +410,15 @@ await check('goals: Even out, per potion (605 kwuarm and 518 limpwurt: collect 8
   const row = page.locator('.goal').first().locator('tr[data-method="hb_3dose2strength"]');
   await row.waitFor();
   const cells = (await row.innerText()).split('\t').map(c => c.trim());
-  assert.equal(cells[4], '518', 'from bank');
-  assert.match(cells[5], /^87\s*→\s*605$/);
+  assert.equal(cells[5], '518', 'from bank');
+  assert.match(cells[6], /^87\s*→\s*605$/);
   assert.equal(await row.locator('td.even').getAttribute('title'), 'Collect 87 Limpwurt root, and your bank covers 605 × Super strength instead of 518.');
   assert.match(await row.locator('td.even .it-chip').getAttribute('title'), /^Limpwurt root/);
   // the other way round: more limpwurt than kwuarm
   await setBank('herblore', { kwuarm: '500', limpwurt_root: '518' });
   await page.click('.tab[data-tab="goals"]');
   await row.waitFor();
-  assert.match((await row.innerText()).split('\t')[5].trim(), /^18\s*→\s*518$/);
+  assert.match((await row.innerText()).split('\t')[6].trim(), /^18\s*→\s*518$/);
   assert.match(await row.locator('td.even .it-chip').getAttribute('title'), /^Kwuarm/);
   await page.screenshot({ path: `${SHOTS}/10c-even-out.png`, fullPage: true });
   await setBank('herblore', { kwuarm: '', limpwurt_root: '' });
@@ -478,11 +490,21 @@ await check('prices: each item uses the price you pick (market, high alch or you
 await check('goals: with prices known the plan shows cost, value and profit', async () => {
   await page.click('.tab[data-tab="goals"]');
   await page.waitForSelector('.goal .money');
-  const money = await page.locator('.goal .money').innerText();
+  const money = await page.locator('.goal').first().locator('.money', { hasText: 'Buying it all' }).innerText();
   assert.match(money, /Buying it all: [\d.,]+[KM]? gp/);
   assert.match(money, /worth: [\d.,]+[KM]? gp/);
   assert.match(money, /Net: [+−][\d.,]+[KM]? gp/);
-  assert.doesNotMatch(await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText(), /\?/);
+  // what the bank makes is gross profit: the supplies are already yours
+  const gross = await page.locator('.goal').first().locator('.money', { hasText: 'Gross profit' }).innerText();
+  const worth = gross.match(/What you make is worth: ([\d.,]+[KM]?) gp/)?.[1];
+  assert.ok(worth, gross);
+  assert.match(gross, new RegExp(`Gross profit: \\+${worth.replace('.', '\\.')} gp`));
+  // and the table's totals have their numbers
+  const row = (await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText()).split('\t').map(c => c.trim());
+  assert.doesNotMatch(row.join(' '), /\?/);
+  assert.match(row[7], /^[+−][\d.,]+[KM]?$/, 'total profit after even out');
+  assert.match(row[10], /^[+−][\d.,]+[KM]?$/, 'total profit after collect');
+  assert.equal(row[10], money.match(/Net: ([+−]?[\d.,]+[KM]?) gp/)[1], 'the same as the plan\'s own Net for the potion you train with');
 });
 
 await check('goals: a rank goal looks up who holds that rank', async () => {
@@ -644,7 +666,7 @@ await check('fletching: bows cut and strung from the bank, darts, and the table 
   assert.equal(await card.locator('tr[data-method]').count(), 12);
   await card.locator('[data-tgroup="Darts"]').click();
   await page.waitForFunction(() => document.querySelectorAll('.goal .plan-t tr[data-method^="fl_dart"]').length === 6);
-  assert.match(await card.locator('tr[data-method="fl_dart_rune_dart"]').innerText(), /81\s+Rune dart\s+18\.8\s+[\d,]+\s+500\s/);
+  assert.match(await card.locator('tr[data-method="fl_dart_rune_dart"]').innerText(), /81\s+Rune dart\s+18\.8\s+\S+\s+\S+\s+500\s/);
   await card.locator('[data-tgroup="all"]').click();
   await page.waitForFunction(() => document.querySelectorAll('.goal .plan-t tr[data-method^="fl_"]').length === 63);
   await card.locator('tr[data-method="fl_logs_bronze_arrow"] td:nth-child(2)').click();

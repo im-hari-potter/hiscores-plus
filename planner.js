@@ -314,16 +314,30 @@ function valueOf(items, priceOf) {
   return { total, missing };
 }
 
+// What `made` is worth less what `buy` costs: { total, value, cost, missing }.
+function gainOf(made, buy, priceOf) {
+  const value = valueOf(made, priceOf), cost = valueOf(buy, priceOf);
+  return { total: value.total - cost.total, value: value.total, cost: cost.total, missing: [...value.missing, ...cost.missing] };
+}
+// Things you said you'll buy as you go (vials of water) are left out of what to
+// collect and of costs.
+function without(items, leaveOut) {
+  const out = { ...items };
+  for (const k of leaveOut) delete out[k];
+  return out;
+}
+const times = (out, n) => Object.fromEntries(Object.entries(out).map(([item, q]) => [item, q * n]));
+
 // Economics of one action of m, bought from scratch: what goes in (down to buyable
 // items), what comes out, profit, and gp per XP (negative = you make money).
 export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited = new Set() } = {}) {
-  const need = expand(ix, m, 1, new Stock(), { level, unlimited });
-  const cost = valueOf(need.buy, priceOf);
+  const need = without(expand(ix, m, 1, new Stock(), { level, unlimited }).buy, unlimited);
+  const cost = valueOf(need, priceOf);
   const value = valueOf(outAt(m, level), priceOf);
   const known = !cost.missing.length && !value.missing.length;
   const profit = value.total - cost.total;
   return {
-    inputs: need.buy,
+    inputs: need,
     cost: cost.total, value: value.total, missing: [...cost.missing, ...value.missing],
     profit: known ? profit : null,
     gpPerXp: known && m.xp > 0 ? -profit / (m.xp / 10) : null,
@@ -332,7 +346,8 @@ export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited =
 
 // ── The whole plan for one goal ───────────────────────────────────────────
 // opts: { bank, currentXp10, targetXp10, excluded (Set of method ids),
-//         unlimited (Set of items that never hold you back, e.g. vials of water),
+//         unlimited (Set of items you'll buy as you go, e.g. vials of water: they
+//         never hold a plan back, and are left out of what to collect and costs),
 //         useBank, fillId (method to finish with), fillGroup (the group to pick
 //         from when nothing is chosen, e.g. bows for Fletching), priceOf }
 export function planGoal(ix, opts) {
@@ -396,12 +411,13 @@ export function planGoal(ix, opts) {
         const runs = Math.ceil((targetXp10 - xp) / method.xp);
         segments.push({ id: method.id, runs, xp10: runs * method.xp, made: madeOver(method, runs, xp) });
       }
-      const buy = {}, steps = {};
+      const all = {}, steps = {};
       for (const s of segments) {
         const e = expand(ix, ix.byId.get(s.id), s.runs, stock, { level: MAX_LEVEL, unlimited });
-        for (const [k, n] of Object.entries(e.buy)) buy[k] = (buy[k] || 0) + n;
+        for (const [k, n] of Object.entries(e.buy)) all[k] = (all[k] || 0) + n;
         for (const [k, n] of Object.entries(e.steps)) steps[k] = (steps[k] || 0) + n;
       }
+      const buy = without(all, unlimited);
       const cost = valueOf(buy, priceOf);
       fill = { id: method.id, locked: method.level > afterLevel, segments, buy, steps, cost: cost.total, costMissing: cost.missing };
     }
@@ -415,10 +431,11 @@ export function planGoal(ix, opts) {
   const after = useBank ? fromBank.leftover : new Stock();
   const table = ix.train.map(m => {
     const needed = toGo > 0 ? Math.ceil(toGo / m.xp) : 0;
-    const ctx = { level: Math.max(level, m.level), kinds: BANK_KINDS, unlimited };
+    const lvl = Math.max(level, m.level);
+    const ctx = { level: lvl, kinds: BANK_KINDS, unlimited };
     const have = useBank && !gathers(m) ? maxRuns(ix, m, bankStock, ctx) : 0;
     const still = !useBank ? needed : remaining > 0 ? Math.ceil(remaining / m.xp) : 0;
-    const collect = expand(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited }).buy;
+    const collect = without(expand(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited }).buy, unlimited);
     // Balance: the most you could make if every ingredient matched your most
     // plentiful one, and what that would take. (In actions: a log of arrows
     // takes 15 feathers.)
@@ -427,16 +444,25 @@ export function planGoal(ix, opts) {
       const limits = Object.entries(m.in).map(([item, q]) => Math.floor(avail(ix, item, bankStock, ctx) / q)).filter(Number.isFinite);
       const most = limits.length ? Math.max(...limits) : 0;
       if (most > have) {
-        const extra = expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited }).buy;
-        for (const item of unlimited) delete extra[item];
+        const extra = without(expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited }).buy, unlimited);
         if (Object.keys(extra).length) balance = { runs: most, collect: extra };
       }
     }
+    // Totals, counting what's in your bank as already yours (gross): what the
+    // bank makes of it once evened out, less what evening out takes; and what
+    // the rest of the goal makes, less what's still to collect.
+    const made = n => times(outAt(m, lvl), n);
+    const gains = {
+      even: !useBank || gathers(m) ? null
+        : balance ? gainOf(made(balance.runs), balance.collect, priceOf)
+        : have > 0 && Number.isFinite(have) ? gainOf(made(have), {}, priceOf) : null,
+      collect: useBank && still > 0 ? gainOf(made(still), collect, priceOf) : null,
+    };
     return {
       id: m.id, level: m.level, xp10: m.xp, locked: m.level > level,
       needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), toMake: still,
-      collect, balance,
-      econ: methodEconomics(ix, m, priceOf, { level: Math.max(level, m.level) }),
+      collect, balance, gains,
+      econ: methodEconomics(ix, m, priceOf, { level: lvl, unlimited }),
     };
   });
 

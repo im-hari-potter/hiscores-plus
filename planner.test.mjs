@@ -57,7 +57,7 @@ test("Ostap's example: 74 to 78 Herblore with 1,000 ranarr and 700 snape grass",
   assert.equal(r.needed, 4948, 'prayer potions to 78 with no bank');
   assert.equal(r.have, 700, 'what the bank makes now');
   assert.equal(r.toMake, 4248);
-  assert.deepEqual(r.collect, { ranarr_weed: 3948, snape_grass: 4248, vial_water: 4248 }, 'for the 4,248 still to make');
+  assert.deepEqual(r.collect, { ranarr_weed: 3948, snape_grass: 4248 }, 'for the 4,248 still to make; vials are bought as you go');
   assert.deepEqual(r.balance, { runs: 1000, collect: { snape_grass: 300 } }, '300 snape grass uses up the ranarr');
 
   // The whole-bank plan: 700 prayer potions first, then 4,248 more.
@@ -69,7 +69,7 @@ test("Ostap's example: 74 to 78 Herblore with 1,000 ranarr and 700 snape grass",
   assert.deepEqual(plan.fromBank.leftover.toObject(), { ranarr_weed: 300, '3doseprayerrestore': 700 });
   assert.equal(plan.fill.id, 'hb_3doseprayerrestore');
   assert.deepEqual(plan.fill.segments.map(s => s.runs), [4248]);
-  assert.deepEqual(plan.fill.buy, { ranarr_weed: 3948, snape_grass: 4248, vial_water: 4248 });
+  assert.deepEqual(plan.fill.buy, { ranarr_weed: 3948, snape_grass: 4248 });
 });
 
 test('even out: 605 kwuarm and 518 limpwurt want 87 more limpwurt (v2.4.2)', () => {
@@ -99,20 +99,62 @@ test('with the bank, Still and Collect come after all the XP it makes; without i
   assert.equal(ss.have, 518);
   assert.equal(ss.toMake, Math.ceil(plan.remaining / 1250), 'still: after everything the bank makes');
   assert.ok(ss.toMake < ss.needed - ss.have, 'the fishing potions count too');
-  assert.deepEqual(ss.collect, { kwuarm: ss.toMake - 87, vial_water: ss.toMake - 1309, limpwurt_root: ss.toMake }, 'with what\'s left in the bank');
+  assert.deepEqual(ss.collect, { kwuarm: ss.toMake - 87, limpwurt_root: ss.toMake }, 'with what\'s left in the bank');
   assert.equal(plan.fill.id, 'hb_3dose2strength');
   assert.deepEqual(plan.fill.buy, ss.collect, 'the same as the plan\'s own shopping list');
   const fish = row(plan, 'hb_3dosefisherspotion');
   assert.equal(fish.toMake, Math.ceil(plan.remaining / 1125));
-  assert.deepEqual(fish.collect, { avantoe: fish.toMake, vial_water: fish.toMake - 1309, snape_grass: fish.toMake });
+  assert.deepEqual(fish.collect, { avantoe: fish.toMake, snape_grass: fish.toMake });
   // without the bank: everything from scratch
   const off = planGoal(ix, { ...opts, useBank: false });
   const t = row(off, 'hb_3dose2strength');
   assert.equal(t.toMake, t.needed);
-  assert.deepEqual(t.collect, { kwuarm: t.needed, vial_water: t.needed, limpwurt_root: t.needed });
+  assert.deepEqual(t.collect, { kwuarm: t.needed, limpwurt_root: t.needed });
   // a bank that reaches the goal leaves nothing still to make
   const rich = row(planGoal(ix, { ...opts, bank: { kwuarm: 4000, limpwurt_root: 4000 } }), 'hb_3dose2strength');
   assert.deepEqual([rich.toMake, rich.collect], [0, {}]);
+});
+
+test('"I\'ll buy vials of water as I go": on, vials are left out of what to collect and of costs; off, they count (v2.4.4)', () => {
+  const price = { kwuarm: 2000, limpwurt_root: 300, vial_water: 20, '3dose2strength': 3000 };
+  const opts = { bank: { kwuarm: 605, limpwurt_root: 518, vial_water: 300 }, currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(78), priceOf: k => price[k] ?? null, fillId: 'hb_3dose2strength' };
+  const on = planGoal(ix, { ...opts, unlimited: VIALS });
+  const off = planGoal(ix, { ...opts, unlimited: new Set() });
+  assert.equal(on.fromBank.steps[0].runs, 518, 'on: vials never hold the bank back');
+  assert.equal(off.fromBank.steps[0].runs, 300, 'off: only the 300 vials in the bank');
+  assert.equal(on.fill.buy.vial_water, undefined);
+  assert.ok(off.fill.buy.vial_water > 0);
+  assert.equal(on.fill.cost, on.fill.buy.kwuarm * 2000 + on.fill.buy.limpwurt_root * 300, 'vials cost nothing here');
+  const rOn = row(on, 'hb_3dose2strength'), rOff = row(off, 'hb_3dose2strength');
+  assert.equal(rOn.collect.vial_water, undefined);
+  assert.equal(rOff.collect.vial_water, rOff.toMake, 'off: every vial still to make');
+  assert.deepEqual(rOn.econ.inputs, { kwuarm: 1, limpwurt_root: 1 });
+  assert.equal(rOn.econ.profit, 700, '3,000 − 2,000 − 300');
+  assert.equal(rOff.econ.profit, 680, 'and 20 for the vial');
+});
+
+test('total profits per row: after evening out, and after collecting the rest (v2.4.4)', () => {
+  const price = { kwuarm: 2000, limpwurt_root: 300, '3dose2strength': 3000, avantoe: 900, snape_grass: 50, '3dosefisherspotion': 1200 };
+  const plan = planGoal(ix, {
+    bank: { kwuarm: 605, limpwurt_root: 518, avantoe: 403, snape_grass: 403 },
+    currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(78), unlimited: VIALS, priceOf: k => price[k] ?? null,
+  });
+  const ss = row(plan, 'hb_3dose2strength');
+  // what's in the bank is yours: 605 super strength for 87 limpwurt
+  assert.deepEqual(ss.balance, { runs: 605, collect: { limpwurt_root: 87 } });
+  assert.deepEqual(ss.gains.even, { total: 605 * 3000 - 87 * 300, value: 605 * 3000, cost: 87 * 300, missing: [] });
+  const cost = ss.collect.kwuarm * 2000 + ss.collect.limpwurt_root * 300;
+  assert.deepEqual(ss.gains.collect, { total: ss.toMake * 3000 - cost, value: ss.toMake * 3000, cost, missing: [] });
+  // already even: what the bank makes of it, for nothing more
+  const fish = row(plan, 'hb_3dosefisherspotion');
+  assert.equal(fish.balance, null);
+  assert.deepEqual(fish.gains.even, { total: 403 * 1200, value: 403 * 1200, cost: 0, missing: [] });
+  // nothing for it in the bank: nothing to show
+  assert.equal(row(plan, 'hb_3dose1attack').gains.even, null);
+  assert.ok(row(plan, 'hb_3dose1attack').gains.collect.missing.length, 'no prices for attack potions here');
+  // without the bank there are no totals
+  const off = row(planGoal(ix, { ...plan, bank: { kwuarm: 605 }, currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(78), useBank: false }), 'hb_3dose2strength');
+  assert.deepEqual(off.gains, { even: null, collect: null });
 });
 
 test('unid herbs sit out of the plan until they are identified', () => {

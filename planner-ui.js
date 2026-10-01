@@ -597,7 +597,7 @@ export function createPlanner(ctx) {
     const bankCount = Object.values(b.items).filter(n => n > 0).length;
     const opts = `<div class="plan-opts">
       <label class="check"><input type="checkbox" data-gopt="useBank" ${useBank ? 'checked' : ''}> Use my bank</label>
-      ${ASSUME_LABEL[goal.skill] ? `<label class="check" title="When on, running out of these never stops a plan; you still see how many you need."><input type="checkbox" data-gopt="assume" ${assume.size ? 'checked' : ''}> I'll buy ${ASSUME_LABEL[goal.skill]} as I go</label>` : ''}
+      ${ASSUME_LABEL[goal.skill] ? `<label class="check" title="When on, these never hold a plan back, and they're left out of what to collect and of costs."><input type="checkbox" data-gopt="assume" ${assume.size ? 'checked' : ''}> I'll buy ${ASSUME_LABEL[goal.skill]} as I go</label>` : ''}
       <span class="c-faint">${bankCount ? `${bankCount} kinds of item in your bank, updated ${ago(b.updated)}` : 'Your bank is empty'} ·</span>
       <button type="button" class="linkish" data-act="to-bank" data-skill="${goal.skill}">Edit bank</button>
     </div>`;
@@ -632,11 +632,22 @@ export function createPlanner(ctx) {
           ${subs.length ? `<div class="c-faint small-note">incl. ${subs.join(', ')}</div>` : ''}
         </div></div>`;
     }).join('');
+    const one = Object.keys(fb.assumed).length === 1;
     const assumed = Object.keys(fb.assumed).length
-      ? `<div class="tip">Also uses ${itemList(fb.assumed, { small: true, named: true })} that ${Object.keys(fb.assumed).length === 1 ? "isn't" : "aren't"} in your bank.</div>` : '';
+      ? `<div class="tip">Also uses ${itemList(fb.assumed, { small: true, named: true, priced: false })} that ${one ? "isn't" : "aren't"} in your bank: you'll buy ${one ? 'it' : 'them'} as you go.</div>` : '';
+    // What it all makes is worth. Your banked supplies are yours already, so
+    // that's gross profit.
+    const made = {};
+    for (const s of fb.steps) for (const [item, n] of Object.entries(s.made || {})) made[item] = (made[item] || 0) + n;
+    const worth = bankValue(made, prices.priceOf);
+    const money = Object.keys(made).length ? `<div class="money">
+      <span>What you make is worth: <b>${worth.missing.length ? '?' : gpShort(worth.total)}</b> gp</span>
+      <span>Gross profit: <b class="c-win">${worth.missing.length ? '?' : `+${gpShort(worth.total)}`}</b> gp</span>
+      <span class="c-faint">${worth.missing.length ? '(some prices are still unknown)' : '(your banked supplies are yours already)'}</span>
+    </div>` : '';
     const reach = fb.goalReached ? `<span class="c-win">That reaches your goal.</span>` : '';
     return `<div class="plan-sec"><h4>From your bank <span class="c-level">+${xpText(fb.xp10)} XP</span> <span class="c-faint">→ level ${fb.endLevel}</span> ${reach}</h4>
-      <div class="steps">${rows}</div>${assumed}${unidNote(goal)}</div>`;
+      <div class="steps">${rows}</div>${money}${assumed}${unidNote(goal)}</div>`;
   }
 
   function thenHtml(goal, plan, ix) {
@@ -679,13 +690,14 @@ export function createPlanner(ctx) {
       ${toolLine}${money}${balance}</div>`;
   }
 
-  function unitNote(key, ix, mixed, { bankOn, even }) {
+  function unitNote(key, ix, mixed, { bankOn, even, assumed }) {
     const each = textFor(key).each;
-    if (!usesBank(key)) return `To goal = how many on their own · Profit is what one ${each} sells for.`;
+    if (!usesBank(key)) return `To goal = how many on their own · Profit/item is what one ${each} sells for.`;
     const units = [...new Set(ix.train.map(m => m.units || ''))];
     const counted = units.length === 1 && units[0] ? ` Counts are in ${units[0]}.` : mixed ? ' A row marked "per log" counts logs.' : '';
-    if (!bankOn) return `To goal and Collect = everything from scratch, with your bank left out · Profit is per ${each}, bought from scratch.${counted}`;
-    return `To goal = how many on their own · From bank = what your bank makes of it now${even ? ' · Even out = what to collect so nothing in your bank is left over' : ''} · Still and Collect = after everything your bank makes · Profit is per ${each}, bought from scratch.${counted}`;
+    const left = assumed ? ` ${assumed[0].toUpperCase() + assumed.slice(1)} are left out: you'll buy them as you go.` : '';
+    if (!bankOn) return `To goal = how many on their own, from your XP now · Profit/item is per ${each}, bought from scratch.${counted}${left}`;
+    return `From bank = what your bank makes of it now${even ? ' · Even out = what to collect so nothing in your bank is left over' : ''} · Still needed and Collect = after everything your bank makes · Profit/item is per ${each}, bought from scratch · The totals count what's in your bank as yours already.${counted}${left}`;
   }
 
   // "Even out": what to collect so every ingredient in your bank gets used. Your
@@ -699,20 +711,28 @@ export function createPlanner(ctx) {
     if (!b) return '<td class="l even"><span class="c-faint">–</span></td>';
     const names = Object.entries(b.collect).filter(([, n]) => n > 0).map(([k, n]) => `${fmt(n)} ${ITEMS[k]?.name || k}`);
     const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
-    const count = n => (m.unit ? `${fmt(n)} ${n === 1 ? m.unit : m.units || m.unit + 's'}` : `${fmt(n)} × ${m.name}`);
-    const tip = `Collect ${list}, and your bank covers ${count(b.runs)} instead of ${fmt(r.have)}.`;
+    const tip = `Collect ${list}, and your bank covers ${count(m, b.runs)} instead of ${fmt(r.have)}.`;
     return `<td class="l even" title="${esc(tip)}"><span class="even-in">${itemList(b.collect, { small: true })}</span> <span class="c-faint">→</span> <b class="c-level">${fmt(b.runs)}</b></td>`;
   }
 
-  // Columns: with your bank in use, what it makes of each, what evens it out,
-  // and what's still to make and collect after all of it. Without it, the
-  // totals from scratch.
+  // A total in gp, or why there isn't one.
+  function gainTd(g, tip) {
+    if (!g) return '<td><span class="c-faint">–</span></td>';
+    if (g.missing.length) return `<td title="${esc(`No price yet for ${g.missing.map(k => ITEMS[k]?.name || k).join(', ')}`)}"><span class="c-faint">?</span></td>`;
+    return `<td title="${esc(tip(g))}"><span class="${g.total >= 0 ? 'c-win' : 'c-lose'}">${g.total >= 0 ? '+' : ''}${gpShort(g.total)}</span></td>`;
+  }
+  const count = (m, n) => (m.unit ? `${fmt(n)} ${n === 1 ? m.unit : m.units || m.unit + 's'}` : `${fmt(n)} × ${m.name}`);
+
+  // Columns: what each one gives (XP, profit per item, gp per XP), then either
+  // how many to the goal (your bank left out), or, with your bank in use, what
+  // it makes of each, what evens it out, and what's still needed and to collect
+  // after all of it, with the totals those come to.
   function tableHtml(goal, plan, ix, cur) {
     const excluded = new Set(goal.excluded || []);
     const bankCols = usesBank(goal.skill);
     const bankOn = bankCols && goal.useBank !== false;
     const evenCol = bankOn && hasEven(ix);
-    const cols = 6 + (bankCols ? 2 : 0) + (bankOn ? 2 : 0) + (evenCol ? 1 : 0);
+    const assumed = goal.assume ?? DEFAULT_ASSUME[goal.skill] ?? [];
     let rows = plan.table.map(r => ({ r, m: ix.byId.get(r.id) }));
     if (S.sort === 'xp') rows.sort((a, b) => b.m.xp - a.m.xp);
     else if (S.sort === 'cheap') rows.sort((a, b) => (a.r.econ.gpPerXp ?? Infinity) - (b.r.econ.gpPerXp ?? Infinity));
@@ -725,33 +745,52 @@ export function createPlanner(ctx) {
       shown = pick === 'all' ? null : groups.includes(pick) ? pick : fillGroup || groups[0];
     }
     const mixed = new Set(ix.train.map(m => m.unit || '')).size > 1;
+    const cur1 = cur?.level || 1;
+    // [header, cell] for each column, in order
+    const columns = [
+      ['<th>Lvl</th>', (r, m) => `<td>${m.level}</td>`],
+      [`<th class="l">${textFor(goal.skill).what}</th>`, (r, m) => `<td class="l"><span class="sk-cell">${itemIcon(methodItem(m), true)} ${esc(m.name)}${multipleBadge(m, Math.max(cur1, m.level))}${mixed && m.unit ? ` <span class="per">per ${esc(m.unit)}</span>` : ''}</span></td>`],
+      ['<th>XP</th>', (r, m) => `<td>${xpText(m.xp)}</td>`],
+      ['<th title="What one sells for, less what it takes, bought from scratch">Profit/item</th>', r => {
+        const e = r.econ;
+        return `<td>${e.profit == null ? '<span class="c-faint">?</span>' : `<span class="${e.profit >= 0 ? 'c-win' : 'c-lose'}">${e.profit >= 0 ? '+' : ''}${gpShort(e.profit)}</span>`}</td>`;
+      }],
+      ['<th title="gp per XP: what each XP costs you (negative: you make money)">gp/XP</th>', r => {
+        const e = r.econ;
+        return `<td>${e.gpPerXp == null ? '<span class="c-faint">?</span>' : `<span class="${e.gpPerXp <= 0 ? 'c-win' : ''}">${gpShort(e.gpPerXp)}</span>`}</td>`;
+      }],
+    ];
+    if (!bankOn) {
+      columns.push(['<th title="How many on their own, from your XP now">To goal</th>', r => `<td>${r.needed ? fmt(r.needed) : '–'}</td>`]);
+    } else {
+      columns.push(['<th title="What your bank makes of it now">From bank</th>', r => `<td>${r.have ? `<span class="c-level">${fmt(r.have)}</span>` : '0'}</td>`]);
+      if (evenCol) {
+        columns.push([`<th class="l" title="${esc(EVEN_TIP)}">Even out</th>`, (r, m) => evenTd(m, r)]);
+        columns.push(['<th class="wrap" title="What your bank makes of it once evened out, less what evening out takes to collect. What\'s in your bank counts as yours already (gross).">Total profit<br>after even out</th>',
+          (r, m) => gainTd(r.gains.even, g => `${count(m, r.balance ? r.balance.runs : r.have)}: worth ${gpShort(g.value)}${g.cost ? `, less ${gpShort(g.cost)} to collect` : ''}. What's in your bank counts as yours already.`)]);
+      }
+      columns.push(['<th title="How many more after everything your bank makes">Still needed</th>', r => `<td>${r.toMake ? fmt(r.toMake) : '–'}</td>`]);
+      columns.push(['<th class="l" title="What those take, beyond what\'s left in your bank">Collect</th>', r => `<td class="l">${r.toMake ? itemList(r.collect, { small: true }) : ''}</td>`]);
+      columns.push(['<th class="wrap" title="What the ones still needed are worth, less what you collect for them">Total profit<br>after collect</th>',
+        (r, m) => gainTd(r.gains.collect, g => `${count(m, r.toMake)}: worth ${gpShort(g.value)}, less ${gpShort(g.cost)} to collect.`)]);
+    }
+    if (bankCols) {
+      columns.push(['<th title="Let the bank plan use this. Untick anything you don\'t plan to make.">Use</th>',
+        (r, m) => `<td class="c"><input type="checkbox" data-use="${m.id}" ${excluded.has(m.id) ? '' : 'checked'} title="Let the bank plan use this" aria-label="Use ${esc(m.name)} in the bank plan"></td>`]);
+    }
     const body = groups.filter(g => !shown || g === shown).map(gname => {
       const inGroup = rows.filter(x => x.m.group === gname);
-      return `<tr class="grp"><td colspan="${cols}">${esc(gname)}</td></tr>` + inGroup.map(({ r, m }) => {
+      return `<tr class="grp"><td colspan="${columns.length}">${esc(gname)}</td></tr>` + inGroup.map(({ r, m }) => {
         const e = r.econ;
         const chosen = plan.fill?.id === m.id;
-        const profit = e.profit == null ? '<span class="c-faint">?</span>' : `<span class="${e.profit >= 0 ? 'c-win' : 'c-lose'}">${e.profit >= 0 ? '+' : ''}${gpShort(e.profit)}</span>`;
-        const gpxp = e.gpPerXp == null ? '<span class="c-faint">?</span>' : `<span class="${e.gpPerXp <= 0 ? 'c-win' : ''}">${gpShort(e.gpPerXp)}</span>`;
         const per = m.unit ? ` per ${m.unit}` : ' each';
         const needs = Object.entries(e.inputs).map(([k, n]) => `${n} ${ITEMS[k]?.name || k}`).join(', ');
         const title = `${m.name}: level ${m.level}, ${xpText(m.xp)} XP${per}${m.parts ? ` (${partsText(m)})` : ''}` +
           (needs ? `\nNeeds (from scratch): ${needs}` : '') +
           (m.tools?.length ? `\nTools: ${m.tools.map(t => ITEMS[t]?.name || t).join(', ')}` : '') +
           (e.profit != null ? `\nCosts ${gpShort(e.cost)}, worth ${gpShort(e.value)}: ${e.profit >= 0 ? 'profit' : 'loss'} ${gpShort(Math.abs(e.profit))}${per}` : '');
-        const collectTd = `<td class="l">${r.toMake ? itemList(r.collect, { small: true }) : ''}</td>`;
-        const bankTds = !bankCols ? '' : !bankOn ? collectTd : `
-          <td>${r.have ? `<span class="c-level">${fmt(r.have)}</span>` : '0'}</td>
-          ${evenCol ? evenTd(m, r) : ''}
-          <td>${r.toMake ? fmt(r.toMake) : '–'}</td>
-          ${collectTd}`;
         return `<tr class="${r.locked ? 'dim ' : ''}${chosen ? 'hl ' : ''}${excluded.has(m.id) ? 'off' : ''}" data-method="${m.id}" title="${esc(title)}">
-          <td>${m.level}</td>
-          <td class="l"><span class="sk-cell">${itemIcon(methodItem(m), true)} ${esc(m.name)}${multipleBadge(m, Math.max(cur?.level || 1, m.level))}${mixed && m.unit ? ` <span class="per">per ${esc(m.unit)}</span>` : ''}</span></td>
-          <td>${xpText(m.xp)}</td>
-          <td>${r.needed ? fmt(r.needed) : '–'}</td>${bankTds}
-          <td>${profit}</td>
-          <td>${gpxp}</td>
-          ${bankCols ? `<td class="c"><input type="checkbox" data-use="${m.id}" ${excluded.has(m.id) ? '' : 'checked'} title="Let the bank plan use this" aria-label="Use ${esc(m.name)} in the bank plan"></td>` : ''}
+          ${columns.map(([, cell]) => cell(r, m)).join('')}
         </tr>`;
       }).join('');
     }).join('');
@@ -761,12 +800,9 @@ export function createPlanner(ctx) {
     return `<div class="plan-sec"><h4>Every option <span class="c-faint">(on its own, from ${cur ? `level ${cur.level}` : 'now'}; click one to train with it)</span></h4>
       ${groupBar}
       <div class="bar wrap"><span class="c-muted small-note">Sort</span><div class="seg">${sBtn('level', 'Level')}${sBtn('xp', 'XP each')}${sBtn('cheap', 'Cheapest XP')}</div>
-        <span class="c-faint small-note">${unitNote(goal.skill, ix, mixed, { bankOn, even: evenCol })}</span></div>
+        <span class="c-faint small-note">${unitNote(goal.skill, ix, mixed, { bankOn, even: evenCol, assumed: assumed.length ? ASSUME_LABEL[goal.skill] : null })}</span></div>
       <div class="table-wrap"><table class="grid plan-t">
-        <thead><tr><th>Lvl</th><th class="l">${textFor(goal.skill).what}</th><th>XP</th><th title="How many on their own, from your XP now">To goal</th>${
-          !bankCols ? '' : !bankOn ? '<th class="l" title="Everything they take, from scratch">Collect</th>'
-          : `<th title="What your bank makes of it now">From bank</th>${evenCol ? `<th class="l" title="${esc(EVEN_TIP)}">Even out</th>` : ''}<th title="How many more after everything your bank makes">Still</th><th class="l" title="What those take, beyond what's left in your bank">Collect</th>`
-        }<th>Profit</th><th>gp/XP</th>${bankCols ? '<th title="Let the bank plan use this">Use</th>' : ''}</tr></thead>
+        <thead><tr>${columns.map(([th]) => th).join('')}</tr></thead>
         <tbody>${body}</tbody></table></div></div>`;
   }
 

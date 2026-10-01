@@ -28,33 +28,90 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 
 ### Planner
 
+The planner works out what it takes to reach a goal, from your XP on the hiscores, what's in your bank
+and the prices you set. Any skill can have a goal. A skill with its full planner (marked with a dot
+when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woodcutting**,
+**Firemaking** and **Fletching**, with the other skills to follow.
+
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
     or only one skill.
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
-  - **Herblore**, **Runecraft**, **Woodcutting**, **Firemaking** and **Fletching** have the full planner
-    so far (a dot marks them when you add a goal); the other skills follow in later updates.
-    - Runecraft counts in essence, and shows how many runes each essence makes at your level (×2, ×3…).
-    - Woodcutting needs nothing but an axe, so its plan is the logs to chop and what they're worth.
-    - Firemaking burns the logs in your bank, best first.
-    - Fletching has every way to train: bows cut and strung (or only cut, or only strung), arrows
-      from logs or step by step, darts, and bolts. The table shows one of those at a time.
-  - When you're short of levels for the method you pick, the plan works up to it with the best one at
-    each level on the way (willows to 45, maples to 60, then yews).
-  - For Herblore, the planner shows:
-    - what your bank already makes, best XP first, including unfinished potions;
-    - how many potions are left after that, with the method you pick;
-    - what to collect or buy, and a tip when your ingredients don't pair up (e.g. "collect 300 snape
-      grass and your bank makes 1,000 prayer potions instead of 700");
-    - every potion side by side: how many to the goal, how many your bank covers, what evens it out,
-      how many are still to make and what to collect, profit per potion, and gp per XP.
-  - In the table of every option, **Still** and **Collect** come after everything your bank makes: the
-    XP from all of it counts, and what's left in your bank is used first. Untick **Use my bank** and
-    the table shows the totals, from scratch.
-  - **Even out**, in the same table: what to collect so nothing in your bank is left over. Your most
-    plentiful ingredient decides. With 605 kwuarm and 518 limpwurt root, Super strength says collect
-    87 limpwurt root, and your bank covers 605 instead of 518.
-  - Click an item a plan says to collect, buy or bring to open its page on the market.
+
+#### How the calculators work
+
+- Every number comes from the game itself (Lost City's server content): the level each way to train
+  needs, the XP it gives, and what it takes and makes. The maths is done in tenths of XP, like the
+  game does.
+- How many you need = the XP still to go ÷ the XP each one gives, rounded up.
+- A plan has three parts:
+  1. **From your bank**: what the items in your bank make, best XP first (the one you train with goes
+     first when it can), including steps on the way like unfinished potions. Its money line shows
+     what it all makes is worth.
+  2. **Then, to reach your goal**: the rest, made the way you pick under **Train with**. If you're
+     short of levels for it, the plan works up to it with the best one at each level on the way
+     (willows to 45, maples to 60, then yews). Below that: what to collect or buy, what to bring, what
+     buying it all costs, what it makes is worth, and the net.
+  3. **Every option**: one row for each way to train, side by side (see the table below). Click a row
+     to train with it.
+- Per skill:
+  - Runecraft counts in essence, and shows how many runes each essence makes at your level (×2, ×3…).
+  - Woodcutting needs nothing but an axe, so its plan is the logs to chop and what they're worth.
+  - Firemaking burns the logs in your bank, best first.
+  - Fletching has every way to train: bows cut and strung (or only cut, or only strung), arrows from
+    logs or step by step, darts, and bolts. The table shows one of those at a time.
+- Click an item a plan says to collect, buy or bring to open its page on the market.
+
+#### Check your prices first
+
+Costs, profits and gp per XP are only as good as the prices behind them. Market prices come from what
+players have listed and sold lately, and some items have few listings or none. **Look over the Prices
+tab for the items you'll use, and pick or type the price that's right for you** (see Prices below).
+Anything without a price shows **?** until it has one.
+
+#### Use my bank
+
+- **On** (the default): your bank is put to work first.
+  - **From your bank** lists what it makes. What that's worth counts as **gross profit**: your banked
+    supplies are already yours, so nothing is taken off for them.
+  - Everything after it comes after all your bank makes: its XP counts toward the goal, and what's left
+    in your bank is used before anything is collected.
+- **Off**: the plan starts from scratch, as if your bank were empty.
+
+#### The table of every option
+
+| Column | Use my bank on | Use my bank off |
+|---|---|---|
+| **XP** | XP for one | the same |
+| **Profit/item** | What one sells for, less what it takes, bought from scratch | the same |
+| **gp/XP** | What each XP costs you (negative: you make money doing it) | the same |
+| **To goal** | not shown | How many to reach the goal, on their own |
+| **From bank** | How many your bank makes of it now | not shown |
+| **Even out** | What to collect so nothing in your bank is left over: your most plentiful ingredient decides | not shown |
+| **Total profit after even out** | What your bank makes of it once evened out is worth, less what evening out takes. Gross: what's in your bank is yours already | not shown |
+| **Still needed** | How many more after everything your bank makes | not shown |
+| **Collect** | What those take, beyond what's left in your bank | not shown |
+| **Total profit after collect** | What the ones still needed are worth, less what you collect for them | not shown |
+| **Use** | Lets the bank plan make it (see below) | the same |
+
+For example, Herblore 74 → 78 with Super attack: with the bank off, **4,328** to the goal. With it on,
+**2,305** still needed after everything the bank makes, and what's left to collect for those. And with
+605 kwuarm and 518 limpwurt root in the bank, Super strength's **Even out** says collect 87 limpwurt
+root, and your bank covers 605 instead of 518.
+
+#### Untick what you won't make
+
+The **Use** boxes at the end of each row decide what the bank plan may make. It makes everything it can
+by default, so **turn off anything you don't plan to make**: a potion you'd rather not, or one whose
+supplies you're saving. Otherwise the plan spends your supplies on it, and From your bank, Still needed
+and the totals count XP you won't get. Unticked options also leave the Train with list.
+
+#### Vials of water
+
+**I'll buy vials of water as I go** is on by default for Herblore: vials never hold a plan back, and
+they're left out of what to collect and of every cost and profit. Turn it off to plan around the vials
+in your bank and count them like any other supply.
+
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
   its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
   - **All** shows everything you have and what your whole bank is worth, in the order your bank has
@@ -81,7 +138,7 @@ LostKit, or remove it and add it again. Your saved data stays either way.
   - Unidentified herbs are one "Unid herb" entry, because in-game they're all a plain "Herb". They count
     toward the bank's value, priced from the market's unid listing. Plans leave them out until you
     identify them.
-- **Prices**: pick the price each item uses, and it sticks.
+- **Prices**: pick the price each item uses, and it sticks. Check them before trusting a plan's money.
   - **Market**, the default, comes from player listings on
     [markets.lostcity.rs](https://markets.lostcity.rs): the median of recent sales, otherwise of open
     offers. If the market has nothing for an item, its high alch value is used. A 3-dose potion with no
