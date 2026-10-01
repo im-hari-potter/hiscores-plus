@@ -10,9 +10,10 @@
 //   xp     - what you train with
 //   prep   - a step on the way (unfinished potions, grinding); a plan makes these
 //            from their own inputs when they aren't in the bank
-//   source - turns something already in the bank into an input (identifying
-//            herbs, filling vials); used, but never put on a shopping list
-// Any method with xp > 0 can be trained with, identifying herbs included.
+//   source - turns something already in the bank into an input (filling vials);
+//            used, but never put on a shopping list
+// Any method with xp > 0 can be trained with. A method with no "in" at all is
+// gathering (Woodcutting): the bank has nothing to give it.
 
 import { XP_TABLE, MAX_LEVEL } from './skills.js';
 
@@ -88,6 +89,9 @@ export function madeOver(m, runs, startXp10) {
 }
 
 // ── Method index ──────────────────────────────────────────────────────────
+// Gathering takes nothing in (chopping a tree), so it never comes out of a bank.
+export const gathers = m => Object.keys(m.in).length === 0;
+
 export function indexMethods(methods) {
   const byId = new Map(methods.map(m => [m.id, m]));
   const producers = new Map();        // item -> prep/source methods that make it
@@ -185,17 +189,50 @@ export function expand(ix, m, runs, stock, ctx) {
 const BANK_KINDS = new Set(['prep', 'source']);
 
 // ── Using the bank ────────────────────────────────────────────────────────
-// Trains with what the bank holds, best XP per action first, until nothing more
-// can be made. Stops to re-think whenever a better method unlocks on the way.
+// Trains with what the bank holds until nothing more can be made.
 // prefer: the method you picked to train with; it goes first whenever it can.
-export function planBank(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new Set(), unlimited = new Set(), prefer = null }) {
+// With nothing picked, each method the bank can do is tried as the lead and the
+// plan with the most XP wins. Best XP per action alone isn't enough once items
+// are shared: feathers make 15 arrows from a log (42 XP) or one rune dart each
+// (18.8 XP), and the darts are worth far more per feather.
+export function planBank(ix, opts) {
+  // Views redraw as prices arrive; the bank plan doesn't depend on prices, so
+  // the last few are kept. (Callers only read the result.)
+  const key = JSON.stringify([opts.bank || {}, opts.startXp10, opts.targetXp10 ?? null,
+    [...(opts.excluded || [])].sort(), [...(opts.unlimited || [])].sort(), opts.prefer || null]);
+  let memo = BANK_MEMO.get(ix);
+  if (!memo) BANK_MEMO.set(ix, memo = new Map());
+  if (memo.has(key)) return memo.get(key);
+
+  let best = bankRun(ix, opts);
+  if (!opts.prefer) {
+    const stock = new Stock(opts.bank || {});
+    const ctx = { level: MAX_LEVEL, kinds: BANK_KINDS, unlimited: opts.unlimited || new Set() };
+    const excluded = opts.excluded || new Set();
+    // Most XP per action first, so a tie keeps the plan that reads naturally.
+    const leads = [...ix.train].sort((a, b) => b.xp - a.xp || a.level - b.level);
+    for (const m of leads) {
+      if (excluded.has(m.id) || gathers(m) || !maxRuns(ix, m, stock, ctx)) continue;
+      const run = bankRun(ix, { ...opts, prefer: m.id });
+      if (run.xp10 > best.xp10) best = run;
+    }
+  }
+  memo.set(key, best);
+  if (memo.size > 40) memo.delete(memo.keys().next().value);
+  return best;
+}
+const BANK_MEMO = new WeakMap();
+
+// One way through the bank: the pick first whenever it can be made, otherwise
+// best XP per action. Stops to re-think whenever a better method unlocks.
+function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new Set(), unlimited = new Set(), prefer = null }) {
   const stock = new Stock(bank);
   const log = { steps: {}, assumed: {} };
   const steps = [];                           // [{ id, runs, xp10, sub: {id: runs}, made: {item: n} }] in order
   let xp = startXp10;
   let goalReached = null;                     // { step index, runs into that step }
-  const usable = ix.train.filter(m => !excluded.has(m.id));
-  const pick = prefer && !excluded.has(prefer) ? ix.byId.get(prefer) : null;
+  const usable = ix.train.filter(m => !excluded.has(m.id) && !gathers(m));
+  const pick = usable.find(m => m.id === prefer) || null;
 
   for (let guard = 0; guard < 400; guard++) {
     const level = levelForXp10(xp);
@@ -296,11 +333,12 @@ export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited =
 // ── The whole plan for one goal ───────────────────────────────────────────
 // opts: { bank, currentXp10, targetXp10, excluded (Set of method ids),
 //         unlimited (Set of items that never hold you back, e.g. vials of water),
-//         useBank, fillId (method to finish with), priceOf }
+//         useBank, fillId (method to finish with), fillGroup (the group to pick
+//         from when nothing is chosen, e.g. bows for Fletching), priceOf }
 export function planGoal(ix, opts) {
   const {
     bank = {}, currentXp10, targetXp10, excluded = new Set(), unlimited = new Set(),
-    useBank = true, fillId = null, priceOf = () => null,
+    useBank = true, fillId = null, fillGroup = null, priceOf = () => null,
   } = opts;
   const level = levelForXp10(currentXp10);
   const toGo = Math.max(0, targetXp10 - currentXp10);
@@ -321,20 +359,36 @@ export function planGoal(ix, opts) {
     const mainFromBank = fromBank.steps
       .filter(s => ix.byId.get(s.id).kind === 'xp' && !excluded.has(s.id))
       .sort((a, b) => b.xp10 - a.xp10)[0];
+    // With a usual way to train (bows for Fletching), the bank's method only
+    // carries on if it's one of those: leftover logs cut into bows (u) don't
+    // make cutting the plan for the rest of the goal.
+    const inGroup = g => choices.filter(m => m.group === g);
+    const main = mainFromBank && ix.byId.get(mainFromBank.id);
     let method = (fillId && !excluded.has(fillId) && ix.byId.get(fillId))
-      || (mainFromBank && ix.byId.get(mainFromBank.id))
+      || (main && (!fillGroup || main.group === fillGroup) && main)
+      || (fillGroup && bestAt(inGroup(fillGroup), afterLevel))
+      || main
       || bestAt(choices, afterLevel) || choices[0];
     if (method) {
       const stock = fromBank.leftover.clone();
       const segments = [];
       let xp = afterXp;
-      // A method you can't do yet needs another one to get you to its level first.
+      // A method you can't do yet needs others to get you to its level first: the
+      // best one at each level on the way (willows to 45, maples to 60, then
+      // yews), of the same sort where there is one (bows before bows).
       if (method.level > afterLevel) {
-        const bridge = bestAt(choices.filter(m => m.id !== method.id), afterLevel);
+        const others = choices.filter(m => m.id !== method.id);
+        const same = others.filter(m => m.group === method.group);
+        const pool = bestAt(same, afterLevel) ? same : others;
         const upTo = Math.min(targetXp10, xp10ForLevel(method.level));
-        if (bridge && upTo > xp) {
-          const runs = Math.ceil((upTo - xp) / bridge.xp);
-          segments.push({ id: bridge.id, runs, xp10: runs * bridge.xp, bridge: true, made: madeOver(bridge, runs, xp) });
+        while (xp < upTo) {
+          const lv = levelForXp10(xp);
+          const bridge = bestAt(pool, lv);
+          if (!bridge) break;
+          const better = pool.filter(m => m.level > lv && m.xp > bridge.xp).map(m => m.level);
+          const stop = Math.min(upTo, better.length ? xp10ForLevel(Math.min(...better)) : upTo);
+          const runs = Math.ceil((stop - xp) / bridge.xp);
+          segments.push({ id: bridge.id, runs, xp10: runs * bridge.xp, bridge: true, toLevel: levelForXp10(xp + runs * bridge.xp), made: madeOver(bridge, runs, xp) });
           xp += runs * bridge.xp;
         }
       }
@@ -359,13 +413,14 @@ export function planGoal(ix, opts) {
   const table = ix.train.map(m => {
     const needed = toGo > 0 ? Math.ceil(toGo / m.xp) : 0;
     const ctx = { level: Math.max(level, m.level), kinds: BANK_KINDS, unlimited };
-    const have = useBank ? maxRuns(ix, m, bankStock, ctx) : 0;
+    const have = useBank && !gathers(m) ? maxRuns(ix, m, bankStock, ctx) : 0;
     const collect = expand(ix, m, needed, bankStock.clone(), { level: MAX_LEVEL, unlimited }).buy;
     // Balance: the most you could make if every ingredient matched your most
-    // plentiful one, and what that would take.
+    // plentiful one, and what that would take. (In actions: a log of arrows
+    // takes 15 feathers.)
     let balance = null;
-    if (useBank) {
-      const limits = Object.keys(m.in).map(item => avail(ix, item, bankStock, ctx)).filter(Number.isFinite);
+    if (useBank && !gathers(m)) {
+      const limits = Object.entries(m.in).map(([item, q]) => Math.floor(avail(ix, item, bankStock, ctx) / q)).filter(Number.isFinite);
       const most = limits.length ? Math.max(...limits) : 0;
       if (most > have) {
         const extra = expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited }).buy;

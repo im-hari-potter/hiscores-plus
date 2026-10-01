@@ -502,6 +502,9 @@ table.plan-t tr.grp td { background: #241e10 !important; color: var(--gold-hi); 
 table.plan-t tr.off td { opacity: 0.5; }
 table.plan-t tr.hl td:first-child { box-shadow: inset 3px 0 0 var(--gold-hi); }
 table.plan-t input[type=checkbox] { accent-color: var(--gold); cursor: pointer; }
+table.plan-t .per { font-family: var(--small); font-size: 12px; color: var(--faint); white-space: nowrap; }
+.group-pick { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
+.group-pick .chip.on { border-style: inset; color: #fff; box-shadow: inset 0 -3px 0 var(--gold-hi), inset 0 0 0 40px rgba(0, 0, 0, 0.25); }
 
 .skill-switch { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
 .skill-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; }

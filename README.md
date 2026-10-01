@@ -32,8 +32,15 @@ LostKit, or remove it and add it again. Your saved data stays either way.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
     or only one skill.
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
-  - **Herblore** and **Runecraft** have the full planner so far; the other skills follow in later updates.
-    Runecraft counts in essence, and shows how many runes each essence makes at your level (×2, ×3…).
+  - **Herblore**, **Runecraft**, **Woodcutting**, **Firemaking** and **Fletching** have the full planner
+    so far (a dot marks them when you add a goal); the other skills follow in later updates.
+    - Runecraft counts in essence, and shows how many runes each essence makes at your level (×2, ×3…).
+    - Woodcutting needs nothing but an axe, so its plan is the logs to chop and what they're worth.
+    - Firemaking burns the logs in your bank, best first.
+    - Fletching has every way to train: bows cut and strung (or only cut, or only strung), arrows
+      from logs or step by step, darts, and bolts. The table shows one of those at a time.
+  - When you're short of levels for the method you pick, the plan works up to it with the best one at
+    each level on the way (willows to 45, maples to 60, then yews).
   - For Herblore, the planner shows:
     - what your bank already makes, best XP first, including unfinished potions;
     - how many potions are left after that, with the method you pick;
@@ -42,8 +49,10 @@ LostKit, or remove it and add it again. Your saved data stays either way.
     - every potion side by side: how many to the goal, how many your bank covers, profit per potion,
       and gp per XP.
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
-  its own bank.
+  its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
   The bank's value is shown with market prices.
+  - With no method picked, the bank plan finds the order that gets the most XP out of what you have
+    (rune dart tips get your feathers before bronze arrows do).
   - Unidentified herbs are one "Unid herb" entry, because in-game they're all a plain "Herb". They count
     toward the bank's value, priced from the market's unid listing. Plans leave them out until you
     identify them.
@@ -66,6 +75,8 @@ restore.
   exception. A copy hosted on Netlify (see `_redirects`) also works in any browser.
 - The market's sale history can also only be read inside LostKit. A normal browser gets open offers
   from the market's JSON API.
+- The numbers are the game's own (Lost City's server content), so a few may surprise you: achey tree
+  logs give no Firemaking XP in this version, and any axe can be used at any Woodcutting level.
 
 ## Development
 

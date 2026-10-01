@@ -5,7 +5,7 @@ import { METHODS, ITEMS, BANK_GROUPS, UNID_HERBS } from './gamedata.js';
 import { mergeUnids } from './planner-ui.js';
 import {
   xp10ForLevel, levelForXp10, goalTargetXp10, rankForTop, indexMethods, planBank, planGoal,
-  methodEconomics, maxRuns, Stock, bankValue, outAt, madeOver,
+  methodEconomics, maxRuns, Stock, bankValue, outAt, madeOver, gathers,
 } from './planner.js';
 
 const ix = indexMethods(METHODS.filter(m => m.skill === 'herblore'));
@@ -124,10 +124,11 @@ test('finishing with a potion you cannot make yet plans the levels before it', (
     fillId: 'hb_3dosepotionofzamorak',
   });
   assert.equal(plan.fill.locked, true);
-  assert.equal(plan.fill.segments.length, 2);
-  assert.equal(plan.fill.segments[0].bridge, true);
-  assert.equal(plan.fill.segments[0].id, 'hb_3doserangerspotion', 'best potion available at 74');
-  assert.equal(plan.fill.segments[1].id, 'hb_3dosepotionofzamorak');
+  assert.deepEqual(plan.fill.segments.map(s => [s.id, !!s.bridge, s.toLevel]), [
+    ['hb_3doserangerspotion', true, 76],    // best potion at 74
+    ['hb_3dose1magic', true, 78],           // better from 76
+    ['hb_3dosepotionofzamorak', false, undefined],
+  ]);
 });
 
 test('prices: cost, profit and gp per XP of one action', () => {
@@ -215,4 +216,132 @@ test('runecraft: profit per essence counts the runes it makes at your level', ()
   const e = methodEconomics(rc, rc.byId.get('rc_airrune'), k => price[k] ?? null, { level: 44 });
   assert.equal(e.value, 5 * 10);
   assert.equal(e.profit, 0);
+});
+
+// ── Woodcutting ───────────────────────────────────────────────────────────
+const wc = indexMethods(METHODS.filter(m => m.skill === 'woodcutting'));
+
+test('woodcutting: trees, levels and XP per log from the server data', () => {
+  assert.deepEqual(wc.train.map(m => [m.name, m.level, m.xp / 10]), [
+    ['Logs', 1, 25], ['Achey tree logs', 1, 25], ['Oak logs', 15, 37.5], ['Willow logs', 30, 67.5],
+    ['Bark (hollow tree)', 45, 82.5], ['Maple logs', 45, 100], ['Yew logs', 60, 175], ['Magic logs', 75, 250],
+  ]);
+  assert.ok(wc.train.every(gathers), 'chopping takes nothing in');
+});
+
+test('woodcutting: logs to chop, with no bank involved', () => {
+  const opts = { bank: { willow_logs: 5000 }, currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(45) };
+  const plan = planGoal(wc, opts);
+  assert.equal(plan.fromBank.steps.length, 0, 'logs in the bank give no Woodcutting XP');
+  assert.equal(plan.fill.id, 'wc_willow_logs', 'best XP per log at 30');
+  const toGo = xp10ForLevel(45) - xp10ForLevel(30);
+  assert.deepEqual(plan.fill.segments.map(s => s.runs), [Math.ceil(toGo / 675)]);
+  assert.deepEqual(plan.fill.buy, {});
+  assert.deepEqual(plan.fill.segments[0].made, { willow_logs: Math.ceil(toGo / 675) });
+  const r = row(plan, 'wc_willow_logs');
+  assert.equal(r.have, 0);
+  assert.equal(r.needed, Math.ceil(toGo / 675));
+  assert.deepEqual(r.collect, {});
+  assert.equal(r.balance, null);
+
+  const yews = planGoal(wc, { ...opts, targetXp10: xp10ForLevel(65), fillId: 'wc_yew_logs' });
+  assert.deepEqual(yews.fill.segments.map(s => [s.id, s.toLevel]), [['wc_willow_logs', 45], ['wc_maple_logs', 60], ['wc_yew_logs', undefined]],
+    'willows to 45, maples to 60, then yews');
+
+  const e = methodEconomics(wc, wc.byId.get('wc_willow_logs'), k => ({ willow_logs: 30 })[k] ?? null);
+  assert.equal(e.profit, 30);
+  assert.ok(Math.abs(e.gpPerXp - (-30 / 67.5)) < 1e-9, 'negative: you make money');
+});
+
+// ── Firemaking ────────────────────────────────────────────────────────────
+const fm = indexMethods(METHODS.filter(m => m.skill === 'firemaking'));
+
+test('firemaking: XP per log, and achey logs left out (no XP in this version)', () => {
+  assert.deepEqual(fm.train.map(m => [m.name, m.level, m.xp]), [
+    ['Logs', 1, 400], ['Oak logs', 15, 600], ['Willow logs', 30, 900], ['Maple logs', 45, 1350], ['Yew logs', 60, 2025], ['Magic logs', 75, 3038],
+  ]);
+  assert.ok(!METHODS.some(m => m.skill === 'firemaking' && m.in.achey_tree_logs));
+  assert.deepEqual(BANK_GROUPS.firemaking, [{ name: 'Logs', items: ['logs', 'oak_logs', 'willow_logs', 'maple_logs', 'yew_logs', 'magic_logs'] }]);
+});
+
+test('firemaking: the bank burns its best logs first', () => {
+  const plan = planGoal(fm, { bank: { willow_logs: 1000, logs: 500 }, currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(60) });
+  assert.deepEqual(plan.fromBank.steps.map(s => [s.id, s.runs]), [['fm_willow_logs', 1000], ['fm_logs', 500]]);
+  assert.equal(plan.fromBank.xp10, 1000 * 900 + 500 * 400);
+  assert.deepEqual(plan.fromBank.steps[0].made, {}, 'burning makes nothing');
+  assert.equal(plan.fill.id, 'fm_willow_logs');
+  const price = { maple_logs: 25 };
+  const e = methodEconomics(fm, fm.byId.get('fm_maple_logs'), k => price[k] ?? null);
+  assert.equal(e.profit, -25);
+});
+
+// ── Fletching ─────────────────────────────────────────────────────────────
+const fl = indexMethods(METHODS.filter(m => m.skill === 'fletching'));
+
+test('fletching: XP from the server data, whole jobs add up their steps', () => {
+  const xp = id => fl.byId.get(id).xp;
+  assert.equal(xp('fl_cut_unstrung_yew_longbow'), 750);
+  assert.equal(xp('fl_str_willow_shortbow'), 332, 'stringing a willow shortbow is 33.2, cutting it 33.3');
+  assert.equal(xp('fl_cs_willow_shortbow'), 665);
+  assert.equal(xp('fl_shafts'), 75, '15 shafts from a log, 0.5 XP each');
+  assert.equal(xp('fl_headless'), 10);
+  assert.equal(xp('fl_logs_bronze_arrow'), 420, '42 XP per log, like the calculator sites');
+  assert.equal(xp('fl_logs_rune_arrow'), 2100);
+  assert.equal(xp('fl_dart_rune_dart'), 188);
+  assert.deepEqual(fl.byId.get('fl_tips_opal').out, { opal_bolttips: 12 });
+  for (const m of fl.train) if (m.parts) assert.equal(m.parts.reduce((a, [, x]) => a + x, 0), m.xp, m.id);
+  assert.equal(ITEMS.unstrung_yew_longbow.name, 'Yew longbow (u)', 'the same name as the strung bow in-game, so marked');
+});
+
+test('fletching: logs and bow strings are cut and strung first, the rest cut', () => {
+  const plan = planGoal(fl, { bank: { yew_logs: 2000, bow_string: 1500 }, currentXp10: xp10ForLevel(70), targetXp10: xp10ForLevel(85) });
+  assert.deepEqual(plan.fromBank.steps.map(s => [s.id, s.runs]), [['fl_cs_yew_longbow', 1500], ['fl_cut_unstrung_yew_longbow', 500]]);
+  assert.equal(plan.fromBank.xp10, 1500 * 1500 + 500 * 750);
+  const r = row(plan, 'fl_cs_yew_longbow');
+  assert.equal(r.have, 1500);
+  assert.deepEqual(r.balance, { runs: 2000, collect: { bow_string: 500 } });
+  assert.equal(plan.fill.id, 'fl_cs_yew_longbow', 'carries on cutting and stringing');
+  assert.ok(plan.fill.buy.yew_logs > 0 && plan.fill.buy.yew_logs === plan.fill.buy.bow_string);
+});
+
+test('fletching: shafts, feathers and arrowtips are worked through step by step', () => {
+  const res = planBank(fl, { bank: { arrow_shaft: 300, feather: 300, steel_arrowheads: 300 }, startXp10: xp10ForLevel(30) });
+  assert.deepEqual(res.steps.map(s => [s.id, s.runs]), [['fl_headless', 300], ['fl_arrow_steel_arrow', 300]]);
+  assert.equal(res.xp10, 300 * 10 + 300 * 50);
+  const logs = planBank(fl, { bank: { logs: 100, feather: 1500, bronze_arrowheads: 1500 }, startXp10: 0 });
+  assert.deepEqual(logs.steps[0], { id: 'fl_logs_bronze_arrow', runs: 100, xp10: 100 * 420, sub: {}, made: { bronze_arrow: 1500 } });
+});
+
+test('fletching: feathers go where they give the most XP (rune darts over bronze arrows)', () => {
+  const bank = { feather: 1500, rune_dart_tip: 1500, logs: 100, bronze_arrowheads: 1500 };
+  const res = planBank(fl, { bank, startXp10: xp10ForLevel(81) });
+  assert.deepEqual(res.steps[0], { id: 'fl_dart_rune_dart', runs: 1500, xp10: 1500 * 188, sub: {}, made: { rune_dart: 1500 } });
+  const arrowsFirst = planBank(fl, { bank, startXp10: xp10ForLevel(81), prefer: 'fl_logs_bronze_arrow' });
+  assert.equal(arrowsFirst.steps[0].id, 'fl_logs_bronze_arrow', 'unless you pick the arrows');
+  assert.ok(res.xp10 > arrowsFirst.xp10);
+});
+
+test('fletching: with nothing picked the plan finishes with bows, and bridges with bows', () => {
+  const opts = { bank: {}, currentXp10: xp10ForLevel(70), targetXp10: xp10ForLevel(80), fillGroup: 'Bows' };
+  assert.equal(planGoal(fl, opts).fill.id, 'fl_cs_yew_longbow');
+  assert.equal(planGoal(fl, { ...opts, fillGroup: null }).fill.id, 'fl_logs_adamant_arrow', 'most XP per action otherwise');
+  const magic = planGoal(fl, { ...opts, targetXp10: xp10ForLevel(90), fillId: 'fl_cs_magic_longbow' });
+  const segs = magic.fill.segments;
+  assert.deepEqual(segs.map(s => s.id), ['fl_cs_yew_longbow', 'fl_cs_magic_shortbow', 'fl_cs_magic_longbow'], 'bows all the way');
+  assert.deepEqual(magic.fill.buy, { yew_logs: segs[0].runs, bow_string: segs[0].runs + segs[1].runs + segs[2].runs, magic_logs: segs[1].runs + segs[2].runs });
+});
+
+test('fletching: logs cut from the bank don\'t make cutting the rest of the plan', () => {
+  const plan = planGoal(fl, { bank: { yew_logs: 1000 }, currentXp10: xp10ForLevel(70), targetXp10: xp10ForLevel(80), fillGroup: 'Bows' });
+  assert.deepEqual(plan.fromBank.steps.map(s => [s.id, s.runs]), [['fl_cut_unstrung_yew_longbow', 1000]]);
+  assert.equal(plan.fill.id, 'fl_cs_yew_longbow', 'the rest: bows, cut and strung');
+  const strung = planGoal(fl, { bank: { yew_logs: 1000, bow_string: 1000 }, currentXp10: xp10ForLevel(70), targetXp10: xp10ForLevel(90), fillGroup: 'Bows' });
+  assert.equal(strung.fill.id, 'fl_cs_yew_longbow', 'carries on with the bank\'s bows, though magic bows are better by 80');
+});
+
+test('fletching: the balance tip counts 15 feathers and arrowtips to a log', () => {
+  const plan = planGoal(fl, { bank: { logs: 300, feather: 6000, iron_arrowheads: 3000 }, currentXp10: xp10ForLevel(89), targetXp10: xp10ForLevel(92) });
+  const r = row(plan, 'fl_logs_iron_arrow');
+  assert.equal(r.have, 200, '3,000 arrowtips is 200 logs\' worth');
+  assert.deepEqual(r.balance, { runs: 400, collect: { logs: 100, iron_arrowheads: 3000 } }, 'the feathers would do 400 logs');
 });

@@ -12,7 +12,7 @@ import { store, players, snapshots, exportBackup, importBackup } from './store.j
 import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
 const MAX_COMPARE = 5;
 
 // How to reach the API:

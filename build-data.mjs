@@ -190,7 +190,7 @@ async function runecraft() {
   runes.sort((a, b) => a.level - b.level);
   for (const r of runes) {
     methods.push({
-      id: `rc_${r.rune}`, skill: 'runecraft', group: 'Runes', kind: 'xp', unit: 'essence',
+      id: `rc_${r.rune}`, skill: 'runecraft', group: 'Runes', kind: 'xp', unit: 'essence', units: 'essence',
       name: ITEM.get(r.rune).name, level: r.level, xp: r.xp,
       in: { [need('blankrune')]: 1 }, out: { [r.rune]: 1 },
       ...(r.multiple ? { multiple: r.multiple } : {}),
@@ -203,6 +203,212 @@ async function runecraft() {
 }
 
 await runecraft();
+
+// dbrow "data=key,a,b" lines -> { key: ['a', 'b'] } (the first line for each key)
+function fields(row) {
+  const d = {};
+  for (const [k, ...v] of row.data || []) if (!(k in d)) d[k] = v;
+  return d;
+}
+// A number the script itself uses, e.g. the XP per headless arrow.
+function fromScript(text, re, what) {
+  const m = text.match(re);
+  if (!m) throw new Error(`can't find ${what} in the script`);
+  return Number(m[1]);
+}
+
+// ── Woodcutting ────────────────────────────────────────────────────────────
+// One method per tree, XP per log. Nothing goes in (just an axe, and in this
+// version any axe works at any level), so these plans don't use the bank.
+async function woodcutting() {
+  const rows = await readConfig(scripts('skill_woodcutting/configs/trees.dbrow'));
+  // Kharazi jungle trees belong to Legends' Quest, and burnt trees only give charcoal.
+  const SKIP = new Set(['jungle_tree_table', 'burnt_tree_table']);
+  const trees = [];
+  for (const row of rows.values()) {
+    if (SKIP.has(row.name)) continue;
+    const d = fields(row);
+    trees.push({ product: need(d.product[0]), level: Math.max(1, Number(d.levelrequired[0])), xp: Number(d.productexp[0]) });
+  }
+  trees.sort((a, b) => a.level - b.level || a.xp - b.xp);
+  for (const t of trees) {
+    methods.push({
+      id: `wc_${t.product}`, skill: 'woodcutting', group: 'Trees', kind: 'xp',
+      name: t.product === 'hollow_bark' ? 'Bark (hollow tree)' : ITEM.get(t.product).name,
+      level: t.level, xp: t.xp, in: {}, out: { [t.product]: 1 },
+    });
+  }
+}
+
+await woodcutting();
+
+// ── Firemaking ─────────────────────────────────────────────────────────────
+// Logs carry their own level and XP. Achey tree logs have neither in this
+// version (lighting them gives no XP), so they aren't listed.
+async function firemaking() {
+  const objs = await readConfig(scripts('skill_firemaking/configs/firemaking.obj'));
+  const logs = [];
+  for (const b of objs.values()) {
+    if (b.params.productexp == null || b.params.levelrequire == null) continue;
+    logs.push({ log: need(b.name), level: Math.max(1, Number(b.params.levelrequire)), xp: Number(b.params.productexp) });
+  }
+  logs.sort((a, b) => a.level - b.level);
+  for (const l of logs) {
+    methods.push({
+      id: `fm_${l.log}`, skill: 'firemaking', group: 'Logs', kind: 'xp', tools: [need('tinderbox')],
+      name: ITEM.get(l.log).name, level: l.level, xp: l.xp, in: { [l.log]: 1 }, out: {},
+    });
+  }
+  bankGroups.firemaking = [{ name: 'Logs', items: logs.map(l => l.log) }];
+}
+
+await firemaking();
+
+// ── Fletching ──────────────────────────────────────────────────────────────
+// Every step gives XP, so besides each step on its own (cut a bow, string it,
+// tip an arrow) there are the whole jobs the calculator sites show: a bow cut and
+// strung from a log, and arrows made from a log, feathers and arrowtips.
+// Arrows, darts and bolts are counted one at a time (the game makes up to 15 or
+// 10 per click and gives XP for each).
+async function fletching() {
+  const dir = p => scripts('skill_fletching/' + p);
+  const bowRows = [...(await readConfig(dir('configs/cut_logs/cut_logs.dbrow'))).values()].map(fields);
+  const strRows = [...(await readConfig(dir('configs/stringing/bows.dbrow'))).values()].map(fields);
+  const arrowRows = [...(await readConfig(dir('configs/arrows/arrows.dbrow'))).values()].map(fields);
+  const dartRows = [...(await readConfig(dir('configs/darts/darts.dbrow'))).values()].map(fields);
+  const boltRows = [...(await readConfig(dir('configs/bolts/bolts.dbrow'))).values()].map(fields);
+  const boltObjs = await readConfig(dir('configs/bolts/bolts.obj'));
+  const cutScript = await readFile(dir('scripts/cut_logs.rs2'), 'utf8');
+  const arrowScript = await readFile(dir('scripts/arrows.rs2'), 'utf8');
+
+  const name = k => ITEM.get(k).name;
+  const knife = need('knife'), string = need('bow_string'), feather = need('feather');
+  const shaft = need('arrow_shaft'), headless = need('headless_arrow');
+
+  // Bows: cutting a log gives a bow that's the same name as the strung one in
+  // this version, so the unstrung ones are marked (u) here.
+  const stringing = new Map(strRows.map(r => [r.item[0], { bow: need(r.product[0]), level: Number(r.level[0]), xp: Number(r.experience[0]) }]));
+  const bows = [];
+  for (const r of bowRows) {
+    const log = need(r.log[0]);
+    for (const kind of ['shortbow', 'longbow']) {
+      const [unstrung, level, xp] = r[kind];
+      const s = stringing.get(unstrung);
+      if (!s) throw new Error(`no stringing row for ${unstrung}`);
+      nameOverride[need(unstrung)] = `${name(unstrung)} (u)`;
+      bows.push({ log, unstrung, cutLevel: Number(level), cutXp: Number(xp), ...s });
+    }
+  }
+  bows.sort((a, b) => a.cutLevel - b.cutLevel || a.cutXp - b.cutXp);
+  for (const b of bows) {
+    methods.push({
+      id: `fl_cs_${b.bow}`, skill: 'fletching', group: 'Bows', kind: 'xp', tools: [knife],
+      name: `${name(b.bow)} (cut & string)`, level: Math.max(b.cutLevel, b.level), xp: b.cutXp + b.xp,
+      in: { [b.log]: 1, [string]: 1 }, out: { [b.bow]: 1 }, parts: [['cut', b.cutXp], ['string', b.xp]],
+    });
+  }
+  for (const b of bows) {
+    methods.push({
+      id: `fl_cut_${b.unstrung}`, skill: 'fletching', group: 'Unstrung bows', kind: 'xp', tools: [knife],
+      name: nameOverride[b.unstrung], level: b.cutLevel, xp: b.cutXp,
+      in: { [b.log]: 1 }, out: { [b.unstrung]: 1 },
+    });
+  }
+  for (const b of bows) {
+    methods.push({
+      id: `fl_str_${b.bow}`, skill: 'fletching', group: 'Stringing', kind: 'xp',
+      name: `${name(b.bow)} (string)`, level: b.level, xp: b.xp,
+      in: { [b.unstrung]: 1, [string]: 1 }, out: { [b.bow]: 1 },
+    });
+  }
+
+  // Arrows: a normal log makes 15 shafts; a feather makes a shaft a headless
+  // arrow; an arrowtip makes that an arrow. XP is the script's own.
+  const shafts = Number(bowRows.find(r => r.log[0] === 'logs').shafts[0]);
+  const shaftXp = shafts * fromScript(cutScript, /\$fletching_experience = multiply\(\$shaft_count, (\d+)\)/, 'XP per arrow shaft');
+  const headlessXp = fromScript(arrowScript, /stat_advance\(fletching, multiply\(\$arrow_count, (\d+)\)\);\s*inv_add\(inv, headless_arrow/, 'XP per headless arrow');
+  const arrows = arrowRows.map(r => ({ tips: need(r.item[0]), arrow: need(r.product[0]), level: Number(r.level[0]), xp: Number(r.experience[0]) }))
+    .sort((a, b) => a.level - b.level);
+  methods.push({
+    id: 'fl_logs_headless', skill: 'fletching', group: 'Arrows from logs', kind: 'xp', tools: [knife],
+    unit: 'log', units: 'logs', name: 'Headless arrows (from logs)', level: 1, xp: shaftXp + shafts * headlessXp,
+    in: { logs: 1, [feather]: shafts }, out: { [headless]: shafts },
+    parts: [[`${shafts} shafts`, shaftXp], [`${shafts} feathers`, shafts * headlessXp]],
+  });
+  for (const a of arrows) {
+    methods.push({
+      id: `fl_logs_${a.arrow}`, skill: 'fletching', group: 'Arrows from logs', kind: 'xp', tools: [knife],
+      unit: 'log', units: 'logs', name: `${name(a.arrow)}s (from logs)`, level: a.level,
+      xp: shaftXp + shafts * (headlessXp + a.xp),
+      in: { logs: 1, [feather]: shafts, [a.tips]: shafts }, out: { [a.arrow]: shafts },
+      parts: [[`${shafts} shafts`, shaftXp], [`${shafts} feathers`, shafts * headlessXp], [`${shafts} arrowtips`, shafts * a.xp]],
+    });
+  }
+  methods.push({
+    id: 'fl_shafts', skill: 'fletching', group: 'Arrows', kind: 'xp', tools: [knife],
+    unit: 'log', units: 'logs', name: 'Arrow shafts', level: 1, xp: shaftXp,
+    in: { logs: 1 }, out: { [shaft]: shafts },
+  });
+  methods.push({
+    id: 'fl_headless', skill: 'fletching', group: 'Arrows', kind: 'xp',
+    name: name(headless), level: 1, xp: headlessXp,
+    in: { [shaft]: 1, [feather]: 1 }, out: { [headless]: 1 },
+  });
+  for (const a of arrows) {
+    methods.push({
+      id: `fl_arrow_${a.arrow}`, skill: 'fletching', group: 'Arrows', kind: 'xp',
+      name: name(a.arrow), level: a.level, xp: a.xp,
+      in: { [headless]: 1, [a.tips]: 1 }, out: { [a.arrow]: 1 },
+    });
+  }
+
+  // Darts: a dart tip and a feather.
+  const darts = dartRows.map(r => ({ tip: need(r.item[0]), dart: need(r.product[0]), level: Number(r.level[0]), xp: Number(r.experience[0]) }))
+    .sort((a, b) => a.level - b.level);
+  for (const d of darts) {
+    methods.push({
+      id: `fl_dart_${d.dart}`, skill: 'fletching', group: 'Darts', kind: 'xp',
+      name: name(d.dart), level: d.level, xp: d.xp,
+      in: { [d.tip]: 1, [feather]: 1 }, out: { [d.dart]: 1 },
+    });
+  }
+
+  // Bolts: gems and pearls are chiselled into bolt tips (Fletching XP per gem),
+  // and tips go on plain bolts.
+  const tipItems = new Set([...boltObjs.keys()]);
+  const bolt = need('bolt');
+  const UNITS = { opal: ['opal', 'opals'], smalloysterpearls: ['oyster pearl', 'oyster pearls'], bigoysterpearls: ['oyster pearls', 'oyster pearls'] };
+  const boltSteps = boltRows.map(r => ({ from: need(r.item[0]), to: need(r.product[0]), count: Number(r.product[1]), level: Number(r.level[0]), xp: Number(r.experience[0]) }));
+  const tipSteps = boltSteps.filter(s => !tipItems.has(s.from)).sort((a, b) => a.level - b.level || a.count - b.count);
+  const boltMade = boltSteps.filter(s => tipItems.has(s.from)).sort((a, b) => a.level - b.level);
+  for (const s of tipSteps) {
+    const [unit, units] = UNITS[s.from] || [name(s.from).toLowerCase(), name(s.from).toLowerCase() + 's'];
+    const several = tipSteps.filter(t => t.to === s.to).length > 1;
+    methods.push({
+      id: `fl_tips_${s.from}`, skill: 'fletching', group: 'Bolts', kind: 'xp', tools: [need('chisel')],
+      unit, units, name: several ? `${name(s.to)} (${name(s.from).toLowerCase()})` : name(s.to), level: s.level, xp: s.xp,
+      in: { [s.from]: 1 }, out: { [s.to]: s.count },
+    });
+  }
+  for (const s of boltMade) {
+    methods.push({
+      id: `fl_bolt_${s.to}`, skill: 'fletching', group: 'Bolts', kind: 'xp',
+      name: name(s.to), level: s.level, xp: s.xp,
+      in: { [bolt]: 1, [s.from]: 1 }, out: { [s.to]: 1 },
+    });
+  }
+
+  bankGroups.fletching = [
+    { name: 'Logs', items: [...new Set(bows.map(b => b.log))] },
+    { name: 'Bow strings and unstrung bows', items: [string, ...bows.map(b => b.unstrung)] },
+    { name: 'Arrows', items: [feather, shaft, headless, ...arrows.map(a => a.tips)] },
+    { name: 'Dart tips', items: darts.map(d => d.tip) },
+    { name: 'Bolts', items: [bolt, ...new Set(tipSteps.map(s => s.from)), ...new Set(boltMade.map(s => s.from))] },
+    { name: 'Made', items: [...bows.map(b => b.bow), ...arrows.map(a => a.arrow), ...darts.map(d => d.dart), ...boltMade.map(s => s.to)] },
+  ];
+}
+
+await fletching();
 
 // ── Catalog of every item the data mentions ───────────────────────────────
 const used = new Set();
@@ -258,9 +464,11 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // XP is in tenths, like the server keeps it. Item names, ids and shop values are from
 // LostHQ's item database (GPL-3.0). RuneScape is (c) Jagex Ltd.
 //
-// A method turns "in" items into "out" items. unit, when set, is what one action
-// uses (e.g. one essence). multiple: makes floor(level / multiple) + 1 of each
-// output per action (runes per essence as Runecraft levels up). kind:
+// A method turns "in" items into "out" items (no "in" at all: gathering, like
+// Woodcutting). unit/units, when set, is what one action uses (one essence, one
+// log). multiple: makes floor(level / multiple) + 1 of each output per action
+// (runes per essence as Runecraft levels up). parts: the XP of each step of a
+// whole job (cut, then string). tools: needed, never used up. kind:
 //   xp     - an action you train with (it gives XP)
 //   prep   - a step you do on the way (unfinished potions, grinding): planned through
 //   source - turns something you already have into an input (filling vials):

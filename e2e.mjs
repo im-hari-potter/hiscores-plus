@@ -468,6 +468,97 @@ await check('runecraft: essence in the bank, runes per essence at your level, an
   await page.click('.tab[data-tab="goals"]');
 });
 
+const cardText = skill => page.evaluate(s => [...document.querySelectorAll('.goal')].find(g => g.querySelector('.goal-name')?.innerText === s)?.innerText || '', skill);
+async function addGoal(skill, level) {
+  await page.click('.tab[data-tab="goals"]');
+  await page.click(`[data-nskill="${skill}"]`);
+  await page.click('[data-ntype="level"]');
+  await page.fill('#goal-new input[name=value]', String(level));
+  await page.click('#goal-new button[type=submit]');
+}
+async function setBank(skill, amounts) {
+  await page.click('.tab[data-tab="bank"]');
+  await page.click(`[data-bskill="${skill}"]`);
+  for (const [item, n] of Object.entries(amounts)) {
+    await page.fill(`[data-bank="${item}"]`, n);
+    await page.press(`[data-bank="${item}"]`, 'Tab');
+  }
+}
+
+await check('woodcutting: no bank, logs to chop and what they are worth', async () => {
+  await addGoal('woodcutting', 95);           // (a Woodcutting 94 goal is there from the move test)
+  const card = page.locator('.goal', { hasText: 'Level 93 → 95' });
+  await card.locator('.plan').waitFor();
+  const t = await card.innerText();
+  assert.match(t, /Level 93 → 95/);
+  assert.match(t, /any axe works at any level\), so this plan doesn't use your bank/);
+  assert.doesNotMatch(t, /From your bank|Use my bank|To collect or buy|Buying it all/);
+  assert.match(t, /To reach your goal: 1,555,040 XP/);
+  assert.match(t, /6,221 × Magic logs \+1,555,250 XP/, 'most XP per log at 93');
+  assert.match(t, /What you make is worth/);
+  assert.equal(await card.locator('.plan-t thead th').count(), 6, 'no bank columns');
+  await card.locator('tr[data-method="wc_willow_logs"] td:nth-child(2)').click();
+  await page.waitForFunction(() => /23,038 × Willow logs/.test([...document.querySelectorAll('.goal')].find(g => g.innerText.includes('Level 93 → 95'))?.innerText || ''));
+  await page.screenshot({ path: `${SHOTS}/10a-woodcutting.png`, fullPage: false });
+});
+
+await check('fletching: bows cut and strung from the bank, darts, and the table a group at a time', async () => {
+  await setBank('fletching', { yew_logs: '1000', bow_string: '600', feather: '2k', rune_dart_tip: '500' });
+  assert.match(await text('#bank-head'), /Unstrung bows are marked \(u\)/);
+  assert.equal(await page.locator('#bank-head [data-bskill="woodcutting"]').count(), 0, 'no Woodcutting bank');
+  await addGoal('fletching', 92);
+  const card = page.locator('.goal', { hasText: 'Fletching' });
+  await card.locator('.plan').waitFor();
+  const t = await cardText('Fletching');
+  assert.match(t, /Level 89 → 92/);
+  assert.match(t, /From your bank \+129,400 XP/);
+  assert.match(t, /600 × Yew longbow \(cut & string\) \+90,000 XP/);
+  assert.match(t, /400 × Yew longbow \(u\) \+30,000 XP/);
+  assert.match(t, /500 × Rune dart \+9,400 XP/);
+  assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'fl_cs_yew_longbow', 'carries on with the bank\'s bows');
+  assert.match(t, /9,962 × Yew longbow \(cut & string\)/);
+  assert.match(t, /Also bring:\s*Knife/);
+  assert.match(t, /Tip: collect[\s\S]*400[\s\S]*Bow string[\s\S]*makes\s+1,000\s+Yew longbow \(cut & string\) instead of 600/);
+  assert.equal(await card.locator('select[data-gopt="fill"] optgroup').count(), 7);
+  // the table shows one group at a time: the one you train with, until you pick
+  assert.equal(await card.locator('.group-pick .chip.on').innerText(), 'Bows');
+  assert.equal(await card.locator('tr[data-method]').count(), 12);
+  await card.locator('[data-tgroup="Darts"]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.goal .plan-t tr[data-method^="fl_dart"]').length === 6);
+  assert.match(await card.locator('tr[data-method="fl_dart_rune_dart"]').innerText(), /81\s+Rune dart\s+18\.8\s+[\d,]+\s+500\s/);
+  await card.locator('[data-tgroup="all"]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.goal .plan-t tr[data-method^="fl_"]').length === 63);
+  await card.locator('tr[data-method="fl_logs_bronze_arrow"] td:nth-child(2)').click();
+  await page.waitForFunction(() => /logs → [\d,]+ Bronze arrows/.test([...document.querySelectorAll('.goal')].find(g => g.innerText.includes('Fletching'))?.innerText || ''));
+  assert.match(await card.locator('tr[data-method="fl_logs_bronze_arrow"]').innerText(), /per log/);
+  await page.screenshot({ path: `${SHOTS}/10b-fletching.png`, fullPage: true });
+  await card.locator('[data-tgroup="Bows"]').click();
+  await card.locator('select[data-gopt="fill"]').selectOption('fl_cs_yew_longbow');
+});
+
+await check('firemaking: the bank\'s logs burn toward the goal, best first', async () => {
+  await setBank('firemaking', { willow_logs: '10k' });
+  assert.match(await text('#bank-head'), /Achey tree logs aren't listed/);
+  await addGoal('firemaking', 75);
+  const card = page.locator('.goal', { hasText: 'Firemaking' });
+  await card.locator('.plan').waitFor();
+  const t = await cardText('Firemaking');
+  assert.match(t, /1,000 × Yew logs \+202,500 XP/, 'the yew logs from the Fletching tab: one bank');
+  assert.match(t, /10,000 × Willow logs \+900,000 XP\s*Goal after 1,709/);
+  assert.match(t, /That reaches your goal/);
+  assert.doesNotMatch(t, /Then, to reach your goal/);
+});
+
+await check('prices: Woodcutting has a prices tab for its logs', async () => {
+  await page.click('.tab[data-tab="prices"]');
+  await page.click('[data-bskill="woodcutting"]');
+  await page.waitForSelector('[data-price="magic_logs"]');
+  assert.match(await text('#prices-body'), /Bark/);
+  await page.click('.tab[data-tab="bank"]');
+  await page.waitForSelector('[data-bskill="herblore"].active');
+  await page.click('.tab[data-tab="goals"]');
+});
+
 await check('planner tabs fit a narrow window', async () => {
   await page.setViewportSize({ width: 340, height: 800 });
   for (const tab of ['goals', 'bank', 'prices']) {
