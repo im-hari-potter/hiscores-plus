@@ -46,8 +46,8 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
 - How many you need = the XP still to go ÷ the XP each one gives, rounded up.
 - A plan has three parts:
   1. **From your bank**: what the items in your bank make, best XP first (the one you train with goes
-     first when it can), including steps on the way like unfinished potions. Its money line shows
-     what it all makes is worth.
+     first when it can), including steps on the way like unfinished potions. Each step shows what it
+     makes is worth, and the total is its **gross profit**.
   2. **Then, to reach your goal**: the rest, made the way you pick under **Train with**. If you're
      short of levels for it, the plan works up to it with the best one at each level on the way
      (willows to 45, maples to 60, then yews). Below that: what to collect or buy, what to bring, what
@@ -72,8 +72,8 @@ Anything without a price shows **?** until it has one.
 #### Use my bank
 
 - **On** (the default): your bank is put to work first.
-  - **From your bank** lists what it makes. What that's worth counts as **gross profit**: your banked
-    supplies are already yours, so nothing is taken off for them.
+  - **From your bank** lists what it makes and what each part is worth. The total is **gross profit**:
+    your banked supplies are already yours, so nothing is taken off for them.
   - Everything after it comes after all your bank makes: its XP counts toward the goal, and what's left
     in your bank is used before anything is collected.
 - **Off**: the plan starts from scratch, as if your bank were empty.
@@ -88,14 +88,15 @@ Anything without a price shows **?** until it has one.
 | **To goal** | not shown | How many to reach the goal, on their own |
 | **From bank** | How many your bank makes of it now | not shown |
 | **Even out** | What to collect so nothing in your bank is left over: your most plentiful ingredient decides | not shown |
-| **Total profit after even out** | What your bank makes of it once evened out is worth, less what evening out takes. Gross: what's in your bank is yours already | not shown |
+| **Gross after using bank** | What your bank makes of it (once evened out, where Even out says so) is worth, less what evening out takes. Gross: your banked supplies are yours already | not shown |
 | **Still needed** | How many more after everything your bank makes | not shown |
-| **Collect** | What those take, beyond what's left in your bank | not shown |
-| **Total profit after collect** | What the ones still needed are worth, less what you collect for them | not shown |
+| **Supplies needed** | What those take, beyond what's left in your bank | not shown |
+| **Profit after buying supplies** | What the ones still needed are worth, less what their supplies cost | not shown |
+| **Total net gp toward goal** | Gross after using bank + profit after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy | not shown |
 | **Use** | Lets the bank plan make it (see below) | the same |
 
 For example, Herblore 74 → 78 with Super attack: with the bank off, **4,328** to the goal. With it on,
-**2,305** still needed after everything the bank makes, and what's left to collect for those. And with
+**2,305** still needed after everything the bank makes, and the supplies those need. And with
 605 kwuarm and 518 limpwurt root in the bank, Super strength's **Even out** says collect 87 limpwurt
 root, and your bank covers 605 instead of 518.
 
@@ -104,13 +105,13 @@ root, and your bank covers 605 instead of 518.
 The **Use** boxes at the end of each row decide what the bank plan may make. It makes everything it can
 by default, so **turn off anything you don't plan to make**: a potion you'd rather not, or one whose
 supplies you're saving. Otherwise the plan spends your supplies on it, and From your bank, Still needed
-and the totals count XP you won't get. Unticked options also leave the Train with list.
+and the gp totals count XP you won't get. Unticked options also leave the Train with list.
 
 #### Vials of water
 
 **I'll buy vials of water as I go** is on by default for Herblore: vials never hold a plan back, and
-they're left out of what to collect and of every cost and profit. Turn it off to plan around the vials
-in your bank and count them like any other supply.
+they're left out of the supplies needed and of every cost and profit. Turn it off to plan around the
+vials in your bank and count them like any other supply.
 
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
   its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).

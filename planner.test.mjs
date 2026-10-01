@@ -149,12 +149,15 @@ test('total profits per row: after evening out, and after collecting the rest (v
   const fish = row(plan, 'hb_3dosefisherspotion');
   assert.equal(fish.balance, null);
   assert.deepEqual(fish.gains.even, { total: 403 * 1200, value: 403 * 1200, cost: 0, missing: [] });
-  // nothing for it in the bank: nothing to show
+  // the total net: the two together
+  assert.equal(ss.gains.net.total, ss.gains.even.total + ss.gains.collect.total);
+  assert.equal(fish.gains.net.total, fish.gains.even.total + fish.gains.collect.total);
+  // nothing for it in the bank: nothing to show for that part
   assert.equal(row(plan, 'hb_3dose1attack').gains.even, null);
   assert.ok(row(plan, 'hb_3dose1attack').gains.collect.missing.length, 'no prices for attack potions here');
   // without the bank there are no totals
   const off = row(planGoal(ix, { ...plan, bank: { kwuarm: 605 }, currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(78), useBank: false }), 'hb_3dose2strength');
-  assert.deepEqual(off.gains, { even: null, collect: null });
+  assert.deepEqual(off.gains, { even: null, collect: null, net: null });
 });
 
 test('unid herbs sit out of the plan until they are identified', () => {

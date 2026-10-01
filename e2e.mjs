@@ -356,7 +356,7 @@ await check("goals: Ostap's example, 700 potions from the bank, 4,251 more and 3
   assert.match(t, /collect\s*300\s*Snape grass[\s\S]*makes\s*1,000\s*Prayer potion instead of 700/);
   // with your bank: no To goal; what it makes, evens out, and what's still needed after it
   const head = await page.locator('.goal >> nth=0 >> .plan-t thead').innerText();
-  assert.match(head, /XP\s*Profit\/item\s*gp\/XP\s*From bank\s*Even out\s*Total profit\s*after even out\s*Still needed\s*Collect\s*Total profit\s*after collect\s*Use/);
+  assert.match(head, /XP\s*Profit\/item\s*gp\/XP\s*From bank\s*Even out\s*Gross after\s*using bank\s*Still needed\s*Supplies needed\s*Profit after\s*buying supplies\s*Total net gp\s*toward goal\s*Use/);
   assert.doesNotMatch(head, /To goal/);
   const row = await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText();
   const cells = row.split('\t').map(c => c.trim());
@@ -396,7 +396,7 @@ await check('goals: picking another potion and leaving the bank out change the p
   // without the bank: how many to the goal, and nothing to collect
   const head = await page.locator('.goal >> nth=0 >> .plan-t thead').innerText();
   assert.match(head, /XP\s*Profit\/item\s*gp\/XP\s*To goal\s*Use/);
-  assert.doesNotMatch(head, /From bank|Even out|Still|Collect|Total profit/);
+  assert.doesNotMatch(head, /From bank|Even out|Gross|Still|Supplies|buying|Total net/);
   const attackOff = await cellsOf('hb_3dose1attack');
   assert.equal(num(attack[8]), num(attackOff[5]) - 2450, `still needed ${attack[8]}, to goal ${attackOff[5]}`);
   assert.equal((await cellsOf('hb_3doseprayerrestore'))[5], '4,951');
@@ -494,17 +494,24 @@ await check('goals: with prices known the plan shows cost, value and profit', as
   assert.match(money, /Buying it all: [\d.,]+[KM]? gp/);
   assert.match(money, /worth: [\d.,]+[KM]? gp/);
   assert.match(money, /Net: [+−][\d.,]+[KM]? gp/);
-  // what the bank makes is gross profit: the supplies are already yours
+  // what the bank makes is gross profit (the supplies are already yours), one
+  // line, with each step's own amount: here the 700 prayer potions
   const gross = await page.locator('.goal').first().locator('.money', { hasText: 'Gross profit' }).innerText();
-  const worth = gross.match(/What you make is worth: ([\d.,]+[KM]?) gp/)?.[1];
-  assert.ok(worth, gross);
-  assert.match(gross, new RegExp(`Gross profit: \\+${worth.replace('.', '\\.')} gp`));
+  assert.doesNotMatch(gross, /What you make is worth/);
+  assert.match(gross, /your banked supplies are already yours/);
+  const total = gross.match(/Gross profit: \+([\d.,]+[KM]?) gp/)?.[1];
+  assert.ok(total, gross);
+  const step = await page.locator('.goal').first().locator('.step', { hasText: '700 × Prayer potion' }).innerText();
+  assert.match(step, new RegExp(`\\+61,250 XP · ${total.replace('.', '\\.')} gp \\([\\d.,]+[KM]? each\\)`), step);
   // and the table's totals have their numbers
   const row = (await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText()).split('\t').map(c => c.trim());
   assert.doesNotMatch(row.join(' '), /\?/);
-  assert.match(row[7], /^[+−][\d.,]+[KM]?$/, 'total profit after even out');
-  assert.match(row[10], /^[+−][\d.,]+[KM]?$/, 'total profit after collect');
+  assert.match(row[7], /^[+−][\d.,]+[KM]?$/, 'gross after using bank');
+  assert.match(row[10], /^[+−][\d.,]+[KM]?$/, 'profit after buying supplies');
   assert.equal(row[10], money.match(/Net: ([+−]?[\d.,]+[KM]?) gp/)[1], 'the same as the plan\'s own Net for the potion you train with');
+  assert.match(row[11], /^[+−][\d.,]+[KM]?$/, 'total net gp toward goal');
+  const netTip = await page.locator('tr[data-method="hb_3doseprayerrestore"] td').nth(11).getAttribute('title');
+  assert.equal(netTip, `Gross after using bank ${row[7]} + profit after buying supplies ${row[10]}`);
 });
 
 await check('goals: a rank goal looks up who holds that rank', async () => {

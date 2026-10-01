@@ -458,6 +458,11 @@ export function planGoal(ix, opts) {
         : have > 0 && Number.isFinite(have) ? gainOf(made(have), {}, priceOf) : null,
       collect: useBank && still > 0 ? gainOf(made(still), collect, priceOf) : null,
     };
+    // The two together: the gp it all comes to on the way to the goal.
+    gains.net = gains.even || gains.collect ? {
+      total: (gains.even?.total || 0) + (gains.collect?.total || 0),
+      missing: [...(gains.even?.missing || []), ...(gains.collect?.missing || [])],
+    } : null;
     return {
       id: m.id, level: m.level, xp10: m.xp, locked: m.level > level,
       needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), toMake: still,
