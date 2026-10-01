@@ -698,9 +698,141 @@ export function createPlanner(ctx) {
     }).join('')}</div>`;
   }
 
+  // ── Reading the bank from screenshots ───────────────────────────────────
+  // The reader (bankread.js, its data and icons) loads the first time it's used.
+  let reader = null;
+  async function getReader() {
+    if (reader) return reader;
+    const [B, D] = await Promise.all([import('./bankread.js'), import('./bankread-data.js')]);
+    const atlas = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(pixelsOf(img, img.naturalWidth, img.naturalHeight));
+      img.onerror = () => reject(new Error('The icons for reading screenshots didn\'t load. Reload the page and try again.'));
+      img.src = 'bankicons.png';
+    });
+    reader = { B, D, icons: B.prepareIcons(atlas, D.BANK_ICONS, D.BANK_ICONS_PER_ROW) };
+    return reader;
+  }
+  function pixelsOf(source, w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(source, 0, 0);
+    return g.getImageData(0, 0, w, h);
+  }
+
+  // files: screenshots (File or Blob). Results wait in S.shots for you to apply.
+  async function readShots(files) {
+    const list = [...files].filter(f => f && (/^image\//.test(f.type) || /\.png$/i.test(f.name || '')));
+    if (!list.length) { S.shots = { error: 'That isn\'t a picture. Use the PNG screenshots LostKit saves.' }; renderShots(); return; }
+    showMsg('bank-msg', '');
+    S.shots = { busy: list.length };
+    renderShots();
+    try {
+      const { B, D, icons } = await getReader();
+      list.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));      // later screenshots win
+      const reads = [];
+      for (const f of list) {
+        const name = f.name || 'Pasted picture';
+        try {
+          const bmp = await createImageBitmap(f);
+          const r = B.readBank(pixelsOf(bmp, bmp.width, bmp.height), icons, D.STACK_FONT, D.BANK_LAYOUT);
+          bmp.close?.();
+          reads.push({ name, ...r });
+        } catch (e) {
+          reads.push({ name, ok: false, why: 'unreadable' });
+        }
+      }
+      S.shots = { reads, merged: B.mergeReads(reads.filter(r => r.ok)) };
+      prices.want(S.shots.merged.items.map(i => i.slug));
+    } catch (e) {
+      S.shots = { error: e?.message || String(e) };
+    }
+    renderShots();
+  }
+
+  function renderShots() {
+    const el = $('bank-shots');
+    if (!el) return;
+    if (!S.account) { el.innerHTML = ''; return; }
+    const sh = S.shots;
+    const pick = `<button type="button" class="btn small" data-act="shots-pick">Choose screenshots</button>
+      <input type="file" id="shots-file" accept="image/png,image/*" multiple hidden>`;
+    if (!sh || sh.error) {
+      el.innerHTML = `<div class="card shots-drop" data-drop="1">
+        <div class="shots-title">Read your bank from screenshots</div>
+        <p class="note">Open your bank in LostKit and press the screenshot key. If your bank scrolls, scroll and take another until you've covered it.
+          LostKit saves them in <b>Pictures › LostKit Screenshots</b>. Drop them here, paste one, or ${pick}</p>
+        ${sh?.error ? `<div class="msg error">${esc(sh.error)}</div>` : ''}
+      </div>`;
+      return;
+    }
+    if (sh.busy) {
+      el.innerHTML = `<div class="card shots-drop"><span class="busy">Reading ${sh.busy} screenshot${sh.busy === 1 ? '' : 's'}…</span></div>`;
+      return;
+    }
+    const m = sh.merged;
+    const b = bank().items;
+    const bad = sh.reads.filter(r => !r.ok);
+    const okCount = sh.reads.length - bad.length;
+    const problems = bad.map(r => `<li><b>${esc(r.name)}</b>: ${r.why === 'no-bank' ? 'no bank in this one. Open your bank before pressing the screenshot key.' : 'couldn\'t open this picture.'}</li>`).join('');
+    const rows = m.items.map(it => {
+      const cur = b[it.slug] || 0;
+      const next = it.approx && cur >= it.min && cur <= it.max ? cur : it.count;
+      const read = it.approx ? `≈${esc(gpShort(it.count))}` : fmt(it.count);
+      const tip = it.approx ? `The bank shows rounded amounts from 100K up: this is between ${fmt(it.min)} and ${fmt(it.max)}.${cur >= it.min && cur <= it.max ? ' Your amount is in that range, so it\'s kept.' : ''}` : '';
+      const also = it.also?.length ? ` <span class="c-faint small-note">or ${it.also.map(a => itemName(a)).join(', ')}: they look the same</span>` : '';
+      const unsure = it.unsure ? ` <span class="shot-check" title="A close call between items that look alike: check this one">check</span>` : '';
+      return `<label class="shot-row${next !== cur ? ' changed' : ''}">
+        <input type="checkbox" data-shot="${it.slug}" checked>
+        ${itemIcon(it.slug, true)} <span class="shot-name">${itemName(it.slug)}${also}${unsure}</span>
+        <span class="shot-n" title="${esc(tip)}">${read}</span>
+        <span class="shot-was c-faint">${next === cur ? 'same' : `was ${fmt(cur)}`}</span>
+      </label>`;
+    }).join('');
+    const missing = m.complete ? Object.keys(b).filter(slug => b[slug] > 0 && !m.items.some(i => i.slug === slug)) : [];
+    el.innerHTML = `<div class="card shots-result" data-drop="1">
+      <div class="shots-title">From ${okCount} screenshot${okCount === 1 ? '' : 's'}: ${m.items.length} of your planner items</div>
+      <p class="note">${fmt(m.seen)} bank slots read${m.complete ? ', the whole bank' : ''}. ${m.others + m.unknown ? `${fmt(m.others + m.unknown)} other item${m.others + m.unknown === 1 ? '' : 's'} the planner doesn't use ${m.others + m.unknown === 1 ? 'was' : 'were'} skipped.` : ''}
+        Items cut off at the top or bottom edge are skipped too, so let screenshots overlap a little.</p>
+      ${problems ? `<ul class="shot-problems">${problems}</ul>` : ''}
+      ${rows ? `<div class="shot-list">${rows}</div>` : '<p class="c-faint">None of the items the planner uses are in these screenshots.</p>'}
+      ${missing.length ? `<label class="check shot-clear"><input type="checkbox" id="shots-clear"> Also clear ${missing.length} item${missing.length === 1 ? '' : 's'} that ${missing.length === 1 ? 'isn\'t' : 'aren\'t'} in your bank anymore: ${missing.map(itemName).join(', ')}</label>` : ''}
+      <div class="bar wrap">
+        ${rows ? `<button type="button" class="btn small" data-act="shots-apply">Update my bank</button>` : ''}
+        <button type="button" class="btn small" data-act="shots-discard">${rows ? 'Discard' : 'Close'}</button>
+        <span class="c-faint small-note">Only the ticked items change; everything else in your bank stays as it is.</span>
+        <span class="grow"></span>${pick}
+      </div>
+    </div>`;
+  }
+
+  function applyShots() {
+    const m = S.shots?.merged;
+    if (!m) return;
+    const b = bank();
+    const ticked = new Set([...document.querySelectorAll('[data-shot]')].filter(x => x.checked).map(x => x.dataset.shot));
+    let changed = 0;
+    for (const it of m.items) {
+      if (!ticked.has(it.slug)) continue;
+      const cur = b.items[it.slug] || 0;
+      const next = it.approx && cur >= it.min && cur <= it.max ? cur : it.count;
+      if (next !== cur) changed++;
+      if (next > 0) b.items[it.slug] = next; else delete b.items[it.slug];
+    }
+    if ($('shots-clear')?.checked) {
+      for (const slug of Object.keys(b.items)) if (!m.items.some(i => i.slug === slug)) { delete b.items[slug]; changed++; }
+    }
+    saveBank(b);
+    S.shots = null;
+    showMsg('bank-msg', `Bank updated from your screenshots: ${changed} item${changed === 1 ? '' : 's'} changed.`, 'ok');
+    renderBank();
+  }
+
   // ── Bank view ───────────────────────────────────────────────────────────
   function renderBank() {
     renderAccount('bank-account', 'bank');
+    renderShots();
     const body = $('bank-body');
     if (!S.account) { $('bank-head').innerHTML = ''; body.innerHTML = ''; return; }
     renderBankHead();
@@ -840,6 +972,29 @@ export function createPlanner(ctx) {
       root.addEventListener('change', onChange);
       root.addEventListener('input', onInput);
     }
+    // Screenshots dropped or pasted on the Bank tab. A file dropped anywhere else
+    // on the page is ignored rather than opened in place of the tool.
+    const onBank = () => S.tab === 'bank' && !$('view-bank')?.hidden && S.account;
+    const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+    document.addEventListener('dragover', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      const zone = onBank() && e.target.closest?.('#view-bank');
+      e.dataTransfer.dropEffect = zone ? 'copy' : 'none';
+      $('bank-shots')?.firstElementChild?.classList.toggle('drag', !!zone);
+    });
+    document.addEventListener('dragleave', e => { if (!e.relatedTarget) $('bank-shots')?.firstElementChild?.classList.remove('drag'); });
+    document.addEventListener('drop', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      $('bank-shots')?.firstElementChild?.classList.remove('drag');
+      if (onBank() && e.target.closest?.('#view-bank')) readShots(e.dataTransfer.files);
+    });
+    document.addEventListener('paste', e => {
+      if (!onBank() || e.target.closest?.('input, textarea')) return;
+      const files = [...(e.clipboardData?.files || [])].filter(f => /^image\//.test(f.type));
+      if (files.length) { e.preventDefault(); readShots(files); }
+    });
   }
 
   function onSubmit(e) {
@@ -920,6 +1075,9 @@ export function createPlanner(ctx) {
         ctx.goTab('bank');
         break;
       case 'bank-prices': prices.want(Object.keys(bank().items), { force: true }); renderBankHead(); break;
+      case 'shots-pick': $('shots-file')?.click(); break;
+      case 'shots-apply': applyShots(); break;
+      case 'shots-discard': S.shots = null; renderShots(); break;
       case 'bank-clear':
         if (!act.dataset.armed) { act.dataset.armed = '1'; act.textContent = 'Click again to clear'; break; }
         saveBank({ items: {} });
@@ -932,6 +1090,7 @@ export function createPlanner(ctx) {
 
   function onChange(e) {
     const t = e.target;
+    if (t.id === 'shots-file') { if (t.files?.length) readShots(t.files); return; }
     const card = t.closest('[data-goal]');
     if (card && t.dataset.gopt) {
       const id = card.dataset.goal;

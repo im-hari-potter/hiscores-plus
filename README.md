@@ -51,6 +51,17 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
   its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
   The bank's value is shown with market prices.
+  - **Read it from screenshots**: open your bank in LostKit, press the screenshot key (scroll and take
+    more if it doesn't fit), then drop the pictures from *Pictures › LostKit Screenshots* on the Bank
+    tab, paste one, or choose them. You see what was read before anything changes, and only the
+    ticked items are updated.
+    - It reads the picture the way the game drew it: the scrollbar says where the bank is and how far
+      it's scrolled, icon outlines and colours say which item is in each slot, and the yellow numbers
+      say how many. Screenshots that overlap don't count twice.
+    - Amounts of 100K and up are rounded on screen (`150K`). If the amount you entered fits, it's kept;
+      otherwise the low end is used.
+    - Lantadyme looks exactly like an unid herb in this version, so it's read as one.
+    - Items cut off at the top or bottom edge of the bank are skipped, so let screenshots overlap.
   - With no method picked, the bank plan finds the order that gets the most XP out of what you have
     (rune dart tips get your feathers before bronze arrows do).
   - Unidentified herbs are one "Unid herb" entry, because in-game they're all a plain "Herb". They count
@@ -94,11 +105,15 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
   - `planner.js` holds the maths, all in tenths of XP like the game.
   - `planner-ui.js` builds the Goals, Bank and Prices views.
   - `prices-core.js` and `prices.js` handle the market.
+  - `bankread.js` reads a bank screenshot. It loads only when used, along with `bankread-data.js` and
+    `bankicons.png`, which `build-data.mjs` also generates (bank layout, the p11 font and the icons to
+    compare with). The tests paint pretend screenshots with `bankfake.mjs`.
 
 ## Credits
 
 - Hiscores come from the Lost City hiscores API.
-- Levels and XP for the planner come from Lost City's server content (MIT).
+- Levels and XP for the planner, and the bank layout and font the screenshot reader uses, come from
+  Lost City's server content and client (MIT).
 - Item names and icons come from [LostHQ](https://2004.losthq.rs) (GPL-3.0).
 - Prices come from [markets.lostcity.rs](https://markets.lostcity.rs). How they're read follows
   LostKit's own price check.

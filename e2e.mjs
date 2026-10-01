@@ -3,6 +3,8 @@
 import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright'); // resolved from NODE_PATH / global install
 import assert from 'node:assert/strict';
+import { fakeBank } from './bankfake.mjs';
+import { encodePng } from './testpng.mjs';
 
 const BASE = process.env.BASE || 'http://localhost:8787';
 const SHOTS = process.env.SHOTS || '/tmp';
@@ -557,6 +559,47 @@ await check('prices: Woodcutting has a prices tab for its logs', async () => {
   await page.click('.tab[data-tab="bank"]');
   await page.waitForSelector('[data-bskill="herblore"].active');
   await page.click('.tab[data-tab="goals"]');
+});
+
+await check('bank: read from screenshots, review, then update', async () => {
+  await page.click('.tab[data-tab="bank"]');
+  await page.waitForSelector('#bank-shots .shots-drop');
+  assert.match(await text('#bank-shots'), /Pictures › LostKit Screenshots/);
+  const shot = (name, opts) => ({ name, mimeType: 'image/png', buffer: encodePng(fakeBank(opts)) });
+  const items = [
+    { slot: 0, icon: 'lawrune', count: 3960 },
+    { slot: 1, icon: 'bloodrune', count: 3309 },
+    { slot: 2, icon: 'blankrune', count: 150420 },
+    { slot: 3, icon: 'bronze_arrow_5', count: 5000 },
+    { slot: 4, icon: 'unidentified_guam', count: 25 },
+    { slot: 5, icon: 'unidentified_ardrigal', count: 10 },
+    { slot: 48, icon: 'willow_logs', count: 814 },
+  ];
+  await page.setInputFiles('#shots-file', [
+    shot('screenshot-1.png', { items, scroll: 0 }),
+    shot('screenshot-2.png', { items, scroll: 120 }),
+    shot('not-a-bank.png', { items: [], width: 400 }),
+  ]);
+  await page.waitForSelector('#bank-shots .shots-result', { timeout: 20000 });
+  const t = await text('#bank-shots');
+  assert.match(t, /From 2 screenshots: 5 of your planner items/);
+  assert.match(t, /1 other item the planner doesn't use was skipped/);
+  assert.match(t, /not-a-bank\.png: no bank in this one/);
+  assert.match(t, /Law rune\s*3,960/);
+  assert.match(t, /Rune essence\s*≈150K/);
+  assert.match(t, /Bronze arrow\s*5,000/);
+  assert.match(t, /Unid herb or Lantadyme: they look the same\s*35/);
+  assert.match(t, /Willow logs\s*814/);
+  await page.locator('[data-shot="willow_logs"]').uncheck();
+  await page.click('[data-act="shots-apply"]');
+  await page.waitForSelector('#bank-msg:not([hidden])');
+  assert.match(await text('#bank-msg'), /Bank updated from your screenshots: 4 items changed/);
+  await page.click('[data-bskill="runecraft"]');
+  assert.equal(await page.inputValue('[data-bank="lawrune"]'), '3,960');
+  assert.equal(await page.inputValue('[data-bank="blankrune"]'), '150,000', 'the low end of 150K');
+  await page.click('[data-bskill="herblore"]');
+  assert.equal(await page.inputValue('[data-bank="unidentified_guam"]'), '35');
+  assert.equal(await page.locator('#bank-shots .shots-result').count(), 0, 'back to the drop box');
 });
 
 await check('planner tabs fit a narrow window', async () => {

@@ -599,3 +599,21 @@ table.prices-t td .input.num { width: 100%; max-width: 96px; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Reading the bank from screenshots */
+.shots-drop, .shots-result { border-style: dashed; }
+.shots-drop.drag, .shots-result.drag { border-color: var(--gold-hi); box-shadow: inset 0 0 0 40px rgba(240, 196, 25, 0.08); }
+.shots-title { font-size: 15px; color: var(--gold-hi); margin-bottom: 4px; }
+.shots-drop .note, .shots-result .note { margin: 2px 0 6px; }
+.shots-drop .btn { margin-left: 2px; }
+.shot-problems { margin: 4px 0 8px; padding-left: 18px; font-family: var(--small); font-size: 13px; color: var(--lose); }
+.shot-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px 12px; margin: 4px 0 8px; }
+.shot-row { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 3px; font-size: 14px; cursor: pointer; }
+.shot-row:hover { background: rgba(255, 255, 255, 0.04); }
+.shot-row input { accent-color: var(--gold); }
+.shot-name { flex: 1; min-width: 0; color: var(--text); }
+.shot-n { color: #fff; font-family: 'RS-Bold', sans-serif; }
+.shot-was { min-width: 64px; text-align: right; font-family: var(--small); font-size: 12px; }
+.shot-row.changed .shot-was { color: var(--level); }
+.shot-check { margin-left: 4px; padding: 0 4px; border: 1px solid var(--gold-dim); border-radius: 3px; font-family: var(--small); font-size: 12px; color: var(--gold-hi); }
+.shot-clear { display: block; margin: 0 0 8px; font-family: var(--small); font-size: 13px; }

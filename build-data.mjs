@@ -493,3 +493,151 @@ export const BANK_GROUPS = ${JSON.stringify(bankGroups, null, 2)};
 `;
 await writeFile('gamedata.js', out);
 console.log(`gamedata.js: ${methods.length} methods, ${names.length} items; items.png ${PER_ROW * SIZE}x${rows * SIZE}`);
+
+// ── Bank screenshots ───────────────────────────────────────────────────────
+// What bankread.js needs to read a bank from a screenshot, loaded only when one
+// is read: the bank's layout, the font stack numbers are drawn in, and the
+// icons to compare slots with (bankicons.png).
+//
+// Icons are matched on their outline first: the client draws it in one fixed
+// colour (1, near black), so a shape is exact whatever the brightness setting.
+// Colour then picks the item among the same shape. So the icon set holds every
+// planner item, the icons arrows and bolts switch to in bigger stacks, and
+// every other item with one of those outlines, so a lookalike (a 4-dose potion,
+// a quest herb) is recognised as something else instead of taken for ours.
+async function bankScreenshots() {
+  // Layout, from the bank interface: the scrolling layer and the item grid in it.
+  const bankIf = await readConfig(scripts('interface_bank/interfaces/bank_main.if'));
+  const grid = bankIf.get('inv');
+  const view = bankIf.get(grid.props.layer);
+  const [marginX, marginY] = grid.props.margin.split(',').map(Number);
+  const layout = {
+    cols: Number(grid.props.width), rows: Number(grid.props.height),
+    pitchX: 32 + marginX, pitchY: 32 + marginY,
+    gridX: Number(grid.props.x), gridY: Number(grid.props.y),         // grid inside the scrolling view
+    viewW: Number(view.props.width), viewH: Number(view.props.height), scrollHeight: Number(view.props.scroll),
+  };
+
+  // Stack numbers: the client's p11 font, rebuilt from fonts/p11_full.png the
+  // way the engine packs it (each 20x20 cell cropped to its pixels) and the
+  // client loads it (spacing worked out from the edge columns).
+  const fontPng = await sharp(join(CONTENT, 'fonts/p11_full.png')).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const [cellW, cellH] = (await readFile(join(CONTENT, 'fonts/meta/p11_full.opt'), 'ascii')).trim().split('x').map(Number);
+  const glyph = c => {
+    const tx = (c % 16) * cellW, ty = Math.floor(c / 16) * cellH;
+    const on = (x, y) => { const p = ((ty + y) * fontPng.info.width + tx + x) * 4; return !(fontPng.data[p] === 0xff && fontPng.data[p + 1] === 0 && fontPng.data[p + 2] === 0xff); };
+    let l = cellW, t = cellH, r = -1, b = -1;
+    for (let y = 0; y < cellH; y++) for (let x = 0; x < cellW; x++) if (on(x, y)) { l = Math.min(l, x); t = Math.min(t, y); r = Math.max(r, x); b = Math.max(b, y); }
+    if (r < 0) return { offX: 0, offY: 0, w: cellW, h: cellH, adv: cellW + 2, mask: '' };
+    const w = r - l + 1, h = b - t + 1;
+    let mask = '';
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) mask += on(l + x, t + y) ? '1' : '0';
+    let offX = 1, adv = w + 2;
+    const k = Math.floor(h / 7);
+    let s = 0;
+    for (let y = k; y < h; y++) s += Number(mask[y * w]);
+    if (s <= k) { adv--; offX = 0; }
+    s = 0;
+    for (let y = k; y < h; y++) s += Number(mask[w + y * w - 1]);
+    if (s <= k) adv--;
+    return { offX, offY: t, w, h, adv, mask };
+  };
+  let height = 0;
+  for (let c = 0; c < 128; c++) height = Math.max(height, glyph(c).h);
+  const font = { height, glyphs: Object.fromEntries([...'0123456789KM'].map(ch => [ch, glyph(ch.charCodeAt(0))])) };
+
+  // Count variants: the icon a stack switches to (count1=bronze_arrow_2,2 …).
+  const variants = new Map();               // variant -> base item
+  const { readdir } = await import('node:fs/promises');
+  const objFiles = (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.obj'));
+  for (const f of objFiles) {
+    for (const block of (await readConfig(scripts(f))).values()) {
+      if (!items[block.name]) continue;
+      for (const [k, v] of Object.entries(block.props)) if (/^count\d+$/.test(k)) variants.set(need(v.split(',')[0]), block.name);
+    }
+  }
+
+  // Outlines of every icon on LostHQ's sheet.
+  const iconPixels = id => {
+    const sx = (id % 64) * SIZE, sy = Math.floor(id / 64) * SIZE, px = Buffer.alloc(SIZE * SIZE * 4);
+    for (let y = 0; y < SIZE; y++) sheet.copy(px, y * SIZE * 4, ((sy + y) * sheetMeta.width + sx) * 4, ((sy + y) * sheetMeta.width + sx + SIZE) * 4);
+    return px;
+  };
+  const outlineOf = px => {
+    const k = [];
+    for (let i = 0; i < SIZE * SIZE; i++) if (px[i * 4 + 3] && px[i * 4] === 0 && px[i * 4 + 1] === 0 && px[i * 4 + 2] === 1) k.push(i);
+    return k.length >= 8 ? k.join(',') : null;
+  };
+  const byOutline = new Map();
+  for (const it of itemList) {
+    if (it.id >= (sheetMeta.width / SIZE) * (sheetMeta.height / SIZE)) continue;
+    const key = outlineOf(iconPixels(it.id));
+    if (key) (byOutline.get(key) || byOutline.set(key, []).get(key)).push(it.debugname);
+  }
+
+  // The icon set: ours first, then variants, then lookalikes. An icon that is
+  // pixel for pixel another one already in the set adds nothing and is left out;
+  // when it's one of ours it's noted under also, since a screenshot can't tell
+  // them apart (lantadyme has no colour of its own in this version, so it looks
+  // like any unid herb).
+  const unidKey = outlineOf(iconPixels(ITEM.get(unidHerbs.item).id));
+  const entries = [];
+  const seen = new Map();                    // pixels -> entry
+  const add = (slug, extra = {}) => {
+    const px = iconPixels(ITEM.get(slug).id);
+    const key = px.toString('base64');
+    if (!outlineOf(px)) return;
+    if (seen.has(key)) {
+      const kept = seen.get(key);
+      if (items[slug] && slug !== kept.slug && !kept.also?.includes(slug)) (kept.also ||= []).push(slug);
+      return;
+    }
+    const e = { slug, ...extra };
+    seen.set(key, e);
+    entries.push({ e, px });
+  };
+  for (const name of names) add(name);
+  for (const [v, base] of variants) add(v, { of: base });
+  const ours = new Set(entries.map(x => x.e.slug));
+  for (const { px } of [...entries]) {
+    for (const other of byOutline.get(outlineOf(px)) || []) {
+      if (ours.has(other)) continue;
+      // every unidentified herb is the same "Herb": counted as the one unid entry
+      const unid = outlineOf(px) === unidKey && other.startsWith('unidentified_');
+      add(other, unid ? { of: unidHerbs.item } : { other: 1 });
+    }
+  }
+
+  const bRows = Math.ceil(entries.length / PER_ROW);
+  const bAtlas = Buffer.alloc(PER_ROW * SIZE * bRows * SIZE * 4);
+  entries.forEach(({ px }, n) => {
+    const dx = (n % PER_ROW) * SIZE, dy = Math.floor(n / PER_ROW) * SIZE;
+    for (let y = 0; y < SIZE; y++) px.copy(bAtlas, ((dy + y) * PER_ROW * SIZE + dx) * 4, y * SIZE * 4, (y + 1) * SIZE * 4);
+  });
+  await sharp(bAtlas, { raw: { width: PER_ROW * SIZE, height: bRows * SIZE, channels: 4 } })
+    .png({ compressionLevel: 9, palette: false }).toFile('bankicons.png');
+
+  await writeFile('bankread-data.js', `// Generated by build-data.mjs. Do not edit by hand; change the script and re-run it.
+// What bankread.js reads a bank screenshot with. Layout from Lost City's bank
+// interface and font from fonts/p11_full.png (LostCityRS/Content, MIT); icons
+// in bankicons.png from LostHQ's item sheet (GPL-3.0). RuneScape is (c) Jagex Ltd.
+
+// The bank's item grid, inside a view that scrolls (sizes in pixels).
+export const BANK_LAYOUT = ${JSON.stringify(layout)};
+
+// Stack numbers: glyphs of the p11 font. mask is row by row, '1' = drawn.
+export const STACK_FONT = ${JSON.stringify(font)};
+
+// bankicons.png, ${PER_ROW} per row, in this order. slug: a planner item, or with
+// of: an icon of that item (a bigger stack of arrows, any unid herb), or with
+// other: an item the planner doesn't use that looks like one it does.
+export const BANK_ICONS_PER_ROW = ${PER_ROW};
+export const BANK_ICONS = [
+${entries.map(({ e }) => '  ' + JSON.stringify(e)).join(',\n')},
+];
+`);
+  const counts = entries.reduce((a, { e }) => { a[e.of ? 'variants' : e.other ? 'others' : 'ours']++; return a; }, { ours: 0, variants: 0, others: 0 });
+  console.log(`bankread-data.js: ${entries.length} icons (${counts.ours} planner items, ${counts.variants} variants, ${counts.others} lookalikes); bankicons.png ${PER_ROW * SIZE}x${bRows * SIZE}`);
+}
+
+await bankScreenshots();
