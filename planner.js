@@ -59,6 +59,34 @@ export class Stock {
   toObject() { return Object.fromEntries([...this.q].filter(([, v]) => v > 0)); }
 }
 
+// ── Outputs that grow with level ──────────────────────────────────────────
+// What one action of m makes at `level`. Runecrafting makes more runes per
+// essence as you level: floor(level / multiple) + 1, the server's own sum.
+export function outAt(m, level) {
+  if (!m.multiple) return m.out;
+  const k = Math.floor(level / m.multiple) + 1;
+  const out = {};
+  for (const [item, q] of Object.entries(m.out)) out[item] = q * k;
+  return out;
+}
+
+// What `runs` actions of m make, starting from startXp10, with the level (and so
+// the runes per essence) going up on the way.
+export function madeOver(m, runs, startXp10) {
+  const made = {};
+  const add = (out, n) => { for (const [item, q] of Object.entries(out)) made[item] = (made[item] || 0) + q * n; };
+  if (!m.multiple || m.xp <= 0) { add(m.out, runs); return made; }
+  let xp = startXp10, left = runs;
+  while (left > 0) {
+    const level = levelForXp10(xp);
+    const n = level >= MAX_LEVEL ? left : Math.min(left, Math.max(1, Math.ceil((xp10ForLevel(level + 1) - xp) / m.xp)));
+    add(outAt(m, level), n);
+    xp += n * m.xp;
+    left -= n;
+  }
+  return made;
+}
+
 // ── Method index ──────────────────────────────────────────────────────────
 export function indexMethods(methods) {
   const byId = new Map(methods.map(m => [m.id, m]));
@@ -119,7 +147,7 @@ function perform(ix, m, runs, stock, ctx, log, depth = 0) {
       log.assumed[item] = (log.assumed[item] || 0) + missing;
     }
   }
-  for (const [item, q] of Object.entries(m.out)) stock.add(item, runs * q);
+  for (const [item, q] of Object.entries(outAt(m, ctx.level))) stock.add(item, runs * q);
   log.steps[m.id] = (log.steps[m.id] || 0) + runs;
   return xp + runs * m.xp;
 }
@@ -149,7 +177,7 @@ export function expand(ix, m, runs, stock, ctx) {
       }
       if (missing > 0) out.buy[item] = (out.buy[item] || 0) + missing;
     }
-    for (const [item, q] of Object.entries(method.out)) stock.add(item, r * q);
+    for (const [item, q] of Object.entries(outAt(method, ctx.level))) stock.add(item, r * q);
   };
   go(m, runs, 0);
   return out;
@@ -159,36 +187,47 @@ const BANK_KINDS = new Set(['prep', 'source']);
 // ── Using the bank ────────────────────────────────────────────────────────
 // Trains with what the bank holds, best XP per action first, until nothing more
 // can be made. Stops to re-think whenever a better method unlocks on the way.
-export function planBank(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new Set(), unlimited = new Set() }) {
+// prefer: the method you picked to train with; it goes first whenever it can.
+export function planBank(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new Set(), unlimited = new Set(), prefer = null }) {
   const stock = new Stock(bank);
   const log = { steps: {}, assumed: {} };
-  const steps = [];                           // [{ id, runs, xp10, sub: {id: runs} }] in order
+  const steps = [];                           // [{ id, runs, xp10, sub: {id: runs}, made: {item: n} }] in order
   let xp = startXp10;
   let goalReached = null;                     // { step index, runs into that step }
   const usable = ix.train.filter(m => !excluded.has(m.id));
+  const pick = prefer && !excluded.has(prefer) ? ix.byId.get(prefer) : null;
 
   for (let guard = 0; guard < 400; guard++) {
     const level = levelForXp10(xp);
     const ctx = { level, kinds: BANK_KINDS, unlimited };
     let best = null, bestRuns = 0;
-    for (const m of usable) {
-      if (m.level > level) continue;
-      if (best && m.xp < best.xp) continue;
-      const r = maxRuns(ix, m, stock, ctx);
-      if (r > 0 && (!best || m.xp > best.xp || (m.xp === best.xp && m.level < best.level))) { best = m; bestRuns = r; }
+    if (pick && pick.xp > 0 && pick.level <= level) {
+      const r = maxRuns(ix, pick, stock, ctx);
+      if (r > 0) { best = pick; bestRuns = r; }
+    }
+    if (!best) {
+      for (const m of usable) {
+        if (m.level > level) continue;
+        if (best && m.xp < best.xp) continue;
+        const r = maxRuns(ix, m, stock, ctx);
+        if (r > 0 && (!best || m.xp > best.xp || (m.xp === best.xp && m.level < best.level))) { best = m; bestRuns = r; }
+      }
     }
     if (!best) break;
 
-    // A better method that unlocks later and could be made from this bank: only go
-    // as far as its level, then look again.
+    // A better method (or the one you picked) that unlocks later and could be made
+    // from this bank: only go as far as its level, then look again.
     let runs = bestRuns;
-    const better = usable.filter(m => m.level > level && m.xp > best.xp &&
-      maxRuns(ix, m, stock, { level: m.level, kinds: BANK_KINDS, unlimited }) > 0);
-    if (better.length) {
-      const unlock = Math.min(...better.map(m => m.level));
-      runs = Math.max(1, Math.min(runs, Math.ceil((xp10ForLevel(unlock) - xp) / best.xp)));
+    if (best !== pick) {
+      const better = usable.filter(m => m.level > level && (m.xp > best.xp || m === pick) &&
+        maxRuns(ix, m, stock, { level: m.level, kinds: BANK_KINDS, unlimited }) > 0);
+      if (better.length) {
+        const unlock = Math.min(...better.map(m => m.level));
+        runs = Math.max(1, Math.min(runs, Math.ceil((xp10ForLevel(unlock) - xp) / best.xp)));
+      }
     }
 
+    const made = madeOver(best, runs, xp);
     const before = { ...log.steps };
     const gained = perform(ix, best, runs, stock, ctx, log);
     const sub = {};
@@ -204,9 +243,10 @@ export function planBank(ix, { bank = {}, startXp10, targetXp10 = null, excluded
     if (last && last.id === best.id) {
       last.runs += runs; last.xp10 += gained;
       for (const [id, n] of Object.entries(sub)) last.sub[id] = (last.sub[id] || 0) + n;
+      for (const [item, n] of Object.entries(made)) last.made[item] = (last.made[item] || 0) + n;
       if (goalReached && goalReached.index === steps.length) { goalReached.index = steps.length - 1; goalReached.runs += last.runs - runs; }
     } else {
-      steps.push({ id: best.id, runs, xp10: gained, sub });
+      steps.push({ id: best.id, runs, xp10: gained, sub, made });
     }
     xp += gained;
   }
@@ -242,7 +282,7 @@ function valueOf(items, priceOf) {
 export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited = new Set() } = {}) {
   const need = expand(ix, m, 1, new Stock(), { level, unlimited });
   const cost = valueOf(need.buy, priceOf);
-  const value = valueOf(m.out, priceOf);
+  const value = valueOf(outAt(m, level), priceOf);
   const known = !cost.missing.length && !value.missing.length;
   const profit = value.total - cost.total;
   return {
@@ -266,7 +306,7 @@ export function planGoal(ix, opts) {
   const toGo = Math.max(0, targetXp10 - currentXp10);
 
   const fromBank = useBank
-    ? planBank(ix, { bank, startXp10: currentXp10, targetXp10, excluded, unlimited })
+    ? planBank(ix, { bank, startXp10: currentXp10, targetXp10, excluded, unlimited, prefer: fillId })
     : { steps: [], used: {}, assumed: {}, leftover: new Stock(bank), xp10: 0, endXp10: currentXp10, endLevel: level, goalReached: null };
 
   // Then: what's still missing, with the method you pick.
@@ -294,13 +334,13 @@ export function planGoal(ix, opts) {
         const upTo = Math.min(targetXp10, xp10ForLevel(method.level));
         if (bridge && upTo > xp) {
           const runs = Math.ceil((upTo - xp) / bridge.xp);
-          segments.push({ id: bridge.id, runs, xp10: runs * bridge.xp, bridge: true });
+          segments.push({ id: bridge.id, runs, xp10: runs * bridge.xp, bridge: true, made: madeOver(bridge, runs, xp) });
           xp += runs * bridge.xp;
         }
       }
       if (xp < targetXp10) {
         const runs = Math.ceil((targetXp10 - xp) / method.xp);
-        segments.push({ id: method.id, runs, xp10: runs * method.xp });
+        segments.push({ id: method.id, runs, xp10: runs * method.xp, made: madeOver(method, runs, xp) });
       }
       const buy = {}, steps = {};
       for (const s of segments) {
@@ -337,7 +377,7 @@ export function planGoal(ix, opts) {
       id: m.id, level: m.level, xp10: m.xp, locked: m.level > level,
       needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), toMake: Math.max(0, needed - have),
       collect, balance,
-      econ: methodEconomics(ix, m, priceOf, { unlimited: new Set() }),
+      econ: methodEconomics(ix, m, priceOf, { level: Math.max(level, m.level) }),
     };
   });
 

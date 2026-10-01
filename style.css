@@ -503,6 +503,10 @@ table.plan-t tr.off td { opacity: 0.5; }
 table.plan-t tr.hl td:first-child { box-shadow: inset 3px 0 0 var(--gold-hi); }
 table.plan-t input[type=checkbox] { accent-color: var(--gold); cursor: pointer; }
 
+.skill-switch { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.skill-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; }
+.skill-tab .ico { width: 24px; height: 24px; }
+.mult { margin-left: 4px; padding: 0 4px; border: 1px solid var(--gold-dim); border-radius: 3px; font-family: var(--small); font-size: 12px; color: var(--gold-hi); }
 .bank-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 14px; color: var(--muted); }
 .bank-sum b { color: #fff; font-weight: normal; }
 .bank-group h4 { margin: 0 0 6px; font-weight: normal; font-size: 15px; color: var(--gold-hi); }

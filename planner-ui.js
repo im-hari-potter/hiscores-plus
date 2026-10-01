@@ -16,6 +16,13 @@ const INDEX = {};
 for (const key of new Set(METHODS.map(m => m.skill))) INDEX[key] = indexMethods(METHODS.filter(m => m.skill === key));
 export const hasCalculator = key => !!INDEX[key];
 
+// Wording that depends on the skill.
+const SKILL_TEXT = {
+  herblore: { what: 'Potion', each: 'potion', bankHint: 'herbs, unfinished potions and secondaries' },
+  runecraft: { what: 'Rune', each: 'essence', bankHint: 'rune essence' },
+};
+const textFor = key => SKILL_TEXT[key] || { what: 'Make', each: 'action', bankHint: 'the items it uses' };
+
 // Cheap supplies that shouldn't hold a plan back (still shown as needed).
 const DEFAULT_ASSUME = { herblore: ['vial_water'] };
 const ASSUME_LABEL = { herblore: 'vials of water' };
@@ -79,12 +86,12 @@ export function createPlanner(ctx) {
     show: ['all', 'active', 'done'].includes(ui.show) ? ui.show : 'all',     // goal filter: status
     only: SKILL_BY_KEY.has(ui.only) ? ui.only : null,                        // goal filter: one skill
     visible: [],                                                              // goal ids shown, in order
-    bankSkill: 'herblore',
+    bankSkill: BANK_GROUPS[ui.bankSkill] ? ui.bankSkill : 'herblore',   // which skill the Bank and Prices tabs show
     rankLoading: new Set(),
     goalErr: {},
     tab: null,
   };
-  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only });
+  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only, bankSkill: S.bankSkill });
 
   // ── Storage per account ─────────────────────────────────────────────────
   const safe = () => (S.account ? toSafeName(S.account) : '');
@@ -257,6 +264,21 @@ export function createPlanner(ctx) {
     }).join('');
   }
   const pct = (a, b) => (b > 0 ? Math.max(0, Math.min(100, (a / b) * 100)) : 100);
+  // "700 × Prayer potion", or for a method counted in what it uses:
+  // "5,000 essence → 25,000 Air runes"
+  function actionText(m, runs, made) {
+    if (!m.unit) return `<b>${fmt(runs)}</b> × ${esc(m.name)}`;
+    const [item, n] = Object.entries(made || {})[0] || [methodOut(m), runs];
+    return `<b>${fmt(runs)}</b> ${esc(m.unit)} → <b>${fmt(n)}</b> ${esc(n === 1 ? m.name : m.name + 's')}`;
+  }
+  // "×3", for runes that come more than one per essence at this level
+  function multipleBadge(m, level) {
+    if (!m.multiple) return '';
+    const k = Math.floor(level / m.multiple) + 1;
+    const next = (k) * m.multiple;
+    const tip = `${k} per ${m.unit || 'action'} at level ${level}${next <= MAX_LEVEL ? `, ${k + 1} from level ${next}` : ''}`;
+    return k > 1 || next <= MAX_LEVEL ? ` <span class="mult" title="${esc(tip)}">×${k}</span>` : '';
+  }
   // Methods by group, the main way to train (kind xp) first: [[group, methods], ...]
   function groupsOf(methods) {
     const map = new Map();
@@ -491,7 +513,7 @@ export function createPlanner(ctx) {
       <label class="check"><input type="checkbox" data-gopt="useBank" ${useBank ? 'checked' : ''}> Use my bank</label>
       ${ASSUME_LABEL[goal.skill] ? `<label class="check" title="When on, running out of these never stops a plan; you still see how many you need."><input type="checkbox" data-gopt="assume" ${assume.size ? 'checked' : ''}> I'll buy ${ASSUME_LABEL[goal.skill]} as I go</label>` : ''}
       <span class="c-faint">${bankCount ? `${bankCount} kinds of item in your bank, updated ${ago(b.updated)}` : 'Your bank is empty'} ·</span>
-      <button type="button" class="linkish" data-act="to-bank">Edit bank</button>
+      <button type="button" class="linkish" data-act="to-bank" data-skill="${goal.skill}">Edit bank</button>
     </div>`;
     return `<div class="plan">${opts}${useBank ? bankHtml(goal, plan, ix) : ''}${thenHtml(goal, plan, ix)}${tableHtml(goal, plan, ix, cur)}</div>`;
   }
@@ -509,7 +531,7 @@ export function createPlanner(ctx) {
     const fb = plan.fromBank;
     if (!fb.steps.length) {
       return `<div class="plan-sec"><h4>From your bank</h4><div class="c-faint small-note">Nothing in your bank makes ${esc(SKILL_BY_KEY.get(goal.skill).name)} XP at your level yet.
-        Add herbs, unfinished potions and secondaries in the <button type="button" class="linkish" data-act="to-bank">Bank</button> tab.</div>${unidNote(goal)}</div>`;
+        Add ${textFor(goal.skill).bankHint} in the <button type="button" class="linkish" data-act="to-bank" data-skill="${goal.skill}">Bank</button> tab.</div>${unidNote(goal)}</div>`;
     }
     const rows = fb.steps.map((s, i) => {
       const m = ix.byId.get(s.id);
@@ -520,7 +542,7 @@ export function createPlanner(ctx) {
       const goalHere = fb.goalReached && fb.goalReached.index === i
         ? `<span class="goal-flag" title="Your goal is reached during this step">Goal after ${fmt(fb.goalReached.runs)}</span>` : '';
       return `<div class="step">${itemIcon(methodOut(m))}<div class="step-main">
-          <div><b>${fmt(s.runs)}</b> × ${esc(m.name)} <span class="c-level">+${xpText(s.xp10)} XP</span> ${goalHere}</div>
+          <div>${actionText(m, s.runs, s.made)} <span class="c-level">+${xpText(s.xp10)} XP</span> ${goalHere}</div>
           ${subs.length ? `<div class="c-faint small-note">incl. ${subs.join(', ')}</div>` : ''}
         </div></div>`;
     }).join('');
@@ -539,11 +561,11 @@ export function createPlanner(ctx) {
       `<optgroup label="${esc(name)}">${list.map(m => `<option value="${m.id}"${m.id === f.id ? ' selected' : ''}>${esc(m.name)} (lvl ${m.level}, ${xpText(m.xp)} XP)</option>`).join('')}</optgroup>`).join('')}</select>`;
     const segs = f.segments.map(s => {
       const m = ix.byId.get(s.id);
-      return `<div class="step">${itemIcon(methodOut(m))}<div class="step-main"><div>${s.bridge ? 'First ' : ''}<b>${fmt(s.runs)}</b> × ${esc(m.name)} <span class="c-level">+${xpText(s.xp10)} XP</span>${s.bridge ? ` <span class="c-faint">to reach level ${ix.byId.get(f.id).level}</span>` : ''}</div></div></div>`;
+      return `<div class="step">${itemIcon(methodOut(m))}<div class="step-main"><div>${s.bridge ? 'First ' : ''}${actionText(m, s.runs, s.made)} <span class="c-level">+${xpText(s.xp10)} XP</span>${s.bridge ? ` <span class="c-faint">to reach level ${ix.byId.get(f.id).level}</span>` : ''}</div></div></div>`;
     }).join('');
     // Money: buying what's missing, and what the made items are worth.
     const made = {};
-    for (const s of f.segments) for (const [item, q] of Object.entries(ix.byId.get(s.id).out)) made[item] = (made[item] || 0) + q * s.runs;
+    for (const s of f.segments) for (const [item, n] of Object.entries(s.made)) made[item] = (made[item] || 0) + n;
     const worth = bankValue(made, prices.priceOf);
     const known = !f.costMissing.length && !worth.missing.length;
     const money = `<div class="money">
@@ -559,6 +581,12 @@ export function createPlanner(ctx) {
       <div class="steps">${segs}</div>
       <div class="collect"><span class="c-muted">To collect or buy:</span> ${itemList(f.buy)}</div>
       ${money}${balance}</div>`;
+  }
+
+  function unitNote(key, ix) {
+    const each = textFor(key).each;
+    const counted = ix.train.some(m => m.unit) ? ` Counts are in ${each}.` : '';
+    return `To goal = how many on their own · From bank = how many your bank covers now · Profit is per ${each}, bought from scratch.${counted}`;
   }
 
   function tableHtml(goal, plan, ix, cur) {
@@ -578,7 +606,7 @@ export function createPlanner(ctx) {
           (e.profit != null ? `\nCosts ${gpShort(e.cost)}, worth ${gpShort(e.value)}: ${e.profit >= 0 ? 'profit' : 'loss'} ${gpShort(Math.abs(e.profit))} each` : '');
         return `<tr class="${r.locked ? 'dim ' : ''}${chosen ? 'hl ' : ''}${excluded.has(m.id) ? 'off' : ''}" data-method="${m.id}" title="${esc(title)}">
           <td>${m.level}</td>
-          <td class="l"><span class="sk-cell">${itemIcon(methodOut(m), true)} ${esc(m.name)}</span></td>
+          <td class="l"><span class="sk-cell">${itemIcon(methodOut(m), true)} ${esc(m.name)}${multipleBadge(m, Math.max(cur?.level || 1, m.level))}</span></td>
           <td>${xpText(m.xp)}</td>
           <td>${r.needed ? fmt(r.needed) : '–'}</td>
           <td>${goal.useBank === false ? '–' : r.have ? `<span class="c-level">${fmt(r.have)}</span>` : '0'}</td>
@@ -593,10 +621,21 @@ export function createPlanner(ctx) {
     const sBtn = (k, label) => `<button type="button" class="${S.sort === k ? 'on' : ''}" data-tsort-plan="${k}">${label}</button>`;
     return `<div class="plan-sec"><h4>Every option <span class="c-faint">(on its own, from ${cur ? `level ${cur.level}` : 'now'}; click one to train with it)</span></h4>
       <div class="bar wrap"><span class="c-muted small-note">Sort</span><div class="seg">${sBtn('level', 'Level')}${sBtn('xp', 'XP each')}${sBtn('cheap', 'Cheapest XP')}</div>
-        <span class="c-faint small-note">To goal = how many on their own · From bank = how many your bank makes now · Profit is per potion, bought from scratch.</span></div>
+        <span class="c-faint small-note">${unitNote(goal.skill, ix)}</span></div>
       <div class="table-wrap"><table class="grid plan-t">
-        <thead><tr><th>Lvl</th><th class="l">Make</th><th>XP</th><th>To goal</th><th>From bank</th><th>Still</th><th class="l">Collect</th><th>Profit</th><th>gp/XP</th><th title="Let the bank plan use this">Use</th></tr></thead>
+        <thead><tr><th>Lvl</th><th class="l">${textFor(goal.skill).what}</th><th>XP</th><th>To goal</th><th>From bank</th><th>Still</th><th class="l">Collect</th><th>Profit</th><th>gp/XP</th><th title="Let the bank plan use this">Use</th></tr></thead>
         <tbody>${body}</tbody></table></div></div>`;
+  }
+
+  // Skill tabs on the Bank and Prices views, for the skills the planner covers.
+  function skillSwitch() {
+    const keys = Object.keys(BANK_GROUPS);
+    if (keys.length < 2) return '';
+    return `<div class="skill-switch" role="group" aria-label="Skill">${keys.map(k => {
+      const sk = SKILL_BY_KEY.get(k);
+      const on = k === S.bankSkill;
+      return `<button type="button" class="tab skill-tab${on ? ' active' : ''}" data-bskill="${k}" aria-pressed="${on}">${iconImg(sk)} ${esc(sk.name)}</button>`;
+    }).join('')}</div>`;
   }
 
   // ── Bank view ───────────────────────────────────────────────────────────
@@ -615,7 +654,11 @@ export function createPlanner(ctx) {
     const b = bank();
     const value = bankValue(b.items, prices.priceOf);
     const kinds = Object.values(b.items).filter(n => n > 0).length;
-    $('bank-head').innerHTML = `<div class="bank-sum">
+    const hint = {
+      herblore: 'Unid herbs are one entry: every "Herb" in your bank, whatever it turns out to be.',
+      runecraft: 'Rune essence is the only essence in this version of the game; pure essence came later.',
+    }[S.bankSkill] || '';
+    $('bank-head').innerHTML = `${skillSwitch()}<div class="bank-sum">
       <span>${kinds ? `<b>${kinds}</b> kind${kinds === 1 ? '' : 's'} of item` : 'Nothing entered yet'}${b.updated ? ` · updated ${ago(b.updated)}` : ''}</span>
       ${kinds ? `<span>Worth about <b class="c-xp">${gpShort(value.total)}</b> gp${value.missing.length ? ` <span class="c-faint">(${value.missing.length} without a price)</span>` : ''}</span>` : ''}
       <span class="grow"></span>
@@ -623,7 +666,7 @@ export function createPlanner(ctx) {
       <button type="button" class="btn small danger" data-act="bank-clear">Clear bank</button>
     </div>
     <p class="note">Type what you have: 1500, 1.5k or 2m all work. Only the items the planner uses are listed; more skills come in later updates.
-      Unid herbs are one entry: every "Herb" in your bank, whatever it turns out to be.</p>`;
+      ${hint}</p>`;
   }
 
   function bankCell(slug) {
@@ -642,7 +685,7 @@ export function createPlanner(ctx) {
     const st = prices.status();
     const head = $('prices-head');
     const running = st.busy || st.queued;
-    head.innerHTML = `<div class="card">
+    head.innerHTML = `${skillSwitch()}<div class="card">
       <div class="bar wrap">
         <button type="button" class="btn small" data-act="prices-refresh"${running ? ' disabled' : ''}>Check prices now</button>
         ${running ? `<button type="button" class="btn small" data-act="prices-stop">Stop</button><span class="busy">Checking ${fmt(Math.min(st.done + 1, st.total))} of ${fmt(st.total)}…</span>` : ''}
@@ -716,7 +759,7 @@ export function createPlanner(ctx) {
   function show(tab) {
     render(tab);
     if (S.account && (tab === 'goals' || tab === 'bank')) loadProfile();
-    if (tab === 'prices') wantPrices(Object.keys(BANK_GROUPS));
+    if (tab === 'prices') wantPrices([S.bankSkill]);
   }
 
   // Price updates arrive one item at a time; redraw about once a second.
@@ -751,6 +794,13 @@ export function createPlanner(ctx) {
     if (nskill) { S.newGoal.skill = nskill.dataset.nskill; saveUi(); showMsg('goals-msg', ''); renderNewGoal(); return; }
     const ntype = t.closest('[data-ntype]');
     if (ntype) { S.newGoal.type = ntype.dataset.ntype; saveUi(); showMsg('goals-msg', ''); renderNewGoal(); return; }
+    const bskill = t.closest('[data-bskill]');
+    if (bskill) {
+      S.bankSkill = bskill.dataset.bskill; saveUi();
+      render(S.tab);
+      if (S.tab === 'prices') wantPrices([S.bankSkill]);
+      return;
+    }
     const gshow = t.closest('[data-gshow]');
     if (gshow) { S.show = gshow.dataset.gshow; saveUi(); renderGoals(); return; }
     const gonly = t.closest('[data-gonly]');
@@ -797,7 +847,10 @@ export function createPlanner(ctx) {
         S.open.delete(card.dataset.goal); saveUi();
         renderGoals();
         break;
-      case 'to-bank': ctx.goTab('bank'); break;
+      case 'to-bank':
+        if (BANK_GROUPS[act.dataset.skill]) { S.bankSkill = act.dataset.skill; saveUi(); }
+        ctx.goTab('bank');
+        break;
       case 'bank-prices': prices.want(Object.keys(bank().items), { force: true }); renderBankHead(); break;
       case 'bank-clear':
         if (!act.dataset.armed) { act.dataset.armed = '1'; act.textContent = 'Click again to clear'; break; }

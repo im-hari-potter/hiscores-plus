@@ -32,14 +32,17 @@ LostKit, or remove it and add it again. Your saved data stays either way.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
     or only one skill.
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
-  - **Herblore** has the full planner so far; the other skills follow in later updates. It shows:
+  - **Herblore** and **Runecraft** have the full planner so far; the other skills follow in later updates.
+    Runecraft counts in essence, and shows how many runes each essence makes at your level (×2, ×3…).
+  - For Herblore, the planner shows:
     - what your bank already makes, best XP first, including unfinished potions;
     - how many potions are left after that, with the method you pick;
     - what to collect or buy, and a tip when your ingredients don't pair up (e.g. "collect 300 snape
       grass and your bank makes 1,000 prayer potions instead of 700");
     - every potion side by side: how many to the goal, how many your bank covers, profit per potion,
       and gp per XP.
-- **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work). Each account has its own bank.
+- **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
+  its own bank.
   The bank's value is shown with market prices.
   - Unidentified herbs are one "Unid herb" entry, because in-game they're all a plain "Herb". They count
     toward the bank's value, priced from the market's unid listing. Plans leave them out until you

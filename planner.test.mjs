@@ -5,10 +5,11 @@ import { METHODS, ITEMS, BANK_GROUPS, UNID_HERBS } from './gamedata.js';
 import { mergeUnids } from './planner-ui.js';
 import {
   xp10ForLevel, levelForXp10, goalTargetXp10, rankForTop, indexMethods, planBank, planGoal,
-  methodEconomics, maxRuns, Stock, bankValue,
+  methodEconomics, maxRuns, Stock, bankValue, outAt, madeOver,
 } from './planner.js';
 
 const ix = indexMethods(METHODS.filter(m => m.skill === 'herblore'));
+// (Runecraft tests at the end use their own index.)
 const VIALS = new Set(['vial_water']);
 const row = (plan, id) => plan.table.find(r => r.id === id);
 
@@ -159,4 +160,59 @@ test('with no method picked, the plan carries on with what the bank was making',
   assert.equal(empty.fill.id, 'hb_3doserangerspotion', 'best XP at level 74');
   const excluded = planGoal(ix, { ...opts, bank: {}, excluded: new Set(['hb_3doserangerspotion']), fillId: 'hb_3doserangerspotion' });
   assert.equal(excluded.fill.id, 'hb_3dose1antidragon', 'an excluded pick falls back to the next best');
+});
+
+// ── Runecraft ─────────────────────────────────────────────────────────────
+const rc = indexMethods(METHODS.filter(m => m.skill === 'runecraft'));
+
+test('runecraft: XP per essence and runes per essence come from the server data', () => {
+  assert.deepEqual(rc.train.map(m => [m.name, m.level, m.xp / 10]), [
+    ['Air rune', 1, 5], ['Mind rune', 2, 5.5], ['Water rune', 5, 6], ['Earth rune', 9, 6.5], ['Fire rune', 14, 7],
+    ['Body rune', 20, 7.5], ['Cosmic rune', 27, 8], ['Chaos rune', 35, 8.5], ['Nature rune', 44, 9], ['Law rune', 54, 9.5],
+  ]);
+  const air = rc.byId.get('rc_airrune'), nature = rc.byId.get('rc_naturerune'), law = rc.byId.get('rc_lawrune');
+  assert.deepEqual([10, 11, 22, 99].map(l => outAt(air, l).airrune), [1, 2, 3, 10]);
+  assert.deepEqual([90, 91, 99].map(l => outAt(nature, l).naturerune), [1, 2, 2]);
+  assert.equal(outAt(law, 99).lawrune, 1, 'law runes are always one per essence');
+});
+
+test('runecraft: runes made go up as the level does on the way', () => {
+  const air = rc.byId.get('rc_airrune');
+  const start = xp10ForLevel(11) - 10 * 50;            // ten essences short of 11
+  assert.deepEqual(madeOver(air, 30, start), { airrune: 10 * 1 + 20 * 2 });
+  assert.deepEqual(madeOver(rc.byId.get('rc_lawrune'), 30, start), { lawrune: 30 });
+});
+
+test('runecraft: a bank of essence, best XP first or the rune you picked', () => {
+  const opts = { bank: { blankrune: 5000 }, currentXp10: xp10ForLevel(44), targetXp10: xp10ForLevel(60) };
+  const plan = planGoal(rc, opts);
+  assert.equal(plan.fromBank.steps.length, 1);
+  assert.equal(plan.fromBank.steps[0].id, 'rc_naturerune', 'best XP at 44');
+  assert.equal(plan.fromBank.steps[0].runs, 5000);
+  assert.equal(plan.fromBank.xp10, 5000 * 90);
+  assert.deepEqual(plan.fromBank.steps[0].made, { naturerune: 5000 });
+  assert.equal(plan.fill.id, 'rc_naturerune', 'carries on with nature runes');
+  const left = xp10ForLevel(60) - xp10ForLevel(44) - 5000 * 90;
+  assert.deepEqual(plan.fill.buy, { blankrune: Math.ceil(left / 90) });
+
+  const air = planGoal(rc, { ...opts, fillId: 'rc_airrune' });
+  assert.equal(air.fromBank.steps[0].id, 'rc_airrune', 'the bank goes to the rune you picked');
+  assert.equal(air.fromBank.steps[0].made.airrune, 5000 * 5, '5 air runes per essence at 44');
+  const row = air.table.find(r => r.id === 'rc_airrune');
+  assert.equal(row.have, 5000);
+  assert.equal(row.needed, Math.ceil((xp10ForLevel(60) - xp10ForLevel(44)) / 50));
+  assert.deepEqual(row.collect, { blankrune: row.needed - 5000 });
+});
+
+test('runecraft: the rune you picked waits for its level, then takes over', () => {
+  const plan = planGoal(rc, { bank: { blankrune: 20000 }, currentXp10: xp10ForLevel(50), targetXp10: xp10ForLevel(70), fillId: 'rc_lawrune' });
+  assert.deepEqual(plan.fromBank.steps.map(s => s.id), ['rc_naturerune', 'rc_lawrune'], 'natures until 54, then laws');
+  assert.equal(levelForXp10(xp10ForLevel(50) + plan.fromBank.steps[0].xp10), 54);
+});
+
+test('runecraft: profit per essence counts the runes it makes at your level', () => {
+  const price = { blankrune: 50, airrune: 10 };
+  const e = methodEconomics(rc, rc.byId.get('rc_airrune'), k => price[k] ?? null, { level: 44 });
+  assert.equal(e.value, 5 * 10);
+  assert.equal(e.profit, 0);
 });

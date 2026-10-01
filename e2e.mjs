@@ -438,6 +438,36 @@ await check('bank: unid herbs are one entry, and older per-herb amounts are fold
   await page.waitForFunction(() => /You also have\s*42\s*unid herbs\. Identify them first/.test(document.querySelector('.goal').innerText));
 });
 
+await check('runecraft: essence in the bank, runes per essence at your level, and a plan', async () => {
+  await page.click('.tab[data-tab="bank"]');
+  await page.click('[data-bskill="runecraft"]');
+  await page.waitForSelector('[data-bank="blankrune"]');
+  assert.match(await text('#bank-head'), /pure essence came later/);
+  await page.fill('[data-bank="blankrune"]', '5k');
+  await page.press('[data-bank="blankrune"]', 'Tab');
+  await page.click('.tab[data-tab="goals"]');
+  await page.click('[data-nskill="runecraft"]');
+  await page.click('[data-ntype="level"]');
+  await page.fill('#goal-new input[name=value]', '75');
+  await page.click('#goal-new button[type=submit]');
+  const card = page.locator('.goal', { hasText: 'Runecraft' });
+  await card.locator('.plan').waitFor();
+  const t = await card.innerText();
+  assert.match(t, /Level 69 → 75/);
+  assert.match(t, /5,000 essence → 5,000 Law runes \+47,500 XP/, 'best XP at 69 is law runes, one per essence');
+  assert.match(t, /To collect or buy:[\s\S]*Rune essence/);
+  const air = await card.locator('tr[data-method="rc_airrune"]').innerText();
+  assert.match(air, /Air rune\s*×7/, '7 air runes per essence at 69');
+  await card.locator('tr[data-method="rc_naturerune"] td:nth-child(2)').click();
+  await page.waitForFunction(() => /5,000 essence → 5,000 Nature runes/.test([...document.querySelectorAll('.goal')].find(g => g.innerText.includes('Runecraft'))?.innerText || ''));
+  assert.match(await card.locator('.plan-t thead').innerText(), /Rune/);
+  // the bank link on a Runecraft plan opens the Runecraft bank
+  await card.locator('[data-act="to-bank"]').first().click();
+  await page.waitForSelector('[data-bskill="runecraft"].active');
+  await page.click('[data-bskill="herblore"]');
+  await page.click('.tab[data-tab="goals"]');
+});
+
 await check('planner tabs fit a narrow window', async () => {
   await page.setViewportSize({ width: 340, height: 800 });
   for (const tab of ['goals', 'bank', 'prices']) {

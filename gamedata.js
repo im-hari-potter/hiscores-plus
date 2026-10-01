@@ -3,7 +3,9 @@
 // XP is in tenths, like the server keeps it. Item names, ids and shop values are from
 // LostHQ's item database (GPL-3.0). RuneScape is (c) Jagex Ltd.
 //
-// A method turns "in" items into "out" items. kind:
+// A method turns "in" items into "out" items. unit, when set, is what one action
+// uses (e.g. one essence). multiple: makes floor(level / multiple) + 1 of each
+// output per action (runes per essence as Runecraft levels up). kind:
 //   xp     - an action you train with (it gives XP)
 //   prep   - a step you do on the way (unfinished potions, grinding): planned through
 //   source - turns something you already have into an input (filling vials):
@@ -65,43 +67,54 @@ export const ITEMS = {
   "cadantine":{"id":265,"name":"Cadantine","cost":65,"members":1,"icon":48},
   "dwarf_weed":{"id":267,"name":"Dwarf weed","cost":70,"members":1,"icon":49},
   "torstol":{"id":269,"name":"Torstol","cost":75,"members":1,"icon":50},
-  "ashes":{"id":592,"name":"Ashes","cost":2,"icon":51},
-  "chocolate_bar":{"id":1973,"name":"Chocolate bar","cost":10,"icon":52},
-  "chocolate_dust":{"id":1975,"name":"Chocolate dust","cost":2,"members":1,"icon":53},
-  "toads_legs":{"id":2152,"name":"Toad's legs","cost":2,"members":1,"icon":54},
-  "4dose1attack":{"id":2428,"name":"Attack potion(4)","cost":15,"members":1,"icon":55},
-  "4dosestatrestore":{"id":2430,"name":"Restore potion(4)","cost":110,"members":1,"icon":56},
-  "4dose1defense":{"id":2432,"name":"Defence potion(4)","cost":150,"members":1,"icon":57},
-  "4doseprayerrestore":{"id":2434,"name":"Prayer potion(4)","cost":190,"members":1,"icon":58},
-  "4dose2attack":{"id":2436,"name":"Super attack(4)","cost":225,"members":1,"icon":59},
-  "4dosefisherspotion":{"id":2438,"name":"Fishing potion(4)","cost":250,"members":1,"icon":60},
-  "4dose2strength":{"id":2440,"name":"Super strength(4)","cost":275,"members":1,"icon":61},
-  "4dose2defense":{"id":2442,"name":"Super defence(4)","cost":330,"members":1,"icon":62},
-  "4doserangerspotion":{"id":2444,"name":"Ranging potion(4)","cost":360,"members":1,"icon":63},
-  "4doseantipoison":{"id":2446,"name":"Antipoison(4)","cost":360,"members":1,"icon":64},
-  "4dose2antipoison":{"id":2448,"name":"Superantipoison(4)","cost":360,"members":1,"icon":65},
-  "4dosepotionofzamorak":{"id":2450,"name":"Zamorak potion(4)","cost":25,"members":1,"icon":66},
-  "4dose1antidragon":{"id":2452,"name":"Antifire potion(4)","cost":330,"members":1,"icon":67},
-  "3dose1antidragon":{"id":2454,"name":"Antifire potion(3)","cost":264,"members":1,"icon":68},
-  "lantadyme":{"id":2481,"name":"Lantadyme","cost":68,"members":1,"icon":69},
-  "lantadymevial":{"id":2483,"name":"Lantadyme potion (unf)","cost":68,"members":1,"icon":70},
-  "mortmyremushroom":{"id":2970,"name":"Mort myre fungi","cost":1,"members":1,"icon":71},
-  "toadflax":{"id":2998,"name":"Toadflax","cost":48,"members":1,"icon":72},
-  "snapdragon":{"id":3000,"name":"Snapdragon","cost":59,"members":1,"icon":73},
-  "toadflaxvial":{"id":3002,"name":"Toadflax potion (unf)","cost":48,"members":1,"icon":74},
-  "snapdragonvial":{"id":3004,"name":"Snapdragon potion (unf)","cost":59,"members":1,"icon":75},
-  "4dose1energy":{"id":3008,"name":"Energy potion(4)","cost":146,"members":1,"icon":76},
-  "3dose1energy":{"id":3010,"name":"Energy potion(3)","cost":110,"members":1,"icon":77},
-  "4dose2energy":{"id":3016,"name":"Super energy(4)","cost":300,"members":1,"icon":78},
-  "3dose2energy":{"id":3018,"name":"Super energy(3)","cost":230,"members":1,"icon":79},
-  "4dose2restore":{"id":3024,"name":"Super restore(4)","cost":300,"members":1,"icon":80},
-  "3dose2restore":{"id":3026,"name":"Super restore(3)","cost":240,"members":1,"icon":81},
-  "4dose1agility":{"id":3032,"name":"Agility potion(4)","cost":200,"members":1,"icon":82},
-  "3dose1agility":{"id":3034,"name":"Agility potion(3)","cost":150,"members":1,"icon":83},
-  "4dose1magic":{"id":3040,"name":"Magic potion(4)","cost":300,"members":1,"icon":84},
-  "3dose1magic":{"id":3042,"name":"Magic potion(3)","cost":250,"members":1,"icon":85},
-  "cactus_potato":{"id":3138,"name":"Potato cactus","cost":1,"members":1,"icon":86},
-  "mort_serum3":{"id":3410,"name":"Serum 207 (3)","cost":13,"members":1,"icon":87}
+  "firerune":{"id":554,"name":"Fire rune","cost":4,"icon":51},
+  "waterrune":{"id":555,"name":"Water rune","cost":4,"icon":52},
+  "airrune":{"id":556,"name":"Air rune","cost":4,"icon":53},
+  "earthrune":{"id":557,"name":"Earth rune","cost":4,"icon":54},
+  "mindrune":{"id":558,"name":"Mind rune","cost":3,"icon":55},
+  "bodyrune":{"id":559,"name":"Body rune","cost":3,"icon":56},
+  "naturerune":{"id":561,"name":"Nature rune","cost":20,"icon":57},
+  "chaosrune":{"id":562,"name":"Chaos rune","cost":15,"icon":58},
+  "lawrune":{"id":563,"name":"Law rune","cost":40,"icon":59},
+  "cosmicrune":{"id":564,"name":"Cosmic rune","cost":15,"icon":60},
+  "ashes":{"id":592,"name":"Ashes","cost":2,"icon":61},
+  "blankrune":{"id":1436,"name":"Rune essence","cost":4,"icon":62},
+  "chocolate_bar":{"id":1973,"name":"Chocolate bar","cost":10,"icon":63},
+  "chocolate_dust":{"id":1975,"name":"Chocolate dust","cost":2,"members":1,"icon":64},
+  "toads_legs":{"id":2152,"name":"Toad's legs","cost":2,"members":1,"icon":65},
+  "4dose1attack":{"id":2428,"name":"Attack potion(4)","cost":15,"members":1,"icon":66},
+  "4dosestatrestore":{"id":2430,"name":"Restore potion(4)","cost":110,"members":1,"icon":67},
+  "4dose1defense":{"id":2432,"name":"Defence potion(4)","cost":150,"members":1,"icon":68},
+  "4doseprayerrestore":{"id":2434,"name":"Prayer potion(4)","cost":190,"members":1,"icon":69},
+  "4dose2attack":{"id":2436,"name":"Super attack(4)","cost":225,"members":1,"icon":70},
+  "4dosefisherspotion":{"id":2438,"name":"Fishing potion(4)","cost":250,"members":1,"icon":71},
+  "4dose2strength":{"id":2440,"name":"Super strength(4)","cost":275,"members":1,"icon":72},
+  "4dose2defense":{"id":2442,"name":"Super defence(4)","cost":330,"members":1,"icon":73},
+  "4doserangerspotion":{"id":2444,"name":"Ranging potion(4)","cost":360,"members":1,"icon":74},
+  "4doseantipoison":{"id":2446,"name":"Antipoison(4)","cost":360,"members":1,"icon":75},
+  "4dose2antipoison":{"id":2448,"name":"Superantipoison(4)","cost":360,"members":1,"icon":76},
+  "4dosepotionofzamorak":{"id":2450,"name":"Zamorak potion(4)","cost":25,"members":1,"icon":77},
+  "4dose1antidragon":{"id":2452,"name":"Antifire potion(4)","cost":330,"members":1,"icon":78},
+  "3dose1antidragon":{"id":2454,"name":"Antifire potion(3)","cost":264,"members":1,"icon":79},
+  "lantadyme":{"id":2481,"name":"Lantadyme","cost":68,"members":1,"icon":80},
+  "lantadymevial":{"id":2483,"name":"Lantadyme potion (unf)","cost":68,"members":1,"icon":81},
+  "mortmyremushroom":{"id":2970,"name":"Mort myre fungi","cost":1,"members":1,"icon":82},
+  "toadflax":{"id":2998,"name":"Toadflax","cost":48,"members":1,"icon":83},
+  "snapdragon":{"id":3000,"name":"Snapdragon","cost":59,"members":1,"icon":84},
+  "toadflaxvial":{"id":3002,"name":"Toadflax potion (unf)","cost":48,"members":1,"icon":85},
+  "snapdragonvial":{"id":3004,"name":"Snapdragon potion (unf)","cost":59,"members":1,"icon":86},
+  "4dose1energy":{"id":3008,"name":"Energy potion(4)","cost":146,"members":1,"icon":87},
+  "3dose1energy":{"id":3010,"name":"Energy potion(3)","cost":110,"members":1,"icon":88},
+  "4dose2energy":{"id":3016,"name":"Super energy(4)","cost":300,"members":1,"icon":89},
+  "3dose2energy":{"id":3018,"name":"Super energy(3)","cost":230,"members":1,"icon":90},
+  "4dose2restore":{"id":3024,"name":"Super restore(4)","cost":300,"members":1,"icon":91},
+  "3dose2restore":{"id":3026,"name":"Super restore(3)","cost":240,"members":1,"icon":92},
+  "4dose1agility":{"id":3032,"name":"Agility potion(4)","cost":200,"members":1,"icon":93},
+  "3dose1agility":{"id":3034,"name":"Agility potion(3)","cost":150,"members":1,"icon":94},
+  "4dose1magic":{"id":3040,"name":"Magic potion(4)","cost":300,"members":1,"icon":95},
+  "3dose1magic":{"id":3042,"name":"Magic potion(3)","cost":250,"members":1,"icon":96},
+  "cactus_potato":{"id":3138,"name":"Potato cactus","cost":1,"members":1,"icon":97},
+  "mort_serum3":{"id":3410,"name":"Serum 207 (3)","cost":13,"members":1,"icon":98}
 };
 
 export const METHODS = [
@@ -144,6 +157,16 @@ export const METHODS = [
   {"id":"hb_grind_unicorn_horn","skill":"herblore","group":"Grinding","kind":"prep","tools":["pestle_and_mortar"],"name":"Grind unicorn horn","level":1,"xp":0,"in":{"unicorn_horn":1},"out":{"unicorn_horn_dust":1}},
   {"id":"hb_grind_chocolate_bar","skill":"herblore","group":"Grinding","kind":"prep","tools":["pestle_and_mortar"],"name":"Grind chocolate bar","level":1,"xp":0,"in":{"chocolate_bar":1},"out":{"chocolate_dust":1}},
   {"id":"hb_grind_blue_dragon_scale","skill":"herblore","group":"Grinding","kind":"prep","tools":["pestle_and_mortar"],"name":"Grind blue dragon scale","level":1,"xp":0,"in":{"blue_dragon_scale":1},"out":{"dragon_scale_dust":1}},
+  {"id":"rc_airrune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Air rune","level":1,"xp":50,"in":{"blankrune":1},"out":{"airrune":1},"multiple":11},
+  {"id":"rc_mindrune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Mind rune","level":2,"xp":55,"in":{"blankrune":1},"out":{"mindrune":1},"multiple":14},
+  {"id":"rc_waterrune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Water rune","level":5,"xp":60,"in":{"blankrune":1},"out":{"waterrune":1},"multiple":19},
+  {"id":"rc_earthrune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Earth rune","level":9,"xp":65,"in":{"blankrune":1},"out":{"earthrune":1},"multiple":26},
+  {"id":"rc_firerune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Fire rune","level":14,"xp":70,"in":{"blankrune":1},"out":{"firerune":1},"multiple":35},
+  {"id":"rc_bodyrune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Body rune","level":20,"xp":75,"in":{"blankrune":1},"out":{"bodyrune":1},"multiple":46},
+  {"id":"rc_cosmicrune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Cosmic rune","level":27,"xp":80,"in":{"blankrune":1},"out":{"cosmicrune":1},"multiple":59},
+  {"id":"rc_chaosrune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Chaos rune","level":35,"xp":85,"in":{"blankrune":1},"out":{"chaosrune":1},"multiple":74},
+  {"id":"rc_naturerune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Nature rune","level":44,"xp":90,"in":{"blankrune":1},"out":{"naturerune":1},"multiple":91},
+  {"id":"rc_lawrune","skill":"runecraft","group":"Runes","kind":"xp","unit":"essence","name":"Law rune","level":54,"xp":95,"in":{"blankrune":1},"out":{"lawrune":1}},
 ];
 
 // Unidentified herbs: one bank entry (the market's unid listing), and the XP
@@ -250,6 +273,29 @@ export const BANK_GROUPS = {
         "3doserangerspotion",
         "3dose1magic",
         "3dosepotionofzamorak"
+      ]
+    }
+  ],
+  "runecraft": [
+    {
+      "name": "Essence",
+      "items": [
+        "blankrune"
+      ]
+    },
+    {
+      "name": "Runes",
+      "items": [
+        "airrune",
+        "mindrune",
+        "waterrune",
+        "earthrune",
+        "firerune",
+        "bodyrune",
+        "cosmicrune",
+        "chaosrune",
+        "naturerune",
+        "lawrune"
       ]
     }
   ]
