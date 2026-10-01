@@ -617,3 +617,5 @@ table.prices-t td .input.num { width: 100%; max-width: 96px; }
 .shot-row.changed .shot-was { color: var(--level); }
 .shot-check { margin-left: 4px; padding: 0 4px; border: 1px solid var(--gold-dim); border-radius: 3px; font-family: var(--small); font-size: 12px; color: var(--gold-hi); }
 .shot-clear { display: block; margin: 0 0 8px; font-family: var(--small); font-size: 13px; }
+.skill-tab .sw-v { font-family: var(--small); font-size: 12px; color: var(--gold-hi); font-weight: normal; }
+.skill-tab.all-tab { padding-left: 10px; }

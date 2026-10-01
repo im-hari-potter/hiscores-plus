@@ -304,15 +304,44 @@ await check('goals: a goal that is already reached is not added', async () => {
 
 await check('bank: amounts typed in are kept and valued', async () => {
   await page.click('.tab[data-tab="bank"]');
+  await page.waitForSelector('#bank-head [data-bskill="all"].active');
+  assert.match(await text('#bank-body'), /Nothing in your bank yet/, 'All shows what you have: nothing yet');
+  await page.click('[data-bskill="herblore"]');
   await page.waitForSelector('[data-bank="ranarr_weed"]');
   await page.fill('[data-bank="ranarr_weed"]', '1k');
   await page.press('[data-bank="ranarr_weed"]', 'Tab');
   await page.fill('[data-bank="snape_grass"]', '700');
   await page.press('[data-bank="snape_grass"]', 'Tab');
   assert.equal(await page.inputValue('[data-bank="ranarr_weed"]'), '1,000', '1k is read as 1,000');
-  assert.match(await text('#bank-head'), /2 kinds of item/);
+  assert.match(await text('#bank-head'), /2 kinds of Herblore item/);
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.bank.demo_main')));
   assert.deepEqual(stored.items, { ranarr_weed: 1000, snape_grass: 700 });
+});
+
+await check('bank: All shows everything you have; a skill tab shows only its items and their value', async () => {
+  await page.click('[data-bskill="runecraft"]');
+  await page.waitForSelector('[data-bank="blankrune"]');
+  assert.match(await text('#bank-head'), /No Runecraft items yet/);
+  await page.fill('[data-bank="naturerune"]', '100');
+  await page.press('[data-bank="naturerune"]', 'Tab');
+  assert.match(await text('#bank-head'), /1 kind of Runecraft item/);
+  await page.click('[data-bskill="all"]');
+  await page.waitForSelector('#bank-head [data-bskill="all"].active');
+  assert.match(await text('#bank-head'), /3 kinds of item/);
+  assert.deepEqual((await page.$$eval('#bank-body [data-bank]', els => els.map(e => e.dataset.bank))).sort(), ['naturerune', 'ranarr_weed', 'snape_grass']);
+  // each tab shows what its items are worth, once prices are in
+  await page.click('[data-act="bank-prices"]');
+  await page.waitForFunction(() => document.querySelectorAll('#bank-head .skill-tab .sw-v').length >= 3, null, { timeout: 30000 });
+  const worth = async k => page.locator(`#bank-head [data-bskill="${k}"] .sw-v`).innerText();
+  assert.ok(await worth('all') && await worth('herblore') && await worth('runecraft'));
+  assert.equal(await page.locator('#bank-head [data-bskill="firemaking"] .sw-v').count(), 0, 'no logs, no value');
+  assert.match(await text('#bank-head'), /Worth about/);
+  await page.click('[data-bskill="herblore"]');
+  assert.match(await text('#bank-head'), /Herblore items are worth about/);
+  await page.click('[data-bskill="runecraft"]');
+  await page.fill('[data-bank="naturerune"]', '');
+  await page.press('[data-bank="naturerune"]', 'Tab');
+  await page.click('[data-bskill="herblore"]');
 });
 await page.screenshot({ path: `${SHOTS}/9-bank.png`, fullPage: true });
 
@@ -557,7 +586,7 @@ await check('prices: Woodcutting has a prices tab for its logs', async () => {
   await page.waitForSelector('[data-price="magic_logs"]');
   assert.match(await text('#prices-body'), /Bark/);
   await page.click('.tab[data-tab="bank"]');
-  await page.waitForSelector('[data-bskill="herblore"].active');
+  await page.waitForSelector('#bank-head [data-bskill="firemaking"].active');    // the Bank tab keeps its own
   await page.click('.tab[data-tab="goals"]');
 });
 
@@ -600,6 +629,24 @@ await check('bank: read from screenshots, review, then update', async () => {
   await page.click('[data-bskill="herblore"]');
   assert.equal(await page.inputValue('[data-bank="unidentified_guam"]'), '35');
   assert.equal(await page.locator('#bank-shots .shots-result').count(), 0, 'back to the drop box');
+});
+
+await check('bank: Choose screenshots opens the picker in Pictures and reads what you pick', async () => {
+  const png = encodePng(fakeBank({ items: [{ slot: 0, icon: 'lawrune', count: 4000 }] })).toString('base64');
+  await page.evaluate(b64 => {
+    window.__picked = null;
+    window.showOpenFilePicker = async opts => {
+      window.__picked = { id: opts.id, startIn: opts.startIn, multiple: opts.multiple };
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      return [{ getFile: async () => new File([bytes], 'screenshot-picked.png', { type: 'image/png' }) }];
+    };
+  }, png);
+  await page.click('[data-act="shots-pick"]');
+  await page.waitForSelector('#bank-shots .shots-result', { timeout: 20000 });
+  assert.deepEqual(await page.evaluate(() => window.__picked), { id: 'lostkit-screenshots', startIn: 'pictures', multiple: true });
+  assert.match(await text('#bank-shots'), /Law rune\s*4,000/);
+  await page.click('[data-act="shots-discard"]');
+  await page.evaluate(() => { delete window.showOpenFilePicker; });
 });
 
 await check('planner tabs fit a narrow window', async () => {

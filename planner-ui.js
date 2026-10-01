@@ -79,6 +79,28 @@ export const xpText = x10 => (x10 % 10
   ? (x10 / 10).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
   : (x10 / 10).toLocaleString());
 
+// A tiny key/value store in IndexedDB, for what localStorage can't hold (the
+// file the screenshot picker last opened). Any failure just means "not saved".
+const idb = (() => {
+  let db = null;
+  const open = () => db || (db = new Promise((resolve, reject) => {
+    const req = indexedDB.open('skills-plus', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('kv');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }));
+  const run = (mode, fn) => open().then(d => new Promise((resolve, reject) => {
+    const tx = d.transaction('kv', mode);
+    const req = fn(tx.objectStore('kv'));
+    tx.oncomplete = () => resolve(req.result);
+    tx.onerror = () => reject(tx.error);
+  }));
+  return {
+    get: key => run('readonly', st => st.get(key)).catch(() => null),
+    set: (key, value) => run('readwrite', st => st.put(value, key)).catch(() => null),
+  };
+})();
+
 export function createPlanner(ctx) {
   const { api, totals, prices, esc, fmt, ago, iconImg, showMsg, errorText } = ctx;
   const $ = id => document.getElementById(id);
@@ -94,15 +116,21 @@ export function createPlanner(ctx) {
     show: ['all', 'active', 'done'].includes(ui.show) ? ui.show : 'all',     // goal filter: status
     only: SKILL_BY_KEY.has(ui.only) ? ui.only : null,                        // goal filter: one skill
     visible: [],                                                              // goal ids shown, in order
-    bankSkill: INDEX[ui.bankSkill] ? ui.bankSkill : 'herblore',         // which skill the Bank and Prices tabs show
+    bankView: ui.bankView === 'all' || BANK_GROUPS[ui.bankView] ? ui.bankView : 'all',   // Bank tab: everything, or one skill's items
+    bankSkill: INDEX[ui.bankSkill] ? ui.bankSkill : 'herblore',         // Prices tab: which skill
     tgroup: ui.tgroup && typeof ui.tgroup === 'object' ? ui.tgroup : {},     // plan table: which group, per skill
     rankLoading: new Set(),
     goalErr: {},
     tab: null,
   };
-  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only, bankSkill: S.bankSkill, tgroup: S.tgroup });
-  // The Bank tab only has skills that plan from the bank; Prices has them all.
-  const bankKey = () => (BANK_GROUPS[S.bankSkill] ? S.bankSkill : Object.keys(BANK_GROUPS)[0]);
+  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only, bankSkill: S.bankSkill, bankView: S.bankView, tgroup: S.tgroup });
+  // The items of one skill's bank tab, or of the whole bank ('all'), that you have.
+  function bankSubset(items, view) {
+    const list = view === 'all' ? Object.keys(items) : [...new Set((BANK_GROUPS[view] || []).flatMap(g => g.items))];
+    const out = {};
+    for (const slug of list) if (items[slug] > 0 && ITEMS[slug]) out[slug] = items[slug];
+    return out;
+  }
 
   // ── Storage per account ─────────────────────────────────────────────────
   const safe = () => (S.account ? toSafeName(S.account) : '');
@@ -689,12 +717,13 @@ export function createPlanner(ctx) {
 
   // Skill tabs on the Bank and Prices views, for the skills the planner covers
   // (the Bank tab leaves out skills that don't use it).
-  function skillSwitch(keys, current) {
-    if (keys.length < 2) return '';
-    return `<div class="skill-switch" role="group" aria-label="Skill">${keys.map(k => {
+  function skillSwitch(keys, current, { all = false, values = null } = {}) {
+    if (keys.length < 2 && !all) return '';
+    const worth = k => (values?.[k] ? ` <span class="sw-v">${gpShort(values[k])}</span>` : '');
+    const tab = (k, label) => `<button type="button" class="tab skill-tab${k === 'all' ? ' all-tab' : ''}${k === current ? ' active' : ''}" data-bskill="${k}" aria-pressed="${k === current}">${label}${worth(k)}</button>`;
+    return `<div class="skill-switch" role="group" aria-label="Skill">${all ? tab('all', 'All') : ''}${keys.map(k => {
       const sk = SKILL_BY_KEY.get(k);
-      const on = k === current;
-      return `<button type="button" class="tab skill-tab${on ? ' active' : ''}" data-bskill="${k}" aria-pressed="${on}">${iconImg(sk)} ${esc(sk.name)}</button>`;
+      return tab(k, `${iconImg(sk)} ${esc(sk.name)}`);
     }).join('')}</div>`;
   }
 
@@ -719,6 +748,30 @@ export function createPlanner(ctx) {
     const g = c.getContext('2d', { willReadFrequently: true });
     g.drawImage(source, 0, 0);
     return g.getImageData(0, 0, w, h);
+  }
+
+  // Choosing screenshots. Where the browser has the newer file picker (LostKit
+  // does), it opens in the folder you last picked from, which is remembered in
+  // IndexedDB; the first time, in Pictures, where LostKit Screenshots is. Pages
+  // can't name a folder themselves. Elsewhere it's the plain file button.
+  async function pickScreenshots() {
+    if (typeof window.showOpenFilePicker === 'function') {
+      const last = await idb.get('shotsFile');
+      try {
+        const handles = await window.showOpenFilePicker({
+          id: 'lostkit-screenshots', multiple: true, startIn: last || 'pictures',
+          types: [{ description: 'Screenshots', accept: { 'image/png': ['.png'] } }],
+        });
+        if (!handles.length) return;
+        idb.set('shotsFile', handles[0]);
+        readShots(await Promise.all(handles.map(h => h.getFile())));
+        return;
+      } catch (e) {
+        if (e?.name === 'AbortError') return;          // closed without picking
+        if (last) idb.set('shotsFile', null);           // forget a folder that's gone
+      }
+    }
+    $('shots-file')?.click();
   }
 
   // files: screenshots (File or Blob). Results wait in S.shots for you to apply.
@@ -836,25 +889,44 @@ export function createPlanner(ctx) {
     const body = $('bank-body');
     if (!S.account) { $('bank-head').innerHTML = ''; body.innerHTML = ''; return; }
     renderBankHead();
-    const groups = BANK_GROUPS[bankKey()] || [];
-    body.innerHTML = groups.map(g => `<div class="card bank-group"><h4>${esc(g.name)}</h4><div class="bank-grid">${g.items.map(bankCell).join('')}</div></div>`).join('');
+    if (S.bankView === 'all') {
+      // Everything you have, most valuable first (items without a price last).
+      const have = bankSubset(bank().items, 'all');
+      const worth = slug => { const p = prices.gp(slug); return p == null ? -1 : p * have[slug]; };
+      const list = Object.keys(have).sort((a, b) => worth(b) - worth(a) || itemName(a).localeCompare(itemName(b)));
+      body.innerHTML = list.length
+        ? `<div class="card bank-group"><h4>Everything you have <span class="c-faint small-note">most valuable first</span></h4><div class="bank-grid">${list.map(bankCell).join('')}</div></div>`
+        : `<div class="empty">Nothing in your bank yet. Read it from screenshots above, or pick a skill to type in what you have.</div>`;
+    } else {
+      const groups = BANK_GROUPS[S.bankView] || [];
+      body.innerHTML = groups.map(g => `<div class="card bank-group"><h4>${esc(g.name)}</h4><div class="bank-grid">${g.items.map(bankCell).join('')}</div></div>`).join('');
+    }
     const items = Object.keys(bank().items);
     if (items.length) prices.want(items);
   }
 
   function renderBankHead() {
     const b = bank();
-    const value = bankValue(b.items, prices.priceOf);
-    const kinds = Object.values(b.items).filter(n => n > 0).length;
+    const view = S.bankView;
+    const sub = bankSubset(b.items, view);
+    const value = bankValue(sub, prices.priceOf);
+    const kinds = Object.keys(sub).length;
+    const values = {};
+    for (const k of ['all', ...Object.keys(BANK_GROUPS)]) {
+      const v = bankValue(bankSubset(b.items, k), prices.priceOf).total;
+      if (v > 0) values[k] = v;
+    }
+    const skillName = view === 'all' ? '' : SKILL_BY_KEY.get(view).name;
     const hint = {
+      all: 'Showing everything you have. Pick a skill to see just its items and their value, and to type in ones you don\'t have yet. Items used by two skills (logs) count toward both.',
       herblore: 'Unid herbs are one entry: every "Herb" in your bank, whatever it turns out to be.',
       runecraft: 'Rune essence is the only essence in this version of the game; pure essence came later.',
       firemaking: 'Achey tree logs aren\'t listed: lighting them gives no XP in this version. Your logs are shared with Fletching (it\'s one bank).',
       fletching: 'Unstrung bows are marked (u); in-game they have the same name as the strung bow. Feathers count for both arrows and darts.',
-    }[bankKey()] || '';
-    $('bank-head').innerHTML = `${skillSwitch(Object.keys(BANK_GROUPS), bankKey())}<div class="bank-sum">
-      <span>${kinds ? `<b>${kinds}</b> kind${kinds === 1 ? '' : 's'} of item` : 'Nothing entered yet'}${b.updated ? ` · updated ${ago(b.updated)}` : ''}</span>
-      ${kinds ? `<span>Worth about <b class="c-xp">${gpShort(value.total)}</b> gp${value.missing.length ? ` <span class="c-faint">(${value.missing.length} without a price)</span>` : ''}</span>` : ''}
+    }[view] || '';
+    $('bank-head').innerHTML = `${skillSwitch(Object.keys(BANK_GROUPS), view, { all: true, values })}<div class="bank-sum">
+      <span>${kinds ? `<b>${kinds}</b> kind${kinds === 1 ? '' : 's'} of ${skillName ? esc(skillName) + ' ' : ''}item` : skillName ? `No ${esc(skillName)} items yet` : 'Nothing entered yet'}${b.updated ? ` · updated ${ago(b.updated)}` : ''}</span>
+      ${kinds ? `<span>${skillName ? `${esc(skillName)} items are worth` : 'Worth'} about <b class="c-xp">${gpShort(value.total)}</b> gp${value.missing.length ? ` <span class="c-faint">(${value.missing.length} without a price)</span>` : ''}</span>` : ''}
       <span class="grow"></span>
       <button type="button" class="btn small" data-act="bank-prices">Get prices</button>
       <button type="button" class="btn small danger" data-act="bank-clear">Clear bank</button>
@@ -1013,7 +1085,9 @@ export function createPlanner(ctx) {
     if (ntype) { S.newGoal.type = ntype.dataset.ntype; saveUi(); showMsg('goals-msg', ''); renderNewGoal(); return; }
     const bskill = t.closest('[data-bskill]');
     if (bskill) {
-      S.bankSkill = bskill.dataset.bskill; saveUi();
+      const k = bskill.dataset.bskill;
+      if (S.tab === 'prices') { if (INDEX[k]) S.bankSkill = k; } else S.bankView = k;
+      saveUi();
       render(S.tab);
       if (S.tab === 'prices') wantPrices([S.bankSkill]);
       return;
@@ -1071,11 +1145,11 @@ export function createPlanner(ctx) {
         renderGoals();
         break;
       case 'to-bank':
-        if (BANK_GROUPS[act.dataset.skill]) { S.bankSkill = act.dataset.skill; saveUi(); }
+        if (BANK_GROUPS[act.dataset.skill]) { S.bankView = act.dataset.skill; saveUi(); }
         ctx.goTab('bank');
         break;
       case 'bank-prices': prices.want(Object.keys(bank().items), { force: true }); renderBankHead(); break;
-      case 'shots-pick': $('shots-file')?.click(); break;
+      case 'shots-pick': pickScreenshots(); break;
       case 'shots-apply': applyShots(); break;
       case 'shots-discard': S.shots = null; renderShots(); break;
       case 'bank-clear':

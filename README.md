@@ -50,11 +50,14 @@ LostKit, or remove it and add it again. Your saved data stays either way.
       and gp per XP.
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
   its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
-  The bank's value is shown with market prices.
+  - **All** shows everything you have, most valuable first, and what your whole bank is worth. A skill's
+    tab shows only its items and what they're worth; every tab shows its value.
   - **Read it from screenshots**: open your bank in LostKit, press the screenshot key (scroll and take
     more if it doesn't fit), then drop the pictures from *Pictures › LostKit Screenshots* on the Bank
     tab, paste one, or choose them. You see what was read before anything changes, and only the
     ticked items are updated.
+    - **Choose screenshots** opens in the folder you last picked from. The very first time it opens
+      in Pictures (a web page can't name a folder itself), so open *LostKit Screenshots* once.
     - It reads the picture the way the game drew it: the scrollbar says where the bank is and how far
       it's scrolled, icon outlines and colours say which item is in each slot, and the yellow numbers
       say how many. Screenshots that overlap don't count twice.
