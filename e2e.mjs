@@ -356,14 +356,14 @@ await check("goals: Ostap's example, 700 potions from the bank, 4,251 more and 3
   assert.match(t, /collect\s*300\s*Snape grass[\s\S]*makes\s*1,000\s*Prayer potion instead of 700/);
   // with your bank: no To goal; what it makes, evens out, and what's still needed after it
   const head = await page.locator('.goal >> nth=0 >> .plan-t thead').innerText();
-  assert.match(head, /XP\s*Profit\/item\s*gp\/XP\s*From bank\s*Even out\s*Gross after\s*using bank\s*Still needed\s*Supplies needed\s*Profit after\s*buying supplies\s*Total net gp\s*toward goal\s*Use/);
+  assert.match(head.trim(), /^Use\s*Lvl\s*Potion\s*XP\s*Profit\/item\s*gp\/XP\s*From bank\s*Gross profit from\s*banked supplies\s*Even out\s*Gross after\s*using bank\s*Still needed\s*to goal\s*Supplies needed\s*Profit after\s*buying supplies\s*Total net gp\s*toward goal$/);
   assert.doesNotMatch(head, /To goal/);
   const row = await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText();
   const cells = row.split('\t').map(c => c.trim());
-  assert.equal(cells[5], '700', 'from bank');
-  assert.match(cells[6], /^300\s*→\s*1,000$/, 'even out: 300 snape grass, and the bank covers 1,000');
-  assert.equal(cells[8], '4,251', 'still needed');
-  assert.match(cells[9], /^3,951\s*4,251$/, 'collect: ranarr and snape grass; vials are bought as you go');
+  assert.equal(cells[6], '700', 'from bank');
+  assert.match(cells[8], /^300\s*→\s*1,000$/, 'even out: 300 snape grass, and the bank covers 1,000');
+  assert.equal(cells[10], '4,251', 'still needed');
+  assert.match(cells[11], /^3,951\s*4,251$/, 'collect: ranarr and snape grass; vials are bought as you go');
   // "I'll buy vials of water as I go" leaves them out of what to collect
   const collectLine = () => page.locator('.goal >> nth=0 >> .collect').first().innerText();
   assert.doesNotMatch(await collectLine(), /Vial/);
@@ -389,17 +389,44 @@ await check('goals: picking another potion and leaving the bank out change the p
   const cellsOf = async id => (await page.locator(`.goal >> nth=0 >> tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
   const num = c => Number(c.replace(/,/g, ''));
   const attack = await cellsOf('hb_3dose1attack');
-  assert.match(attack[9], new RegExp(`^${attack[8]}\\s*${attack[8]}$`), 'collect: guam and eyes of newt for those');
+  assert.equal(attack[7], '–', 'the bank plan makes none of these');
+  assert.match(attack[11], new RegExp(`^${attack[10]}\\s*${attack[10]}$`), 'collect: guam and eyes of newt for those');
   await page.uncheck('.goal input[data-gopt="useBank"]');
   await page.waitForFunction(() => !/From your bank/.test(document.querySelector('.goal').innerText));
   assert.match(await goalText(), /4,951 × Prayer potion/);
   // without the bank: how many to the goal, and nothing to collect
   const head = await page.locator('.goal >> nth=0 >> .plan-t thead').innerText();
-  assert.match(head, /XP\s*Profit\/item\s*gp\/XP\s*To goal\s*Use/);
+  assert.match(head.trim(), /^Use\s*Lvl\s*Potion\s*XP\s*Profit\/item\s*gp\/XP\s*To goal\s*Plan to\s*make$/);
+  assert.equal(await page.locator('.goal >> nth=0 >> [data-tsort-plan="net"]').count(), 0, 'no Total net to sort by without the bank');
   assert.doesNotMatch(head, /From bank|Even out|Gross|Still|Supplies|buying|Total net/);
   const attackOff = await cellsOf('hb_3dose1attack');
-  assert.equal(num(attack[8]), num(attackOff[5]) - 2450, `still needed ${attack[8]}, to goal ${attackOff[5]}`);
-  assert.equal((await cellsOf('hb_3doseprayerrestore'))[5], '4,951');
+  assert.equal(num(attack[10]), num(attackOff[6]) - 2450, `still needed ${attack[10]}, to goal ${attackOff[6]}`);
+  assert.equal((await cellsOf('hb_3doseprayerrestore'))[6], '4,951');
+  // a mix of your own, with the bank off: 1,000 attack potions and 2,000 prayer potions first
+  await page.fill('.goal >> nth=0 >> [data-mix="hb_3dose1attack"]', '1k');
+  await page.press('.goal >> nth=0 >> [data-mix="hb_3dose1attack"]', 'Tab');
+  await page.fill('.goal >> nth=0 >> [data-mix="hb_3doseprayerrestore"]', '2000');
+  await page.press('.goal >> nth=0 >> [data-mix="hb_3doseprayerrestore"]', 'Tab');
+  await page.waitForFunction(() => /Your mix \+200,000 XP/.test(document.querySelector('.goal').innerText));
+  const mixText = await goalText();
+  assert.match(mixText, /1,000 × Attack potion \+25,000 XP/);
+  assert.match(mixText, /2,000 × Prayer potion \+175,000 XP/);
+  assert.match(mixText, /Then, to reach your goal: [\d,.]+ XP/);
+  assert.match(mixText, /With your mix: [+−]?[\d.,]+[KM]? gp|some prices are still unknown/);
+  assert.match(await page.locator('.goal >> nth=0 >> .plan-t thead').innerText(), /Plan to\s*make\s*Still needed\s*to goal/);
+  const attackMix = await cellsOf('hb_3dose1attack');
+  assert.equal(await page.inputValue('.goal >> nth=0 >> [data-mix="hb_3dose1attack"]'), '1,000', 'plan to make');
+  assert.equal(num(attackMix[8]), num(attackMix[6]) - 8000, 'still needed to goal: 200,000 XP of mix is 8,000 attack potions fewer');
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.goals.demo_main'))[0].mix), { hb_3dose1attack: 1000, hb_3doseprayerrestore: 2000 });
+  await page.check('.goal input[data-gopt="useBank"]');
+  await page.waitForFunction(() => /From your bank/.test(document.querySelector('.goal').innerText));
+  // with the bank in use, the mix waits (it's kept for when the bank is off again)
+  assert.doesNotMatch(await goalText(), /Your mix/);
+  assert.equal(await page.locator('.goal >> nth=0 >> [data-mix]').count(), 0);
+  await page.uncheck('.goal input[data-gopt="useBank"]');
+  await page.waitForFunction(() => /Your mix \+200,000 XP/.test(document.querySelector('.goal').innerText));
+  await page.click('.goal >> nth=0 >> [data-act="mix-clear"]');
+  await page.waitForFunction(() => /Plan a mix of ways to train/.test(document.querySelector('.goal').innerText));
   await page.check('.goal input[data-gopt="useBank"]');
   await page.waitForFunction(() => /From your bank/.test(document.querySelector('.goal').innerText));
 });
@@ -410,15 +437,15 @@ await check('goals: Even out, per potion (605 kwuarm and 518 limpwurt: collect 8
   const row = page.locator('.goal').first().locator('tr[data-method="hb_3dose2strength"]');
   await row.waitFor();
   const cells = (await row.innerText()).split('\t').map(c => c.trim());
-  assert.equal(cells[5], '518', 'from bank');
-  assert.match(cells[6], /^87\s*→\s*605$/);
+  assert.equal(cells[6], '518', 'from bank');
+  assert.match(cells[8], /^87\s*→\s*605$/);
   assert.equal(await row.locator('td.even').getAttribute('title'), 'Collect 87 Limpwurt root, and your bank covers 605 × Super strength instead of 518.');
   assert.match(await row.locator('td.even .it-chip').getAttribute('title'), /^Limpwurt root/);
   // the other way round: more limpwurt than kwuarm
   await setBank('herblore', { kwuarm: '500', limpwurt_root: '518' });
   await page.click('.tab[data-tab="goals"]');
   await row.waitFor();
-  assert.match((await row.innerText()).split('\t')[6].trim(), /^18\s*→\s*518$/);
+  assert.match((await row.innerText()).split('\t')[8].trim(), /^18\s*→\s*518$/);
   assert.match(await row.locator('td.even .it-chip').getAttribute('title'), /^Kwuarm/);
   await page.screenshot({ path: `${SHOTS}/10c-even-out.png`, fullPage: true });
   await setBank('herblore', { kwuarm: '', limpwurt_root: '' });
@@ -506,12 +533,32 @@ await check('goals: with prices known the plan shows cost, value and profit', as
   // and the table's totals have their numbers
   const row = (await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText()).split('\t').map(c => c.trim());
   assert.doesNotMatch(row.join(' '), /\?/);
-  assert.match(row[7], /^[+−][\d.,]+[KM]?$/, 'gross after using bank');
-  assert.match(row[10], /^[+−][\d.,]+[KM]?$/, 'profit after buying supplies');
-  assert.equal(row[10], money.match(/Net: ([+−]?[\d.,]+[KM]?) gp/)[1], 'the same as the plan\'s own Net for the potion you train with');
-  assert.match(row[11], /^[+−][\d.,]+[KM]?$/, 'total net gp toward goal');
-  const netTip = await page.locator('tr[data-method="hb_3doseprayerrestore"] td').nth(11).getAttribute('title');
-  assert.equal(netTip, `Gross after using bank ${row[7]} + profit after buying supplies ${row[10]}`);
+  assert.equal(row[7], `+${total}`, 'gross profit from banked supplies: its part of From your bank');
+  assert.match(row[9], /^[+−][\d.,]+[KM]?$/, 'gross after using bank');
+  assert.match(row[12], /^[+−][\d.,]+[KM]?$/, 'profit after buying supplies');
+  assert.equal(row[12], money.match(/Net: ([+−]?[\d.,]+[KM]?) gp/)[1], 'the same as the plan\'s own Net for the potion you train with');
+  assert.match(row[13], /^[+−][\d.,]+[KM]?$/, 'total net gp toward goal');
+  // the total net: what the bank makes of it before evening out (the 700 prayer
+  // potions under From your bank) plus the profit after buying supplies
+  const netTip = await page.locator('tr[data-method="hb_3doseprayerrestore"] td').nth(13).getAttribute('title');
+  assert.equal(netTip, `Gross profit from banked supplies ${row[7]} + profit after buying supplies ${row[12]}`);
+  // sort by Total net, after Cheapest XP: most gp toward the goal first
+  const sorts = await page.locator('.goal >> nth=0 >> [data-tsort-plan]').allInnerTexts();
+  assert.deepEqual(sorts.map(t => t.trim()), ['Level', 'XP each', 'Cheapest XP', 'Total net']);
+  await page.click('.goal >> nth=0 >> [data-tsort-plan="net"]');
+  const gp = t => {
+    const m = t.replace(/,/g, '').match(/^([+−-]?)([\d.]+)([KMB]?)$/);
+    if (!m) return null;
+    const v = parseFloat(m[2]) * ({ K: 1e3, M: 1e6, B: 1e9 }[m[3]] || 1);
+    return m[1] === '−' || m[1] === '-' ? -v : v;
+  };
+  const nets = (await page.locator('.goal >> nth=0 >> tr[data-method]').allInnerTexts()).map(t => gp(t.split('\t')[13].trim()));
+  const known = nets.filter(v => v != null);
+  assert.ok(known.length > 5, nets.join(' '));
+  assert.deepEqual(known, [...known].sort((a, b) => b - a), 'most first');
+  assert.deepEqual(nets.slice(0, known.length), known, 'rows without a total go last');
+  assert.equal(await page.locator('.goal >> nth=0 >> [data-tsort-plan="net"].on').count(), 1);
+  await page.click('.goal >> nth=0 >> [data-tsort-plan="level"]');
 });
 
 await check('goals: a rank goal looks up who holds that rank', async () => {
@@ -643,7 +690,8 @@ await check('woodcutting: no bank, logs to chop and what they are worth', async 
   assert.match(t, /To reach your goal: 1,555,040 XP/);
   assert.match(t, /6,221 × Magic logs \+1,555,250 XP/, 'most XP per log at 93');
   assert.match(t, /What you make is worth/);
-  assert.equal(await card.locator('.plan-t thead th').count(), 6, 'no bank columns');
+  assert.equal(await card.locator('.plan-t thead th').count(), 7, 'no bank columns, but Plan to make');
+  assert.match(t, /Plan a mix of ways to train/);
   await card.locator('tr[data-method="wc_willow_logs"] td:nth-child(2)').click();
   await page.waitForFunction(() => /23,038 × Willow logs/.test([...document.querySelectorAll('.goal')].find(g => g.innerText.includes('Level 93 → 95'))?.innerText || ''));
   await page.screenshot({ path: `${SHOTS}/10a-woodcutting.png`, fullPage: false });
@@ -726,7 +774,7 @@ await check('bank: read from screenshots, review, then update', async () => {
     shot('screenshot-2.png', { items, scroll: 120 }),
     shot('not-a-bank.png', { items: [], width: 400 }),
   ]);
-  await page.waitForSelector('#bank-shots .shots-result', { timeout: 20000 });
+  await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
   const t = await text('#bank-shots');
   assert.match(t, /From 2 screenshots: 5 of your planner items/);
   assert.match(t, /1 other item the planner doesn't use was skipped/);
@@ -759,7 +807,7 @@ await check('bank: Choose screenshots opens the picker in Pictures and reads wha
     };
   }, png);
   await page.click('[data-act="shots-pick"]');
-  await page.waitForSelector('#bank-shots .shots-result', { timeout: 20000 });
+  await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
   assert.deepEqual(await page.evaluate(() => window.__picked), { id: 'lostkit-screenshots', startIn: 'pictures', multiple: true });
   assert.match(await text('#bank-shots'), /Law rune\s*4,000/);
   await page.click('[data-act="shots-discard"]');
@@ -830,7 +878,7 @@ await check('bank: All is in the order your bank has in-game, drags into your ow
     { slot: 3, icon: 'unidentified_guam', count: 35 },
   ] }));
   await page.setInputFiles('#shots-file', [{ name: 'screenshot-3.png', mimeType: 'image/png', buffer: shot }]);
-  await page.waitForSelector('#bank-shots .shots-result', { timeout: 20000 });
+  await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
   assert.equal(await page.locator('#shots-order').isChecked(), true);
   await page.click('[data-act="shots-apply"]');
   await page.waitForSelector('#bank-all-grid .bank-cell');

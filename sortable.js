@@ -28,6 +28,7 @@ export function sortable({ root, item, skip = null, onDrop, onEnd = () => {} }) 
       if (d.touch) { if (moved > 10) end(false); return; }   // moved before the hold: it's a scroll
       if (moved < 6) return;
       start();
+      if (!d) return;
     }
     move();
     e.preventDefault();
@@ -47,6 +48,7 @@ export function sortable({ root, item, skip = null, onDrop, onEnd = () => {} }) 
   }, true);
 
   function start() {
+    if (!d.el.isConnected) { d = null; return; }     // redrawn under the press: let go and try again
     const rect = d.el.getBoundingClientRect();
     d.active = true;
     d.dx = d.x0 - rect.left; d.dy = d.y0 - rect.top;

@@ -76,24 +76,43 @@ Anything without a price shows **?** until it has one.
     your banked supplies are already yours, so nothing is taken off for them.
   - Everything after it comes after all your bank makes: its XP counts toward the goal, and what's left
     in your bank is used before anything is collected.
-- **Off**: the plan starts from scratch, as if your bank were empty.
+- **Off**: the plan starts from scratch, as if your bank were empty. Plan a mix of your own instead
+  (below), or let one way to train take you all the way.
+
+#### Plan a mix (Use my bank off)
+
+With your bank left out, you can plan your own path to the goal: type how many of each you'll make in
+the table's **Plan to make** column (1,000 prayer potions, then 2,000 super attacks, say).
+
+- **Your mix** shows what that comes to: the XP and the level it gets you to, what buying it all costs,
+  what it makes is worth, and the net. It's made lowest level first, and anything that needs a level
+  you won't have by then is marked.
+- Its XP counts toward your goal. The rest is planned after it (**Then, to reach your goal**), with a
+  total for both together, and the table shows **Still needed to goal** after your mix.
+- The mix is kept with the goal. With **Use my bank** on, your actual bank is used instead, and the mix
+  waits until you turn it off again. Skills that never use the bank (Woodcutting) can always have one.
 
 #### The table of every option
 
 | Column | Use my bank on | Use my bank off |
 |---|---|---|
+| **Use** (first) | Lets the bank plan make it (see below) | the same |
 | **XP** | XP for one | the same |
 | **Profit/item** | What one sells for, less what it takes, bought from scratch | the same |
 | **gp/XP** | What each XP costs you (negative: you make money doing it) | the same |
 | **To goal** | not shown | How many to reach the goal, on their own |
+| **Plan to make** | not shown | How many you'll make in your mix (see above) |
 | **From bank** | How many your bank makes of it now | not shown |
+| **Gross profit from banked supplies** | What your bank plan makes of it (its part of From your bank) is worth, before any evening out. Your banked supplies are yours already | not shown |
 | **Even out** | What to collect so nothing in your bank is left over: your most plentiful ingredient decides | not shown |
 | **Gross after using bank** | What your bank makes of it (once evened out, where Even out says so) is worth, less what evening out takes. Gross: your banked supplies are yours already | not shown |
-| **Still needed** | How many more after everything your bank makes | not shown |
+| **Still needed to goal** | How many more to reach your goal, after everything your bank makes | After your mix, once you've planned one |
 | **Supplies needed** | What those take, beyond what's left in your bank | not shown |
 | **Profit after buying supplies** | What the ones still needed are worth, less what their supplies cost | not shown |
-| **Total net gp toward goal** | Gross after using bank + profit after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy | not shown |
-| **Use** | Lets the bank plan make it (see below) | the same |
+| **Total net gp toward goal** | Gross profit from banked supplies + profit after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy. Gross after using bank isn't part of it, since evening out would count those supplies twice | not shown |
+
+Sort the table by level, XP each, cheapest XP, or (with your bank in use) **Total net**, most gp toward
+your goal first.
 
 For example, Herblore 74 → 78 with Super attack: with the bank off, **4,328** to the goal. With it on,
 **2,305** still needed after everything the bank makes, and the supplies those need. And with
@@ -102,10 +121,10 @@ root, and your bank covers 605 instead of 518.
 
 #### Untick what you won't make
 
-The **Use** boxes at the end of each row decide what the bank plan may make. It makes everything it can
+The **Use** boxes at the front of each row decide what the bank plan may make. It makes everything it can
 by default, so **turn off anything you don't plan to make**: a potion you'd rather not, or one whose
-supplies you're saving. Otherwise the plan spends your supplies on it, and From your bank, Still needed
-and the gp totals count XP you won't get. Unticked options also leave the Train with list.
+supplies you're saving. Otherwise the plan spends your supplies on it, and From your bank, Still needed to
+goal and the gp totals count XP you won't get. Unticked options also leave the Train with list.
 
 #### Vials of water
 

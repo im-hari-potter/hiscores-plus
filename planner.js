@@ -344,26 +344,59 @@ export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited =
   };
 }
 
+// ── A mix you plan yourself ───────────────────────────────────────────────
+// With the bank left out: how many of each you mean to make ({ method id: n }),
+// made from scratch, lowest level first so the XP on the way counts. Each
+// step says if it needs a level you won't have by then.
+export function planMix(ix, mix, { startXp10, targetXp10 = null, unlimited = new Set(), priceOf = () => null } = {}) {
+  const picks = Object.entries(mix || {})
+    .map(([id, n]) => [ix.byId.get(id), Math.floor(Number(n))])
+    .filter(([m, n]) => m && m.xp > 0 && n > 0)
+    .sort(([a], [b]) => a.level - b.level || a.xp - b.xp);
+  let xp = startXp10;
+  const buy = {}, made = {};
+  const steps = picks.map(([m, runs]) => {
+    const level = levelForXp10(xp);
+    const out = madeOver(m, runs, xp);
+    const need = without(expand(ix, m, runs, new Stock(), { level: MAX_LEVEL, unlimited }).buy, unlimited);
+    for (const [k, n] of Object.entries(need)) buy[k] = (buy[k] || 0) + n;
+    for (const [k, n] of Object.entries(out)) made[k] = (made[k] || 0) + n;
+    const step = { id: m.id, runs, xp10: runs * m.xp, made: out, buy: need, gain: gainOf(out, need, priceOf), levelAt: level, locked: m.level > level };
+    xp += runs * m.xp;
+    return step;
+  });
+  return {
+    steps, buy, made, gain: gainOf(made, buy, priceOf),
+    xp10: xp - startXp10, endXp10: xp, endLevel: levelForXp10(xp),
+    reached: targetXp10 != null && steps.length > 0 && xp >= targetXp10,
+  };
+}
+
 // ── The whole plan for one goal ───────────────────────────────────────────
 // opts: { bank, currentXp10, targetXp10, excluded (Set of method ids),
 //         unlimited (Set of items you'll buy as you go, e.g. vials of water: they
 //         never hold a plan back, and are left out of what to collect and costs),
 //         useBank, fillId (method to finish with), fillGroup (the group to pick
-//         from when nothing is chosen, e.g. bows for Fletching), priceOf }
+//         from when nothing is chosen, e.g. bows for Fletching), priceOf,
+//         mix (with the bank left out: how many of each you plan to make) }
 export function planGoal(ix, opts) {
   const {
     bank = {}, currentXp10, targetXp10, excluded = new Set(), unlimited = new Set(),
-    useBank = true, fillId = null, fillGroup = null, priceOf = () => null,
+    useBank = true, fillId = null, fillGroup = null, priceOf = () => null, mix = null,
   } = opts;
   const level = levelForXp10(currentXp10);
   const toGo = Math.max(0, targetXp10 - currentXp10);
 
+  // Your bank, or with it left out, nothing at all: the plan starts from scratch.
   const fromBank = useBank
     ? planBank(ix, { bank, startXp10: currentXp10, targetXp10, excluded, unlimited, prefer: fillId })
-    : { steps: [], used: {}, assumed: {}, leftover: new Stock(bank), xp10: 0, endXp10: currentXp10, endLevel: level, goalReached: null };
+    : { steps: [], used: {}, assumed: {}, leftover: new Stock(), xp10: 0, endXp10: currentXp10, endLevel: level, goalReached: null };
+  // Without the bank, a mix you plan yourself goes first.
+  const fromMix = !useBank && mix && Object.values(mix).some(n => n > 0)
+    ? planMix(ix, mix, { startXp10: currentXp10, targetXp10, unlimited, priceOf }) : null;
 
   // Then: what's still missing, with the method you pick.
-  const afterXp = fromBank.endXp10;
+  const afterXp = fromMix ? fromMix.endXp10 : fromBank.endXp10;
   const afterLevel = levelForXp10(afterXp);
   const remaining = Math.max(0, targetXp10 - afterXp);
   let fill = null;
@@ -429,12 +462,24 @@ export function planGoal(ix, opts) {
   // what's left in the bank. Without it they're the totals, from scratch.
   const bankStock = new Stock(bank);
   const after = useBank ? fromBank.leftover : new Stock();
+  // What the bank plan makes of each method, as From your bank shows it: the
+  // profit before any evening out.
+  const bankMade = new Map(), bankRuns = new Map();
+  if (useBank) {
+    for (const st of fromBank.steps) {
+      const acc = bankMade.get(st.id) || {};
+      for (const [item, n] of Object.entries(st.made || {})) acc[item] = (acc[item] || 0) + n;
+      bankMade.set(st.id, acc);
+      bankRuns.set(st.id, (bankRuns.get(st.id) || 0) + st.runs);
+    }
+  }
   const table = ix.train.map(m => {
     const needed = toGo > 0 ? Math.ceil(toGo / m.xp) : 0;
     const lvl = Math.max(level, m.level);
     const ctx = { level: lvl, kinds: BANK_KINDS, unlimited };
     const have = useBank && !gathers(m) ? maxRuns(ix, m, bankStock, ctx) : 0;
-    const still = !useBank ? needed : remaining > 0 ? Math.ceil(remaining / m.xp) : 0;
+    // Still needed: after everything the bank (or your mix) makes; with neither, all of them.
+    const still = !useBank && !fromMix ? needed : remaining > 0 ? Math.ceil(remaining / m.xp) : 0;
     const collect = without(expand(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited }).buy, unlimited);
     // Balance: the most you could make if every ingredient matched your most
     // plentiful one, and what that would take. (In actions: a log of arrows
@@ -458,20 +503,25 @@ export function planGoal(ix, opts) {
         : have > 0 && Number.isFinite(have) ? gainOf(made(have), {}, priceOf) : null,
       collect: useBank && still > 0 ? gainOf(made(still), collect, priceOf) : null,
     };
-    // The two together: the gp it all comes to on the way to the goal.
-    gains.net = gains.even || gains.collect ? {
-      total: (gains.even?.total || 0) + (gains.collect?.total || 0),
-      missing: [...(gains.even?.missing || []), ...(gains.collect?.missing || [])],
+    // The total net toward the goal: what the bank plan makes of it, before
+    // evening out, plus the profit after buying the supplies still needed.
+    // (Gross after using bank would count what evening out takes twice: the
+    // supplies left in the bank go to the ones still needed as well.)
+    gains.before = bankMade.has(m.id) ? gainOf(bankMade.get(m.id), {}, priceOf) : null;
+    gains.net = gains.before || gains.collect ? {
+      total: (gains.before?.total || 0) + (gains.collect?.total || 0),
+      missing: [...(gains.before?.missing || []), ...(gains.collect?.missing || [])],
     } : null;
     return {
       id: m.id, level: m.level, xp10: m.xp, locked: m.level > level,
-      needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), toMake: still,
+      needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), fromPlan: bankRuns.get(m.id) || 0, toMake: still,
+      planned: !useBank ? Math.max(0, Math.floor(Number(mix?.[m.id]) || 0)) : 0,
       collect, balance, gains,
       econ: methodEconomics(ix, m, priceOf, { level: lvl, unlimited }),
     };
   });
 
-  return { level, toGo, fromBank, afterXp10: afterXp, afterLevel, remaining, fill, table };
+  return { level, toGo, fromBank, fromMix, afterXp10: afterXp, afterLevel, remaining, fill, table };
 }
 
 // Highest XP per action among methods you can do at `level`.

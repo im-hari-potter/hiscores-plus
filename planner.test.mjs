@@ -149,15 +149,51 @@ test('total profits per row: after evening out, and after collecting the rest (v
   const fish = row(plan, 'hb_3dosefisherspotion');
   assert.equal(fish.balance, null);
   assert.deepEqual(fish.gains.even, { total: 403 * 1200, value: 403 * 1200, cost: 0, missing: [] });
-  // the total net: the two together
-  assert.equal(ss.gains.net.total, ss.gains.even.total + ss.gains.collect.total);
-  assert.equal(fish.gains.net.total, fish.gains.even.total + fish.gains.collect.total);
+  // the total net: what the bank plan makes of it before evening out (518, as
+  // From your bank shows), plus the profit after buying supplies. Not the gross
+  // after using bank: the 87 kwuarm left over would count twice.
+  assert.deepEqual(ss.gains.before, { total: 518 * 3000, value: 518 * 3000, cost: 0, missing: [] });
+  assert.deepEqual([ss.fromPlan, fish.fromPlan, row(plan, 'hb_3dose1attack').fromPlan], [518, 403, 0], 'what the bank plan makes of each');
+  assert.equal(ss.gains.net.total, 518 * 3000 + ss.gains.collect.total);
+  assert.notEqual(ss.gains.net.total, ss.gains.even.total + ss.gains.collect.total);
+  assert.equal(fish.gains.net.total, 403 * 1200 + fish.gains.collect.total);
+  // nothing made from the bank: just the profit after buying supplies
+  assert.equal(row(plan, 'hb_3dose1attack').gains.before, null);
+  assert.deepEqual(row(plan, 'hb_3dose1attack').gains.net.missing, row(plan, 'hb_3dose1attack').gains.collect.missing);
   // nothing for it in the bank: nothing to show for that part
   assert.equal(row(plan, 'hb_3dose1attack').gains.even, null);
   assert.ok(row(plan, 'hb_3dose1attack').gains.collect.missing.length, 'no prices for attack potions here');
   // without the bank there are no totals
   const off = row(planGoal(ix, { ...plan, bank: { kwuarm: 605 }, currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(78), useBank: false }), 'hb_3dose2strength');
-  assert.deepEqual(off.gains, { even: null, collect: null, net: null });
+  assert.deepEqual(off.gains, { even: null, collect: null, before: null, net: null });
+});
+
+test('with the bank off, a mix you plan yourself goes first, from scratch (v2.4.6)', () => {
+  const price = { ranarr_weed: 3000, snape_grass: 400, '3doseprayerrestore': 3800, irit_leaf: 900, eye_of_newt: 3, '3dose2attack': 1500 };
+  const opts = { bank: { ranarr_weed: 1000 }, currentXp10: xp10ForLevel(74), targetXp10: xp10ForLevel(78), unlimited: VIALS, priceOf: k => price[k] ?? null, useBank: false, fillId: 'hb_3doseprayerrestore' };
+  const plan = planGoal(ix, { ...opts, mix: { hb_3dose2attack: 1000, hb_3doseprayerrestore: 2000, hb_3dose1magic: 0 } });
+  const mix = plan.fromMix;
+  assert.deepEqual(mix.steps.map(s => [s.id, s.runs]), [['hb_3doseprayerrestore', 2000], ['hb_3dose2attack', 1000]], 'lowest level first; none of a kind is left out');
+  assert.equal(mix.xp10, 2000 * 875 + 1000 * 1000);
+  assert.deepEqual(mix.buy, { ranarr_weed: 2000, snape_grass: 2000, irit_leaf: 1000, eye_of_newt: 1000 }, 'all bought: the bank is left out, and vials are bought as you go');
+  assert.equal(mix.gain.total, 2000 * (3800 - 3400) + 1000 * (1500 - 903));
+  assert.equal(mix.steps[0].gain.total, 2000 * 400);
+  assert.equal(plan.afterXp10, xp10ForLevel(74) + mix.xp10);
+  assert.equal(plan.remaining, plan.toGo - mix.xp10, 'the mix counts toward the goal');
+  assert.equal(row(plan, 'hb_3dose2strength').toMake, Math.ceil(plan.remaining / 1250), 'still needed to goal: after the mix');
+  assert.equal(row(plan, 'hb_3dose2strength').needed, Math.ceil(plan.toGo / 1250), 'to goal: on its own, as before');
+  assert.deepEqual([row(plan, 'hb_3doseprayerrestore').planned, row(plan, 'hb_3dose2attack').planned, row(plan, 'hb_3dose2strength').planned], [2000, 1000, 0]);
+  const rest = plan.fill.segments.at(-1).runs;
+  assert.equal(plan.fill.buy.ranarr_weed, rest, 'the rest is planned from scratch too: the 1,000 ranarr in the bank are left out');
+  // a level you won't have yet is flagged; enough XP before it clears that
+  assert.equal(planGoal(ix, { ...opts, mix: { hb_3dose1magic: 100 } }).fromMix.steps[0].locked, true);
+  assert.equal(planGoal(ix, { ...opts, mix: { hb_3dose1magic: 100, hb_3doseprayerrestore: 3000 } }).fromMix.steps[1].locked, false);
+  // a mix past the goal reaches it
+  const big = planGoal(ix, { ...opts, mix: { hb_3doseprayerrestore: 7000 } });
+  assert.deepEqual([big.fromMix.reached, big.remaining, big.fill], [true, 0, null]);
+  // with the bank in use, the mix waits
+  assert.equal(planGoal(ix, { ...opts, useBank: true, mix: { hb_3dose2attack: 1000 } }).fromMix, null);
+  assert.equal(planGoal(ix, { ...opts, mix: {} }).fromMix, null);
 });
 
 test('unid herbs sit out of the plan until they are identified', () => {

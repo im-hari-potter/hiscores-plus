@@ -116,7 +116,7 @@ export function createPlanner(ctx) {
     error: null,
     newGoal: { skill: SKILL_BY_KEY.has(ui.newSkill) ? ui.newSkill : 'herblore', type: ['level', 'xp', 'rank', 'top'].includes(ui.newType) ? ui.newType : 'level' },
     open: new Set(Array.isArray(ui.open) ? ui.open : []),
-    sort: ['level', 'xp', 'cheap'].includes(ui.sort) ? ui.sort : 'level',
+    sort: ['level', 'xp', 'cheap', 'net'].includes(ui.sort) ? ui.sort : 'level',
     show: ['all', 'active', 'done'].includes(ui.show) ? ui.show : 'all',     // goal filter: status
     only: SKILL_BY_KEY.has(ui.only) ? ui.only : null,                        // goal filter: one skill
     visible: [],                                                              // goal ids shown, in order
@@ -277,6 +277,7 @@ export function createPlanner(ctx) {
       fillId: goal.fillId,
       fillGroup: DEFAULT_FILL_GROUP[goal.skill] || null,
       priceOf: prices.priceOf,
+      mix: goal.mix || null,
     });
     return { cur, target, ix, plan };
   }
@@ -589,7 +590,7 @@ export function createPlanner(ctx) {
   function planHtml(goal, plan, ix, cur) {
     if (!usesBank(goal.skill)) {
       return `<div class="plan"><div class="plan-opts"><span class="c-faint">${esc(textFor(goal.skill).noBank || '')}</span></div>
-        ${thenHtml(goal, plan, ix)}${tableHtml(goal, plan, ix, cur)}</div>`;
+        ${mixHtml(goal, plan, ix)}${thenHtml(goal, plan, ix)}${tableHtml(goal, plan, ix, cur)}</div>`;
     }
     const b = bank();
     const useBank = goal.useBank !== false;
@@ -601,7 +602,7 @@ export function createPlanner(ctx) {
       <span class="c-faint">${bankCount ? `${bankCount} kinds of item in your bank, updated ${ago(b.updated)}` : 'Your bank is empty'} ·</span>
       <button type="button" class="linkish" data-act="to-bank" data-skill="${goal.skill}">Edit bank</button>
     </div>`;
-    return `<div class="plan">${opts}${useBank ? bankHtml(goal, plan, ix) : ''}${thenHtml(goal, plan, ix)}${tableHtml(goal, plan, ix, cur)}</div>`;
+    return `<div class="plan">${opts}${useBank ? bankHtml(goal, plan, ix) : mixHtml(goal, plan, ix)}${thenHtml(goal, plan, ix)}${tableHtml(goal, plan, ix, cur)}</div>`;
   }
 
   // Unid herbs can't be planned with (which herb they are is only known once
@@ -660,6 +661,37 @@ export function createPlanner(ctx) {
       <div class="steps">${rows}</div>${money}${assumed}${unidNote(goal)}</div>`;
   }
 
+  // With your bank left out: a mix you plan yourself, typed into the table's
+  // Plan to make column. Made lowest level first, everything bought.
+  function mixHtml(goal, plan, ix) {
+    const mx = plan.fromMix;
+    if (!mx) {
+      return `<div class="plan-sec"><h4>Your mix</h4><div class="c-faint small-note">Plan a mix of ways to train: type how many of each you'll make in the
+        table's <b>Plan to make</b> column below. Their XP counts toward your goal, and the rest is planned after them.</div></div>`;
+    }
+    const gp = g => (g.missing.length ? '<span class="c-faint">?</span>' : `<b class="${g.total >= 0 ? 'c-win' : 'c-lose'}">${signed(g.total)}</b>`);
+    const rows = mx.steps.map(st => {
+      const m = ix.byId.get(st.id);
+      const lock = st.locked ? ` <span class="c-lose small-note" title="Made in level order, you'd only be level ${st.levelAt} when you get to these">needs level ${m.level}</span>` : '';
+      return `<div class="step">${itemIcon(methodItem(m))}<div class="step-main">
+          <div>${actionText(m, st.runs, st.made)} <span class="c-level">+${xpText(st.xp10)} XP</span> <span class="c-faint">·</span> net ${gp(st.gain)} gp${lock}</div>
+        </div></div>`;
+    }).join('');
+    const g = mx.gain;
+    const buys = Object.values(mx.buy).some(n => n > 0);
+    const money = `<div class="money">
+      ${buys ? `<span>Buying it all: <b>${g.missing.length ? '?' : gpShort(g.cost)}</b> gp</span>` : ''}
+      <span>What you make is worth: <b>${g.missing.length ? '?' : gpShort(g.value)}</b> gp</span>
+      <span>Net: ${gp(g)} gp</span>
+    </div>`;
+    const reach = mx.reached ? `<span class="c-win">That reaches your goal.</span>` : '';
+    return `<div class="plan-sec"><h4>Your mix <span class="c-level">+${xpText(mx.xp10)} XP</span> <span class="c-faint">→ level ${mx.endLevel}</span> ${reach}
+        <button type="button" class="linkish small-note" data-act="mix-clear">Clear the mix</button></h4>
+      <div class="steps">${rows}</div>
+      ${buys ? `<div class="collect"><span class="c-muted">To collect or buy:</span> ${itemList(mx.buy)}</div>` : ''}
+      ${money}</div>`;
+  }
+
   function thenHtml(goal, plan, ix) {
     if (plan.remaining <= 0 || !plan.fill) return '';
     const f = plan.fill;
@@ -683,6 +715,7 @@ export function createPlanner(ctx) {
       ${buys ? `<span>Buying it all: <b>${f.costMissing.length ? '?' : gpShort(f.cost)}</b> gp</span>` : ''}
       ${makes ? `<span>What you make is worth: <b>${worth.missing.length ? '?' : gpShort(worth.total)}</b> gp</span>` : ''}
       ${buys && makes ? (known ? `<span>Net: <b class="${worth.total - f.cost >= 0 ? 'c-win' : 'c-lose'}">${worth.total - f.cost >= 0 ? '+' : ''}${gpShort(worth.total - f.cost)}</b> gp</span>` : `<span class="c-faint">(some prices are still unknown)</span>`) : ''}
+      ${plan.fromMix && known && !plan.fromMix.gain.missing.length ? `<span>With your mix: <b class="${worth.total - f.cost + plan.fromMix.gain.total >= 0 ? 'c-win' : 'c-lose'}">${signed(worth.total - f.cost + plan.fromMix.gain.total)}</b> gp</span>` : ''}
     </div>`;
     // Tools the chosen method needs (never used up)
     const tools = [...new Set(f.segments.flatMap(s => ix.byId.get(s.id).tools || []))];
@@ -693,21 +726,21 @@ export function createPlanner(ctx) {
     const each = fm.unit ? Object.values(fm.out)[0] : 1;
     const balance = row?.balance && bankShown
       ? `<div class="tip">Tip: collect ${itemList(row.balance.collect, { small: true, named: true })} and your bank makes <b>${fmt(row.balance.runs * each)}</b> ${esc(fm.unit ? plural(ITEMS[methodItem(fm)]?.name || fm.name, 2) : fm.name)} instead of ${fmt(row.have * each)}.</div>` : '';
-    return `<div class="plan-sec"><h4>${bankShown ? 'Then, to' : 'To'} reach your goal: <span class="c-xp">${xpText(plan.remaining)} XP</span></h4>
+    return `<div class="plan-sec"><h4>${bankShown || plan.fromMix ? 'Then, to' : 'To'} reach your goal: <span class="c-xp">${xpText(plan.remaining)} XP</span></h4>
       <div class="bar wrap"><span class="c-muted">Train with</span> ${sel}</div>
       <div class="steps">${segs}</div>
       ${buys ? `<div class="collect"><span class="c-muted">To collect or buy:</span> ${itemList(f.buy)}</div>` : ''}
       ${toolLine}${money}${balance}</div>`;
   }
 
-  function unitNote(key, ix, mixed, { bankOn, even, assumed }) {
+  function unitNote(key, ix, mixed, { bankOn, even, assumed, mix }) {
     const each = textFor(key).each;
-    if (!usesBank(key)) return `To goal = how many on their own · Profit/item is what one ${each} sells for.`;
+    if (!usesBank(key)) return `To goal = how many on their own · Plan to make = your mix of ways to train${mix ? ' · Still needed to goal = after your mix' : ''} · Profit/item is what one ${each} sells for.`;
     const units = [...new Set(ix.train.map(m => m.units || ''))];
     const counted = units.length === 1 && units[0] ? ` Counts are in ${units[0]}.` : mixed ? ' A row marked "per log" counts logs.' : '';
     const left = assumed ? ` ${assumed[0].toUpperCase() + assumed.slice(1)} are left out: you'll buy them as you go.` : '';
-    if (!bankOn) return `To goal = how many on their own, from your XP now · Profit/item is per ${each}, bought from scratch.${counted}${left}`;
-    return `From bank = what your bank makes of it now${even ? ' · Even out = what to collect so nothing in your bank is left over' : ''} · Gross after using bank counts your banked supplies as yours already · Still needed and Supplies needed = after everything your bank makes · Total net = gross after using bank + profit after buying supplies · Profit/item is per ${each}, bought from scratch.${counted}${left}`;
+    if (!bankOn) return `To goal = how many on their own, from your XP now · Plan to make = your mix of ways to train${mix ? ' · Still needed to goal = after your mix' : ''} · Profit/item is per ${each}, bought from scratch.${counted}${left}`;
+    return `From bank = what your bank makes of it now${even ? ' · Even out = what to collect so nothing in your bank is left over' : ''} · Gross after using bank counts your banked supplies as yours already · Still needed to goal and Supplies needed = after everything your bank makes · Total net = gross profit from banked supplies (what your bank plan makes of it, before evening out) + profit after buying supplies · Profit/item is per ${each}, bought from scratch.${counted}${left}`;
   }
 
   // "Even out": what to collect so every ingredient in your bank gets used. Your
@@ -745,8 +778,12 @@ export function createPlanner(ctx) {
     const evenCol = bankOn && hasEven(ix);
     const assumed = goal.assume ?? DEFAULT_ASSUME[goal.skill] ?? [];
     let rows = plan.table.map(r => ({ r, m: ix.byId.get(r.id) }));
-    if (S.sort === 'xp') rows.sort((a, b) => b.m.xp - a.m.xp);
-    else if (S.sort === 'cheap') rows.sort((a, b) => (a.r.econ.gpPerXp ?? Infinity) - (b.r.econ.gpPerXp ?? Infinity));
+    // Sorting by total net needs the bank's columns; without them it's by level.
+    const sort = S.sort === 'net' && !bankOn ? 'level' : S.sort;
+    const net = r => (r.gains.net && !r.gains.net.missing.length ? r.gains.net.total : -Infinity);
+    if (sort === 'xp') rows.sort((a, b) => b.m.xp - a.m.xp);
+    else if (sort === 'cheap') rows.sort((a, b) => (a.r.econ.gpPerXp ?? Infinity) - (b.r.econ.gpPerXp ?? Infinity));
+    else if (sort === 'net') rows.sort((a, b) => net(b.r) - net(a.r));
     // Many groups (Fletching): show one at a time, the one you train with unless you pick.
     const groups = groupsOf(rows.map(x => x.m)).map(([g]) => g);
     let shown = null;
@@ -773,20 +810,27 @@ export function createPlanner(ctx) {
     ];
     if (!bankOn) {
       columns.push(['<th title="How many on their own, from your XP now">To goal</th>', r => `<td>${r.needed ? fmt(r.needed) : '–'}</td>`]);
+      columns.push(['<th class="wrap" title="Your mix: how many of each you plan to make. Their XP counts toward your goal, and the rest is planned after them.">Plan to<br>make</th>',
+        (r, m) => `<td><input class="input small num mix-in" data-mix="${m.id}" inputmode="decimal" value="${r.planned ? fmt(r.planned) : ''}" placeholder="0" aria-label="How many ${esc(m.name)} you plan to make" title="How many you plan to make"></td>`]);
+      if (plan.fromMix) columns.push(['<th class="wrap" title="How many more to reach your goal, after your mix">Still needed<br>to goal</th>', r => `<td>${r.toMake ? fmt(r.toMake) : '–'}</td>`]);
     } else {
       columns.push(['<th title="What your bank makes of it now">From bank</th>', r => `<td>${r.have ? `<span class="c-level">${fmt(r.have)}</span>` : '0'}</td>`]);
+      columns.push(['<th class="wrap" title="Gross profit from your already banked supplies: what your bank plan makes of it, as From your bank shows, before any evening out. It\'s the bank part of Total net.">Gross profit from<br>banked supplies</th>',
+        (r, m) => gainTd(r.gains.before, g => `Your bank plan makes ${count(m, r.fromPlan)} (From your bank): worth ${gpShort(g.value)}. Your banked supplies are yours already.`)]);
       if (evenCol) columns.push([`<th class="l" title="${esc(EVEN_TIP)}">Even out</th>`, (r, m) => evenTd(m, r)]);
       columns.push([`<th class="wrap" title="What your bank makes of it${evenCol ? ' once evened out' : ''} is worth${evenCol ? ', less what evening out takes to collect' : ''}. Your banked supplies are yours already, so this is gross.">Gross after<br>using bank</th>`,
         (r, m) => gainTd(r.gains.even, g => `${count(m, r.balance ? r.balance.runs : r.have)}: worth ${gpShort(g.value)}${g.cost ? `, less ${gpShort(g.cost)} to collect` : ''}. Your banked supplies are yours already.`)]);
-      columns.push(['<th title="How many more after everything your bank makes">Still needed</th>', r => `<td>${r.toMake ? fmt(r.toMake) : '–'}</td>`]);
+      columns.push(['<th class="wrap" title="How many more to reach your goal, after everything your bank makes">Still needed<br>to goal</th>', r => `<td>${r.toMake ? fmt(r.toMake) : '–'}</td>`]);
       columns.push(['<th class="l" title="What those take, beyond what\'s left in your bank">Supplies needed</th>', r => `<td class="l">${r.toMake ? itemList(r.collect, { small: true }) : ''}</td>`]);
       columns.push(['<th class="wrap" title="What the ones still needed are worth, less what their supplies cost">Profit after<br>buying supplies</th>',
         (r, m) => gainTd(r.gains.collect, g => `${count(m, r.toMake)}: worth ${gpShort(g.value)}, less ${gpShort(g.cost)} for supplies.`)]);
-      columns.push(['<th class="wrap" title="Gross after using bank plus profit after buying supplies: the gp it all comes to on the way to your goal">Total net gp<br>toward goal</th>',
-        r => gainTd(r.gains.net, () => `Gross after using bank ${signed(r.gains.even?.total || 0)} + profit after buying supplies ${signed(r.gains.collect?.total || 0)}`)]);
+      columns.push(['<th class="wrap" title="Gross profit from banked supplies plus profit after buying supplies: the gp it all comes to on the way to your goal">Total net gp<br>toward goal</th>',
+        r => gainTd(r.gains.net, () => `Gross profit from banked supplies ${signed(r.gains.before?.total || 0)} + profit after buying supplies ${signed(r.gains.collect?.total || 0)}`)]);
     }
+    // Use comes first, where it can't scroll out of sight: untick anything you
+    // don't plan to make.
     if (bankCols) {
-      columns.push(['<th title="Let the bank plan use this. Untick anything you don\'t plan to make.">Use</th>',
+      columns.unshift(['<th title="Let the bank plan use this. Untick anything you don\'t plan to make.">Use</th>',
         (r, m) => `<td class="c"><input type="checkbox" data-use="${m.id}" ${excluded.has(m.id) ? '' : 'checked'} title="Let the bank plan use this" aria-label="Use ${esc(m.name)} in the bank plan"></td>`]);
     }
     const body = groups.filter(g => !shown || g === shown).map(gname => {
@@ -805,13 +849,13 @@ export function createPlanner(ctx) {
         </tr>`;
       }).join('');
     }).join('');
-    const sBtn = (k, label) => `<button type="button" class="${S.sort === k ? 'on' : ''}" data-tsort-plan="${k}">${label}</button>`;
+    const sBtn = (k, label, tip = '') => `<button type="button" class="${sort === k ? 'on' : ''}" data-tsort-plan="${k}"${tip ? ` title="${esc(tip)}"` : ''}>${label}</button>`;
     const gBtn = (g, label) => `<button type="button" class="chip${(shown || 'all') === g ? ' on' : ''}" data-tgroup="${esc(g)}" aria-pressed="${(shown || 'all') === g}">${esc(label)}</button>`;
     const groupBar = groups.length > 2 ? `<div class="group-pick" role="group" aria-label="Which options">${groups.map(g => gBtn(g, g)).join('')}${gBtn('all', 'All')}</div>` : '';
     return `<div class="plan-sec"><h4>Every option <span class="c-faint">(on its own, from ${cur ? `level ${cur.level}` : 'now'}; click one to train with it)</span></h4>
       ${groupBar}
-      <div class="bar wrap"><span class="c-muted small-note">Sort</span><div class="seg">${sBtn('level', 'Level')}${sBtn('xp', 'XP each')}${sBtn('cheap', 'Cheapest XP')}</div>
-        <span class="c-faint small-note">${unitNote(goal.skill, ix, mixed, { bankOn, even: evenCol, assumed: assumed.length ? ASSUME_LABEL[goal.skill] : null })}</span></div>
+      <div class="bar wrap"><span class="c-muted small-note">Sort</span><div class="seg">${sBtn('level', 'Level')}${sBtn('xp', 'XP each')}${sBtn('cheap', 'Cheapest XP')}${bankOn ? sBtn('net', 'Total net', 'Most gp toward your goal first (Total net gp toward goal)') : ''}</div>
+        <span class="c-faint small-note">${unitNote(goal.skill, ix, mixed, { bankOn, even: evenCol, assumed: assumed.length ? ASSUME_LABEL[goal.skill] : null, mix: !!plan.fromMix })}</span></div>
       <div class="table-wrap"><table class="grid plan-t">
         <thead><tr>${columns.map(([th]) => th).join('')}</tr></thead>
         <tbody>${body}</tbody></table></div></div>`;
@@ -1133,7 +1177,7 @@ export function createPlanner(ctx) {
   // in is found again afterwards, with its text and caret where they were.
   function fieldKey(el) {
     if (el.dataset?.psrc) return `[data-psrc="${el.dataset.psrc}"][value="${el.value}"]`;
-    for (const a of ['bank', 'price', 'gopt', 'use']) if (el.dataset?.[a]) return `[data-${a}="${el.dataset[a]}"]`;
+    for (const a of ['bank', 'price', 'gopt', 'use', 'mix']) if (el.dataset?.[a]) return `[data-${a}="${el.dataset[a]}"]`;
     const form = el.closest('[data-form]');
     if (form && el.name) return `[data-form="${form.dataset.form}"] [name="${el.name}"]`;
     return null;
@@ -1168,7 +1212,8 @@ export function createPlanner(ctx) {
     clearTimeout(rerenderTimer);
     if (pressing) { rerenderTimer = setTimeout(rerender, 250); return; }
     if (document.activeElement?.tagName === 'SELECT') { rerenderTimer = setTimeout(rerender, 1000); return; }
-    rerenderTimer = setTimeout(() => render(S.tab), 30);
+    // (and look again when it's time: a press may have started in between)
+    rerenderTimer = setTimeout(() => (pressing ? rerender() : render(S.tab)), 30);
   }
 
   function show(tab) {
@@ -1321,6 +1366,10 @@ export function createPlanner(ctx) {
         ctx.goTab('bank');
         break;
       case 'bank-prices': prices.want(Object.keys(bank().items), { force: true }); renderBankHead(); break;
+      case 'mix-clear':
+        updateGoal(card.dataset.goal, g => { delete g.mix; });
+        renderGoals();
+        break;
       case 'bank-order-reset': {
         const b = bank();
         delete b.order;
@@ -1351,6 +1400,18 @@ export function createPlanner(ctx) {
         if (t.dataset.gopt === 'useBank') g.useBank = t.checked;
         if (t.dataset.gopt === 'assume') g.assume = t.checked ? (DEFAULT_ASSUME[g.skill] || []) : [];
         if (t.dataset.gopt === 'fill') g.fillId = t.value;
+      });
+      renderGoals();
+      return;
+    }
+    if (card && t.dataset.mix) {
+      const n = parseAmount(t.value);
+      if (n == null) { t.classList.add('bad'); return; }
+      t.classList.remove('bad');
+      updateGoal(card.dataset.goal, g => {
+        g.mix = { ...(g.mix || {}) };
+        if (n > 0) g.mix[t.dataset.mix] = n; else delete g.mix[t.dataset.mix];
+        if (!Object.keys(g.mix).length) delete g.mix;
       });
       renderGoals();
       return;
