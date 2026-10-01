@@ -372,9 +372,22 @@ await check('goals: picking another potion and leaving the bank out change the p
   assert.equal(await page.inputValue('.goal select[data-gopt="fill"]'), 'hb_3doserangerspotion');
   await page.selectOption('.goal select[data-gopt="fill"]', 'hb_3doseprayerrestore');
   await page.waitForFunction(() => /4,251 × Prayer potion/.test(document.querySelector('.goal').innerText));
+  // Still and Collect come after everything the bank makes: 700 prayer potions
+  // are 61,250 XP, the same as 2,450 attack potions
+  const cellsOf = async id => (await page.locator(`.goal >> nth=0 >> tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+  const num = c => Number(c.replace(/,/g, ''));
+  let attack = await cellsOf('hb_3dose1attack');
+  assert.equal(num(attack[6]), num(attack[3]) - 2450, `still ${attack[6]} after to goal ${attack[3]}`);
+  assert.match(attack[7], new RegExp(`${attack[6]}[\\s\\S]*${attack[6]}`), 'collect for those');
   await page.uncheck('.goal input[data-gopt="useBank"]');
   await page.waitForFunction(() => !/From your bank/.test(document.querySelector('.goal').innerText));
   assert.match(await goalText(), /4,951 × Prayer potion/);
+  // without the bank: the totals, from scratch
+  const head = await page.locator('.goal >> nth=0 >> .plan-t thead').innerText();
+  assert.doesNotMatch(head, /From bank|Even out|Still/);
+  const prayer = await cellsOf('hb_3doseprayerrestore');
+  assert.equal(prayer[3], '4,951');
+  assert.match(prayer[4], /^4,951\s*4,951\s*4,951$/, 'ranarr, vials and snape grass for all of them');
   await page.check('.goal input[data-gopt="useBank"]');
   await page.waitForFunction(() => /From your bank/.test(document.querySelector('.goal').innerText));
 });
@@ -408,51 +421,54 @@ await check('prices: sales medians, placeholder prices fixed from notes, 4-dose 
   }, null, { timeout: 60000 });
   await page.fill('[data-price="snape_grass"]', '450');
   await page.press('[data-price="snape_grass"]', 'Tab');
-  await page.waitForFunction(() => /Snape grass\s*450\s*your price/.test(document.querySelector('#prices-body').innerText));
+  await page.waitForSelector('[data-psrc="snape_grass"][value="mine"]:checked');
+  assert.equal(await page.evaluate(() => window.__skills.prices.gp('snape_grass')), 450, 'typing a price picks it');
   const overrides = await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.priceOverrides')));
   assert.deepEqual(overrides, { snape_grass: 450 });
 });
 await page.screenshot({ path: `${SHOTS}/11-prices.png`, fullPage: true });
 
-await check('prices: high alch for what nobody trades, and a switch to price everything at high alch', async () => {
+await check('prices: each item uses the price you pick (market, high alch or yours), and it sticks', async () => {
   await page.click('.tab[data-tab="prices"]');
   await page.click('#prices-head [data-bskill="herblore"]');
+  const row = slug => page.locator(`#prices-body tr:has([data-psrc="${slug}"])`);
+  const on = async slug => (await row(slug).locator('td.pc.on input[type=radio]').getAttribute('value'));
+  const gp = slug => page.evaluate(s => window.__skills.prices.gp(s), slug);
   await page.waitForFunction(() => /Strength potion\(3\)\s*\d+\s*no trades: high alch/.test(document.querySelector('#prices-body').innerText), null, { timeout: 60000 });
-  await page.click('[data-pmode="alch"]');
-  await page.waitForFunction(() => /Ranarr weed\s*15\s*high alch/.test(document.querySelector('#prices-body').innerText));
-  const t = await text('#prices-body');
-  assert.match(t, /Kwuarm\s*32\s*high alch/, '3/5 of 54');
-  assert.match(t, /Ranarr weed\s*15\s*high alch\s*3,000/, 'the market\'s price beside it');
-  assert.match(t, /Snape grass\s*6\s*high alch\s*450 \(yours\)/, 'high alch is the game\'s own; your price waits');
-  assert.equal(await page.locator('#prices-body [data-price]').count(), 0, 'no price boxes with high alch');
-  assert.doesNotMatch(t, /Your price/);
-  assert.equal(await page.locator('[data-act="prices-refresh"]').count(), 0, 'no market to check');
-  assert.match(await text('#prices-head'), /3\/5 of its value/);
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.priceMode'))), 'alch');
-  await page.screenshot({ path: `${SHOTS}/11b-prices-alch.png` });
-  // the bank and the plan say which prices they use
-  await page.click('.tab[data-tab="bank"]');
-  await page.click('#bank-head [data-bskill="herblore"]');
-  await page.waitForFunction(() => /worth about [\d.,]+[KM]? gp at high alch/.test(document.querySelector('#bank-head').innerText));
-  assert.equal(await page.locator('[data-act="bank-prices"]').count(), 0);
-  await page.click('.tab[data-tab="goals"]');
-  await page.waitForSelector('.goal .money');
-  assert.match(await page.locator('.goal .money').first().innerText(), /\(high alch prices\)/);
-  assert.match(await page.locator('.goal').first().innerText(), /bought from scratch at high alch/);
-  // and back
-  await page.click('.tab[data-tab="prices"]');
-  await page.click('[data-pmode="market"]');
-  await page.waitForFunction(() => /Ranarr weed\s*3,000\s*median/.test(document.querySelector('#prices-body').innerText));
-  assert.equal(await page.locator('[data-act="prices-refresh"]').count(), 1);
-  assert.match(await text('#prices-body'), /Snape grass\s*450\s*your price/, 'your price is back, untouched');
-  assert.equal(await page.inputValue('[data-price="snape_grass"]'), '450');
-  assert.match(await page.getAttribute('[data-price="snape_grass"]', 'class'), /\bset\b/);
-  // it stays through a fresh market check and a reload, until the box is cleared
+  assert.match(await row('ranarr_weed').innerText(), /Ranarr weed\s*3,000\s*median of 6 sales[^\n]*\s*15/, 'market and high alch side by side');
+  assert.equal(await on('ranarr_weed'), 'market', 'the market by default');
+  // one item
+  await row('ranarr_weed').locator('[value="alch"]').click();
+  await page.waitForFunction(() => window.__skills.prices.gp('ranarr_weed') === 15);
+  assert.equal(await on('ranarr_weed'), 'alch');
+  assert.equal(await gp('kwuarm') > 32, true, 'only that item changed');
+  // a whole skill, then one list back: your own price stays
+  await page.click('#prices-head [data-pall="alch"]');
+  assert.deepEqual([await gp('kwuarm'), await gp('limpwurt_root'), await gp('snape_grass')], [32, 4, 450]);
+  assert.equal(await on('snape_grass'), 'mine');
+  await page.click('#prices-body table:has([data-psrc="guam_leaf"]) [data-pall="market"]');
+  assert.equal(await on('kwuarm'), 'market');
+  assert.equal(await on('limpwurt_root'), 'alch', 'other lists keep theirs');
+  // "Your price" needs one typed in first
+  await row('kwuarm').locator('[value="mine"]').click();
+  assert.equal(await on('kwuarm'), 'market');
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.price), 'kwuarm', 'the box to type it in');
+  await page.screenshot({ path: `${SHOTS}/11b-prices-picks.png` });
+  // the picks stick: a market check and a reload change nothing
   await page.click('[data-act="prices-refresh"]');
   await page.reload();
-  await page.waitForSelector('[data-price="snape_grass"]');
+  await page.waitForSelector('[data-psrc="limpwurt_root"]');
+  assert.deepEqual([await on('ranarr_weed'), await on('kwuarm'), await on('limpwurt_root'), await on('snape_grass')], ['market', 'market', 'alch', 'mine']);
   assert.equal(await page.inputValue('[data-price="snape_grass"]'), '450');
-  assert.match(await text('#prices-body'), /Snape grass\s*450\s*your price/);
+  assert.match(await page.getAttribute('[data-price="snape_grass"]', 'class'), /\bset\b/);
+  // the plan uses them: limpwurt at high alch is 4 gp
+  await page.click('.tab[data-tab="goals"]');
+  await page.waitForSelector('.goal .plan');
+  assert.match(await page.locator('.goal').first().locator('a.it-chip[href$="/items/limpwurt_root"]').first().getAttribute('title'), /4 gp each · high alch/);
+  // back to the market for the rest of the checks
+  await page.click('.tab[data-tab="prices"]');
+  await page.click('#prices-head [data-pall="market"]');
+  assert.deepEqual([await on('limpwurt_root'), await on('snape_grass')], ['market', 'mine']);
   // each item opens its page on the market (a new tab in a browser)
   const link = page.locator('#prices-body a.mk', { hasText: 'Ranarr weed' });
   assert.equal(await link.getAttribute('href'), 'https://markets.lostcity.rs/items/ranarr_weed');
@@ -739,7 +755,11 @@ await check('bank: All is in the order your bank has in-game, drags into your ow
     await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 });
     await page.mouse.up();
   };
-  await drag('unidentified_guam', 'lawrune');
+  const tabsBefore = ctx.pages().length, urlBefore = page.url();
+  await drag('unidentified_guam', 'lawrune');                     // by its name, which is a market link
+  await page.waitForTimeout(300);
+  assert.equal(ctx.pages().length, tabsBefore, 'dragging by the name doesn\'t open the market');
+  assert.equal(page.url(), urlBefore);
   const mine = await order();
   assert.deepEqual(mine.slice(0, 4), ['unidentified_guam', 'lawrune', 'blankrune', 'bronze_arrow']);
   assert.deepEqual([...mine].sort(), [...before].sort(), 'same items');
@@ -751,6 +771,13 @@ await check('bank: All is in the order your bank has in-game, drags into your ow
   await page.reload();
   await page.waitForSelector('#bank-all-grid .bank-cell');
   assert.deepEqual(await order(), mine, 'your order survives a reload');
+  // a click on an item's name opens its market page (in a browser, a new tab)
+  await ctx.route('https://markets.lostcity.rs/**', route => route.fulfill({ contentType: 'text/html', body: '<title>market</title>' }));
+  const [market] = await Promise.all([ctx.waitForEvent('page'), page.click('#bank-all-grid .bank-cell[data-slug="lawrune"] a.bn')]);
+  await market.waitForLoadState();
+  assert.match(market.url(), /markets\.lostcity\.rs\/items\/lawrune$/);
+  await market.close();
+  await ctx.unroute('https://markets.lostcity.rs/**');
   // amounts can still be typed in
   await page.fill('#bank-all-grid [data-bank="lawrune"]', '4k');
   await page.press('#bank-all-grid [data-bank="lawrune"]', 'Tab');

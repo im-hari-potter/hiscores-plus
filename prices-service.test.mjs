@@ -69,29 +69,46 @@ test('an item the market does not list is priced at high alch; your own price wi
   assert.equal(p.info('snape_grass').src, 'alch');
 });
 
-test('high alch prices for everything: no market needed, and your own prices wait for market prices', async () => {
+test('each item keeps the price you pick for it: market, high alch or your own', async () => {
   const calls = stubFetch(u => {
     const slug = u.pathname.split('/').pop();
     return { body: html(page({ item: { slug }, listings: { data: [] }, soldListings: { data: [sale(3000, 20)] } })) };
   });
   const p = new Prices({ origin: 'https://m.test', routes: ['page'], gapMs: 0 });
-  p.want(['ranarr_weed']);
+  p.want(['ranarr_weed', 'yew_longbow']);
   await done(p);
-  assert.equal(p.info('ranarr_weed').src, 'sales');
-  p.setMode('alch');
-  assert.deepEqual(p.info('ranarr_weed'), { gp: highAlch('ranarr_weed'), src: 'alch' });
-  assert.deepEqual(p.info('kwuarm'), { gp: 32, src: 'alch' }, 'priced without ever being checked');
-  assert.equal(p.market('ranarr_weed').gp, 3000, 'the market\'s price is still there to compare');
+  assert.equal(p.sourceOf('yew_longbow'), 'market', 'the market is the default');
+  p.setSource('yew_longbow', 'alch');
+  assert.deepEqual(p.info('yew_longbow'), { gp: 768, src: 'alch' });
+  assert.equal(p.info('ranarr_weed').gp, 3000, 'only that item changed');
+  assert.equal(p.market('yew_longbow').gp, 3000, 'the market\'s price is still there to compare');
+  // items on high alch don't need the market, unless asked for all of them
+  p.setSource('magic_longbow', 'alch');
   const asked = calls.length;
-  assert.equal(p.want(['kwuarm', 'limpwurt_root']), 0, 'nothing is fetched for it');
+  assert.equal(p.want(['magic_longbow']), 0);
   assert.equal(calls.length, asked);
+  assert.equal(p.want(['magic_longbow'], { all: true }), 1);
+  await done(p);
+  // 'yours' needs a price typed in; typing one picks it
+  p.setSource('kwuarm', 'mine');
+  assert.equal(p.sourceOf('kwuarm'), 'market');
   p.setOverride('kwuarm', 2500);
-  assert.deepEqual(p.info('kwuarm'), { gp: 32, src: 'alch' }, 'high alch is the game\'s own price');
-  p.setMode('market');
-  assert.equal(p.info('ranarr_weed').gp, 3000, 'market prices are kept for when you switch back');
-  assert.deepEqual(p.info('kwuarm'), { gp: 2500, src: 'you' }, 'and so is your own price');
+  assert.equal(p.sourceOf('kwuarm'), 'mine');
+  assert.deepEqual(p.info('kwuarm'), { gp: 2500, src: 'you' });
+  // picking for a whole list leaves your own prices be
+  p.setSource(['kwuarm', 'ranarr_weed', 'snape_grass'], 'alch');
+  assert.deepEqual(p.info('kwuarm'), { gp: 2500, src: 'you' });
+  assert.deepEqual([p.sourceOf('ranarr_weed'), p.sourceOf('snape_grass')], ['alch', 'alch']);
+  // picking another for that item itself keeps the typed price for later
+  p.setSource('kwuarm', 'alch');
+  assert.deepEqual(p.info('kwuarm'), { gp: 32, src: 'alch' });
+  p.setSource('kwuarm', 'mine');
+  assert.deepEqual(p.info('kwuarm'), { gp: 2500, src: 'you' });
+  // clearing it goes back to the market
   p.setOverride('kwuarm', null);
-  assert.equal(p.info('kwuarm'), null);
+  assert.equal(p.sourceOf('kwuarm'), 'market');
+  p.setSource(['ranarr_weed', 'snape_grass', 'yew_longbow', 'magic_longbow'], 'market');
+  assert.equal(p.info('ranarr_weed').src, 'sales');
 });
 
 test('your own price stays until you clear it, whatever the market says', async () => {
@@ -139,4 +156,27 @@ test('no connection at all stops the round too', async () => {
   await done(p);
   assert.match(p.status().error, /could not be reached/);
   assert.equal(p.status().done, 1);
+});
+
+test('typed prices from before each item had its own choice are yours; the old switch is gone', () => {
+  const mem = new Map();
+  globalThis.localStorage = {
+    getItem: k => (mem.has(k) ? mem.get(k) : null),
+    setItem: (k, v) => mem.set(k, String(v)),
+    removeItem: k => mem.delete(k),
+  };
+  try {
+    mem.set('lchs.priceOverrides', JSON.stringify({ snape_grass: 450 }));
+    mem.set('lchs.priceMode', JSON.stringify('alch'));               // v2.4.2: High alch for everything
+    const p = new Prices({ origin: 'https://m.test' });
+    assert.equal(p.sourceOf('snape_grass'), 'mine');
+    assert.deepEqual(p.info('snape_grass'), { gp: 450, src: 'you' });
+    assert.equal(p.sourceOf('kwuarm'), 'market', 'everything else starts on the market');
+    assert.equal(mem.has('lchs.priceMode'), false);
+    assert.deepEqual(JSON.parse(mem.get('lchs.priceUse')), { snape_grass: 'mine' });
+    p.setSource('yew_longbow', 'alch');
+    assert.equal(new Prices({ origin: 'https://m.test' }).sourceOf('yew_longbow'), 'alch', 'your pick sticks');
+  } finally {
+    delete globalThis.localStorage;
+  }
 });

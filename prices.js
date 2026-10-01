@@ -2,9 +2,11 @@
 //
 // Inside LostKit the tool may read the market's item pages, which carry recent
 // sales. Normal browsers can only use the market's JSON API, which has open
-// offers but no sales. Either way, a price you type in wins, and an item nobody
-// trades is worth what High Level Alchemy gives for it. Or price everything at
-// high alch (mode 'alch'), which needs no market at all.
+// offers but no sales. An item nobody trades is worth what High Level Alchemy
+// gives for it.
+//
+// Each item uses the price you pick for it, and keeps it: the market's (the
+// default), high alch, or one you typed in.
 //
 // Requests go one at a time with a pause between them: a handful of items a
 // minute costs the market about as much as one person clicking around.
@@ -21,6 +23,9 @@ const FORMAT = 1;                       // bump to drop cached prices after a lo
 // (the server's own sum, in the high alchemy spell).
 export const highAlch = slug => (ITEMS[slug] ? Math.max(1, Math.floor((ITEMS[slug].cost * 6) / 10)) : null);
 
+// Which price an item uses: the market's, high alch, or yours ('mine').
+export const SOURCES = ['market', 'alch', 'mine'];
+
 export class Prices extends EventTarget {
   // routes: 'page' (item pages with sales; LostKit only) and/or 'api' (JSON API)
   constructor({ origin = LIVE_MARKET, routes = ['page', 'api'], gapMs = 700, timeoutMs = 15000 } = {}) {
@@ -32,7 +37,12 @@ export class Prices extends EventTarget {
     this.cache = store.get('prices', {});
     if (this.cache._v !== FORMAT) this.cache = { _v: FORMAT };
     this.overrides = store.get('priceOverrides', {});
-    this.mode = store.get('priceMode', 'market') === 'alch' ? 'alch' : 'market';
+    this.use = store.get('priceUse', {});                  // slug -> 'market' | 'alch' | 'mine'
+    // Prices typed in before each item had its own choice (v2.4.2 and older) are yours.
+    let moved = false;
+    for (const slug of Object.keys(this.overrides)) if (!SOURCES.includes(this.use[slug])) { this.use[slug] = 'mine'; moved = true; }
+    if (moved) store.set('priceUse', this.use);
+    store.remove('priceMode');                             // v2.4.2's one switch for every item
     this.queue = [];
     this.busy = false;
     this.progress = { done: 0, total: 0, failed: 0 };
@@ -43,19 +53,24 @@ export class Prices extends EventTarget {
   // ── Reading ─────────────────────────────────────────────────────────────
   // { gp, src, n, last, at } for an item, or null. src: 'you' | 'sales' | 'offers' | 'dose' | 'alch'
   // ('alch' with untraded: the market was checked and nobody trades it).
-  // With market prices, a price you typed in wins over the market and high alch,
-  // for good (until you clear it). High alch prices are the game's own, so they
-  // leave your prices out (and keep them for when you switch back).
   info(slug) {
-    if (this.mode === 'alch') {
+    const use = this.sourceOf(slug);
+    if (use === 'mine' && this.overrides[slug] != null) return { gp: this.overrides[slug], src: 'you' };
+    if (use === 'alch') {
       const alch = highAlch(slug);
-      return alch == null ? null : { gp: alch, src: 'alch' };
+      if (alch != null) return { gp: alch, src: 'alch' };
     }
-    if (this.overrides[slug] != null) return { gp: this.overrides[slug], src: 'you' };
     return this.market(slug);
   }
 
-  // What the market says, whichever prices are in use (null: not checked yet).
+  // The price an item uses: 'market' unless you picked another.
+  sourceOf(slug) {
+    const u = this.use[slug];
+    if (SOURCES.includes(u)) return u;
+    return this.overrides[slug] != null ? 'mine' : 'market';
+  }
+
+  // What the market says, whichever price an item uses (null: not checked yet).
   market(slug) {
     const c = this.cache[slug];
     if (c && c.p != null) return { gp: c.p, src: c.src, n: c.n, last: c.last, at: c.at };
@@ -76,18 +91,33 @@ export class Prices extends EventTarget {
   fetchedAt(slug) { return this.cache[slug]?.at || 0; }
   isFresh(slug) { const c = this.cache[slug]; return !!c && Date.now() - c.at < TTL_MS; }
 
-  // 'market' (your prices, else player prices, else high alch for what nobody
-  // trades) or 'alch' (high alch for everything).
-  setMode(mode) {
-    this.mode = mode === 'alch' ? 'alch' : 'market';
-    store.set('priceMode', this.mode);
+  // Picks the price one item uses, or many at once (a whole list or skill). A
+  // price you typed in stays in use until you pick another for that item
+  // itself: picking for many leaves it be. 'mine' needs a price typed in.
+  setSource(slugs, use) {
+    if (!SOURCES.includes(use)) return;
+    const many = Array.isArray(slugs);
+    for (const slug of many ? slugs : [slugs]) {
+      if (!ITEMS[slug]) continue;
+      if (many && this.sourceOf(slug) === 'mine') continue;
+      if (use === 'mine' && this.overrides[slug] == null) continue;
+      this.use[slug] = use;
+    }
+    store.set('priceUse', this.use);
     this.#emit();
   }
 
+  // A price you type in is used from then on; clearing it goes back to the market.
   setOverride(slug, gp) {
-    if (gp == null || !(gp >= 0)) delete this.overrides[slug];
-    else this.overrides[slug] = gp;
+    if (gp == null || !(gp >= 0)) {
+      delete this.overrides[slug];
+      if (this.use[slug] === 'mine') delete this.use[slug];
+    } else {
+      this.overrides[slug] = gp;
+      this.use[slug] = 'mine';
+    }
     store.set('priceOverrides', this.overrides);
+    store.set('priceUse', this.use);
     this.#emit();
   }
 
@@ -96,13 +126,14 @@ export class Prices extends EventTarget {
   }
 
   // ── Fetching ────────────────────────────────────────────────────────────
-  // Queue items that have no fresh price (or all of them with force). Pricing
-  // at high alch needs no market, so only a forced check asks it then.
-  want(slugs, { force = false } = {}) {
-    if (this.mode === 'alch' && !force) return 0;
+  // Queue items that have no fresh price (or all of them with force). Items on
+  // high alch or your own price don't need the market, unless asked for with
+  // all (the Prices tab shows the market's price beside theirs).
+  want(slugs, { force = false, all = false } = {}) {
     let added = 0;
     for (const slug of new Set(slugs)) {
       if (!ITEMS[slug] || ITEMS[slug].untradeable) continue;
+      if (!force && !all && this.sourceOf(slug) !== 'market') continue;
       if (!force && this.isFresh(slug)) continue;
       if (this.queue.includes(slug)) continue;
       this.queue.push(slug);

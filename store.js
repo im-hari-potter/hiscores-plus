@@ -168,8 +168,8 @@ export function importBackup(text) {
       // A bank is one snapshot of what you had: the newer one wins.
       const current = store.get(key, null);
       if (!current || !Object.keys(current.items || {}).length || (value.updated || 0) > (current.updated || 0)) { store.set(key, value); banks++; }
-    } else if (key === 'priceOverrides' && value && typeof value === 'object') {
-      store.set(key, { ...value, ...store.get(key, {}) });
+    } else if ((key === 'priceOverrides' || key === 'priceUse') && value && typeof value === 'object') {
+      store.set(key, { ...value, ...store.get(key, {}) });     // what's set here already wins
     } else if (key === 'plan.account' && typeof value === 'string' && !store.get(key, null)) {
       store.set(key, value);
     }

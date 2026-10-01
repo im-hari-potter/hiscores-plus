@@ -47,15 +47,20 @@ LostKit, or remove it and add it again. Your saved data stays either way.
     - what to collect or buy, and a tip when your ingredients don't pair up (e.g. "collect 300 snape
       grass and your bank makes 1,000 prayer potions instead of 700");
     - every potion side by side: how many to the goal, how many your bank covers, what evens it out,
-      profit per potion, and gp per XP.
-  - **Even out**, in the table of every option: what to collect so nothing in your bank is left over.
-    Your most plentiful ingredient decides. With 605 kwuarm and 518 limpwurt root, Super strength says
-    collect 87 limpwurt root, and your bank covers 605 instead of 518.
+      how many are still to make and what to collect, profit per potion, and gp per XP.
+  - In the table of every option, **Still** and **Collect** come after everything your bank makes: the
+    XP from all of it counts, and what's left in your bank is used first. Untick **Use my bank** and
+    the table shows the totals, from scratch.
+  - **Even out**, in the same table: what to collect so nothing in your bank is left over. Your most
+    plentiful ingredient decides. With 605 kwuarm and 518 limpwurt root, Super strength says collect
+    87 limpwurt root, and your bank covers 605 instead of 518.
+  - Click an item a plan says to collect, buy or bring to open its page on the market.
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
   its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
   - **All** shows everything you have and what your whole bank is worth, in the order your bank has
     in-game (once you've read it from screenshots). Drag items into your own order, or show the most
     valuable first. A skill's tab shows only its items and what they're worth; every tab shows its value.
+  - Click an item's name to open its page on the market.
   - **Read it from screenshots**: open your bank in LostKit, press the screenshot key (scroll and take
     more if it doesn't fit), then drop the pictures from *Pictures › LostKit Screenshots* on the Bank
     tab, paste one, or choose them. You see what was read before anything changes, and only the
@@ -76,17 +81,19 @@ LostKit, or remove it and add it again. Your saved data stays either way.
   - Unidentified herbs are one "Unid herb" entry, because in-game they're all a plain "Herb". They count
     toward the bank's value, priced from the market's unid listing. Plans leave them out until you
     identify them.
-- **Prices** come from player listings on [markets.lostcity.rs](https://markets.lostcity.rs).
-  - A price is the median of recent sales. Items with no sales use open offers, and if the market has
-    nothing for an item, its high alch value is used: 3/5 of its value, the game's own sum.
-  - A 3-dose potion with no trades of its own is priced at ¾ of the 4-dose.
-  - Type your own price and it's used instead of the market's or high alch, until you clear it.
-  - Click an item on the Prices tab to open its page on the market. Inside LostKit it opens right in
-    the tool's tab, and LostKit's ◀ button brings you back.
-  - Or switch to **High alch** to price everything at what High Level Alchemy gives for it. Bank values,
-    profit and gp per XP all follow, and the Prices tab shows the market's price beside it. These are
-    the game's own numbers, so your prices sit this out (they're kept for when you switch back).
-  - Items are checked one at a time and kept for 12 hours.
+- **Prices**: pick the price each item uses, and it sticks.
+  - **Market**, the default, comes from player listings on
+    [markets.lostcity.rs](https://markets.lostcity.rs): the median of recent sales, otherwise of open
+    offers. If the market has nothing for an item, its high alch value is used. A 3-dose potion with no
+    trades of its own is priced at ¾ of the 4-dose.
+  - **High alch** is what High Level Alchemy gives for it: 3/5 of its value, the game's own sum.
+  - **Your price**: type one in and it's used until you pick another or clear it.
+  - Switch a whole skill or one list at once (high alch for Fletching, say, then logs back to the
+    market). That leaves prices you typed in be.
+  - Bank values, profit and gp per XP all use the price each item has.
+  - Market prices are checked one at a time and kept for 12 hours.
+  - Click an item on the Prices, Goals or Bank tab to open its page on the market. Inside LostKit it
+    opens right in the tool's tab, and LostKit's ◀ button brings you back.
 
 Saved players, gains history, goals and banks stay in your own browser. **Settings** has backup and
 restore.

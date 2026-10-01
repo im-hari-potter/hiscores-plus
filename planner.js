@@ -407,14 +407,18 @@ export function planGoal(ix, opts) {
     }
   }
 
-  // One row per method: what it takes on its own (like the calculator sites),
-  // plus what your bank covers for it.
+  // One row per method: how many on its own (like the calculator sites), and
+  // what your bank covers for it. With the bank in use, "still" and "collect"
+  // come after everything the bank plan makes: the XP left after it, made with
+  // what's left in the bank. Without it they're the totals, from scratch.
   const bankStock = new Stock(bank);
+  const after = useBank ? fromBank.leftover : new Stock();
   const table = ix.train.map(m => {
     const needed = toGo > 0 ? Math.ceil(toGo / m.xp) : 0;
     const ctx = { level: Math.max(level, m.level), kinds: BANK_KINDS, unlimited };
     const have = useBank && !gathers(m) ? maxRuns(ix, m, bankStock, ctx) : 0;
-    const collect = expand(ix, m, needed, bankStock.clone(), { level: MAX_LEVEL, unlimited }).buy;
+    const still = !useBank ? needed : remaining > 0 ? Math.ceil(remaining / m.xp) : 0;
+    const collect = expand(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited }).buy;
     // Balance: the most you could make if every ingredient matched your most
     // plentiful one, and what that would take. (In actions: a log of arrows
     // takes 15 feathers.)
@@ -430,7 +434,7 @@ export function planGoal(ix, opts) {
     }
     return {
       id: m.id, level: m.level, xp10: m.xp, locked: m.level > level,
-      needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), toMake: Math.max(0, needed - have),
+      needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), toMake: still,
       collect, balance,
       econ: methodEconomics(ix, m, priceOf, { level: Math.max(level, m.level) }),
     };
