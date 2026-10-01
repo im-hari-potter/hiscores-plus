@@ -11,8 +11,9 @@ import { rankParamForPage, pageOfRank, pageCount } from './totals-core.js';
 import { store, players, snapshots, exportBackup, importBackup } from './store.js';
 import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
+import { sortable } from './sortable.js';
 
-const VERSION = '2.4.1';
+const VERSION = '2.4.2';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -181,6 +182,7 @@ function topFor(id, rank) {
 const planner = createPlanner({
   api, totals, prices, esc, fmt, ago, iconImg, showMsg, errorText,
   fullMarket: LOCAL || isElectron(),
+  inLostKit: isElectron(),
   defaultAccount: () => prefs.lastLookup || players.saved()[0] || null,
   lookupProfile: () => state.lookup.profile,
   // Fetching the planned account's XP is a lookup like any other: keep a snapshot for Gains.
@@ -326,7 +328,7 @@ function renderTiles() {
   const p = state.lookup.profile;
   if (!el) return;
   if (!p) { el.innerHTML = ''; return; }
-  if (tileDrag?.active) { tileDrag.stale = true; return; }   // don't pull tiles out from under a drag
+  if (tileDrag?.hold()) return;   // don't pull tiles out from under a drag
   const levels = levelsOf(p);
   const bounds = boundUnrankedLevels(levels, p.stats[0]?.level);
   const shown = visibleIds(true);
@@ -354,82 +356,23 @@ function fullTileOrder(p) {
 }
 
 // ── Dragging tiles around ────────────────────────────────────────────────
-// Mouse: press and move. Touch: hold for a moment, then move (a quick swipe still scrolls).
+// Mouse: press and move. Touch: hold for a moment, then move (sortable.js).
 let tileDrag = null;
 
 function wireTileDrag() {
-  const root = $('lookup-result');
-  root.addEventListener('pointerdown', e => {
-    const tile = e.target.closest('#tiles-grid .tile');
-    if (!tile || e.button !== 0 || tileDrag) return;
-    tileDrag = { tile, id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, active: false, touch: e.pointerType !== 'mouse' };
-    if (tileDrag.touch) tileDrag.timer = setTimeout(() => tileDrag && !tileDrag.active && startTileDrag(), 350);
+  tileDrag = sortable({
+    root: $('lookup-result'),
+    item: '#tiles-grid .tile',
+    onDrop(tile) {
+      const moved = [...tile.parentNode.children].map(t => Number(t.dataset.id));
+      const slots = new Set(moved);
+      let k = 0;
+      state.tileOrder = fullTileOrder(state.lookup.profile).map(id => (slots.has(id) ? moved[k++] : id));
+      state.tileSort = null;                       // it's your own layout now
+      savePrefs();
+    },
+    onEnd({ dropped, stale }) { if (dropped || stale) renderTiles(); },
   });
-  window.addEventListener('pointermove', e => {
-    const d = tileDrag;
-    if (!d || e.pointerId !== d.id) return;
-    d.x = e.clientX; d.y = e.clientY;
-    if (!d.active) {
-      const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
-      if (d.touch) { if (moved > 10) endTileDrag(false); return; }  // moved before the hold: it's a scroll
-      if (moved < 6) return;
-      startTileDrag();
-    }
-    moveTileDrag();
-    e.preventDefault();
-  }, { passive: false });
-  window.addEventListener('touchmove', e => { if (tileDrag?.active) e.preventDefault(); }, { passive: false });
-  window.addEventListener('pointerup', e => { if (tileDrag && e.pointerId === tileDrag.id) endTileDrag(true); });
-  window.addEventListener('pointercancel', e => { if (tileDrag && e.pointerId === tileDrag.id) endTileDrag(false); });
-  window.addEventListener('keydown', e => { if (e.key === 'Escape' && tileDrag?.active) endTileDrag(false); });
-}
-
-function startTileDrag() {
-  const d = tileDrag;
-  const rect = d.tile.getBoundingClientRect();
-  d.active = true;
-  d.dx = d.x0 - rect.left; d.dy = d.y0 - rect.top;
-  d.before = [...d.tile.parentNode.children];
-  d.ghost = d.tile.cloneNode(true);
-  d.ghost.classList.add('tile-ghost');
-  Object.assign(d.ghost.style, { width: rect.width + 'px', height: rect.height + 'px' });
-  document.body.appendChild(d.ghost);
-  d.tile.classList.add('tile-placeholder');
-  document.body.classList.add('tiles-dragging');
-  moveTileDrag();
-}
-
-function moveTileDrag() {
-  const d = tileDrag;
-  d.ghost.style.left = (d.x - d.dx) + 'px';
-  d.ghost.style.top = (d.y - d.dy) + 'px';
-  const over = document.elementFromPoint(d.x, d.y)?.closest('#tiles-grid .tile');
-  if (!over || over === d.tile) return;
-  const tiles = [...d.tile.parentNode.children];
-  if (tiles.indexOf(d.tile) < tiles.indexOf(over)) over.after(d.tile); else over.before(d.tile);
-}
-
-function endTileDrag(keep) {
-  const d = tileDrag;
-  tileDrag = null;
-  if (!d) return;
-  clearTimeout(d.timer);
-  if (!d.active) return;
-  d.ghost.remove();
-  d.tile.classList.remove('tile-placeholder');
-  document.body.classList.remove('tiles-dragging');
-  const grid = d.tile.parentNode;
-  if (!keep) {                                   // put everything back where it was
-    for (const t of d.before) grid.appendChild(t);
-  } else {
-    const moved = [...grid.children].map(t => Number(t.dataset.id));
-    const slots = new Set(moved);
-    let k = 0;
-    state.tileOrder = fullTileOrder(state.lookup.profile).map(id => (slots.has(id) ? moved[k++] : id));
-    state.tileSort = null;                       // it's your own layout now
-    savePrefs();
-  }
-  if (d.stale || keep) renderTiles();
 }
 
 function tileHtml(skill, stat, bounds) {

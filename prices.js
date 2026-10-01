@@ -2,8 +2,9 @@
 //
 // Inside LostKit the tool may read the market's item pages, which carry recent
 // sales. Normal browsers can only use the market's JSON API, which has open
-// offers but no sales. Either way, a price you type in wins, and the shop value
-// is the last resort.
+// offers but no sales. Either way, a price you type in wins, and an item nobody
+// trades is worth what High Level Alchemy gives for it. Or price everything at
+// high alch (mode 'alch'), which needs no market at all.
 //
 // Requests go one at a time with a pause between them: a handful of items a
 // minute costs the market about as much as one person clicking around.
@@ -16,6 +17,10 @@ export const LIVE_MARKET = 'https://markets.lostcity.rs';
 const TTL_MS = 12 * 3600e3;
 const FORMAT = 1;                       // bump to drop cached prices after a logic change
 
+// What High Level Alchemy gives for an item: 3/5 of its value, at least 1 coin
+// (the server's own sum, in the high alchemy spell).
+export const highAlch = slug => (ITEMS[slug] ? Math.max(1, Math.floor((ITEMS[slug].cost * 6) / 10)) : null);
+
 export class Prices extends EventTarget {
   // routes: 'page' (item pages with sales; LostKit only) and/or 'api' (JSON API)
   constructor({ origin = LIVE_MARKET, routes = ['page', 'api'], gapMs = 700, timeoutMs = 15000 } = {}) {
@@ -27,6 +32,7 @@ export class Prices extends EventTarget {
     this.cache = store.get('prices', {});
     if (this.cache._v !== FORMAT) this.cache = { _v: FORMAT };
     this.overrides = store.get('priceOverrides', {});
+    this.mode = store.get('priceMode', 'market') === 'alch' ? 'alch' : 'market';
     this.queue = [];
     this.busy = false;
     this.progress = { done: 0, total: 0, failed: 0 };
@@ -35,17 +41,30 @@ export class Prices extends EventTarget {
   }
 
   // ── Reading ─────────────────────────────────────────────────────────────
-  // { gp, src, n, last, at } for an item, or null. src: 'you' | 'sales' | 'offers' | 'dose' | 'shop'
+  // { gp, src, n, last, at } for an item, or null. src: 'you' | 'sales' | 'offers' | 'dose' | 'alch'
+  // ('alch' with untraded: the market was checked and nobody trades it).
+  // With market prices, a price you typed in wins over the market and high alch,
+  // for good (until you clear it). High alch prices are the game's own, so they
+  // leave your prices out (and keep them for when you switch back).
   info(slug) {
+    if (this.mode === 'alch') {
+      const alch = highAlch(slug);
+      return alch == null ? null : { gp: alch, src: 'alch' };
+    }
     if (this.overrides[slug] != null) return { gp: this.overrides[slug], src: 'you' };
+    return this.market(slug);
+  }
+
+  // What the market says, whichever prices are in use (null: not checked yet).
+  market(slug) {
     const c = this.cache[slug];
     if (c && c.p != null) return { gp: c.p, src: c.src, n: c.n, last: c.last, at: c.at };
     // A 3-dose potion with no trades of its own: 3/4 of the 4-dose price.
     const dose = slug.match(/^3dose(.+)$/);
     const four = dose && this.cache['4dose' + dose[1]];
     if (four && four.p != null) return { gp: Math.round(four.p * 0.75), src: 'dose', n: four.n, last: four.last, at: four.at };
-    const shop = ITEMS[slug]?.cost;
-    if (shop != null && c) return { gp: shop, src: 'shop', at: c.at };   // looked up, nothing traded
+    const alch = highAlch(slug);
+    if (alch != null && c) return { gp: alch, src: 'alch', untraded: true, at: c.at };   // looked up, nothing traded
     return null;
   }
 
@@ -56,6 +75,14 @@ export class Prices extends EventTarget {
 
   fetchedAt(slug) { return this.cache[slug]?.at || 0; }
   isFresh(slug) { const c = this.cache[slug]; return !!c && Date.now() - c.at < TTL_MS; }
+
+  // 'market' (your prices, else player prices, else high alch for what nobody
+  // trades) or 'alch' (high alch for everything).
+  setMode(mode) {
+    this.mode = mode === 'alch' ? 'alch' : 'market';
+    store.set('priceMode', this.mode);
+    this.#emit();
+  }
 
   setOverride(slug, gp) {
     if (gp == null || !(gp >= 0)) delete this.overrides[slug];
@@ -69,8 +96,10 @@ export class Prices extends EventTarget {
   }
 
   // ── Fetching ────────────────────────────────────────────────────────────
-  // Queue items that have no fresh price (or all of them with force).
+  // Queue items that have no fresh price (or all of them with force). Pricing
+  // at high alch needs no market, so only a forced check asks it then.
   want(slugs, { force = false } = {}) {
+    if (this.mode === 'alch' && !force) return 0;
     let added = 0;
     for (const slug of new Set(slugs)) {
       if (!ITEMS[slug] || ITEMS[slug].untradeable) continue;

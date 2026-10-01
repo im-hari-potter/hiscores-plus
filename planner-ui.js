@@ -10,6 +10,8 @@ import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, level
 import { store, players } from './store.js';
 import { toSafeName, toDisplayName, checkName } from './api.js';
 import { topPercent, formatPercent } from './totals.js';
+import { sortable } from './sortable.js';
+import { LIVE_MARKET } from './prices.js';
 
 // One method index per skill that has calculator data.
 const INDEX = {};
@@ -34,6 +36,8 @@ const ASSUME_LABEL = { herblore: 'vials of water' };
 // With no method picked and nothing in the bank to go on, plans finish with the
 // classic way to train: bows, cut and strung, for Fletching.
 const DEFAULT_FILL_GROUP = { fletching: 'Bows' };
+// Every bank item in the order of the skill tabs and their groups.
+const SKILL_ORDER = new Map([...new Set(Object.values(BANK_GROUPS).flatMap(gs => gs.flatMap(g => g.items)))].map((s, i) => [s, i]));
 const TARGET_TTL = 30 * 60e3;          // re-check who holds a rank after this long
 const PROFILE_TTL = 5 * 60e3;
 
@@ -117,19 +121,38 @@ export function createPlanner(ctx) {
     only: SKILL_BY_KEY.has(ui.only) ? ui.only : null,                        // goal filter: one skill
     visible: [],                                                              // goal ids shown, in order
     bankView: ui.bankView === 'all' || BANK_GROUPS[ui.bankView] ? ui.bankView : 'all',   // Bank tab: everything, or one skill's items
+    allSort: ui.allSort === 'value' ? 'value' : 'yours',                     // Bank tab, All: your order or most valuable first
     bankSkill: INDEX[ui.bankSkill] ? ui.bankSkill : 'herblore',         // Prices tab: which skill
     tgroup: ui.tgroup && typeof ui.tgroup === 'object' ? ui.tgroup : {},     // plan table: which group, per skill
     rankLoading: new Set(),
     goalErr: {},
     tab: null,
   };
-  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only, bankSkill: S.bankSkill, bankView: S.bankView, tgroup: S.tgroup });
+  // The All view's items can be dragged into your own order (not by their
+  // amount box, which is for typing). Set up in wire().
+  let bankDrag = null;
+  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only, bankSkill: S.bankSkill, bankView: S.bankView, allSort: S.allSort, tgroup: S.tgroup });
   // The items of one skill's bank tab, or of the whole bank ('all'), that you have.
   function bankSubset(items, view) {
     const list = view === 'all' ? Object.keys(items) : [...new Set((BANK_GROUPS[view] || []).flatMap(g => g.items))];
     const out = {};
     for (const slug of list) if (items[slug] > 0 && ITEMS[slug]) out[slug] = items[slug];
     return out;
+  }
+
+  // The All view's order: yours (items dragged around), else the order they
+  // have in your bank in-game (slots, from screenshots), else the skill tabs'
+  // order. Items an order doesn't know yet go after the ones it does.
+  function allOrder(b, slugs) {
+    const slot = b.slots || {};
+    const at = s => slot[s] ?? Infinity;
+    const tab = s => SKILL_ORDER.get(s) ?? Infinity;
+    const base = [...slugs].sort((x, y) => (at(x) - at(y)) || (tab(x) - tab(y)) || x.localeCompare(y));
+    if (!Array.isArray(b.order)) return base;
+    const have = new Set(slugs);
+    const mine = b.order.filter(s => have.has(s));
+    const placed = new Set(mine);
+    return [...mine, ...base.filter(s => !placed.has(s))];
   }
 
   // ── Storage per account ─────────────────────────────────────────────────
@@ -144,6 +167,8 @@ export function createPlanner(ctx) {
     return b;
   }
   const saveBank = b => { b.updated = Date.now(); store.set('bank.' + safe(), b); };
+  // Moving items around isn't a change to what you have: 'updated' stays.
+  const saveLayout = b => store.set('bank.' + safe(), b);
   function updateGoal(id, fn) {
     const list = goals();
     const g = list.find(x => x.id === id);
@@ -286,6 +311,9 @@ export function createPlanner(ctx) {
     return `<span class="item${small ? ' sm' : ''}" style="${bg}background-position:-${x}px -${y}px" role="img" aria-label="${esc(it.name)}" title="${esc(it.name)}"></span>`;
   }
   const itemName = slug => esc(ITEMS[slug]?.name || slug);
+  // An item's page on the market. LostKit opens it right in this tab (its ◀
+  // button comes back here); a browser opens a new tab.
+  const marketLink = slug => `href="${esc(`${LIVE_MARKET}/items/${encodeURIComponent(slug)}`)}"${ctx.inLostKit ? '' : ' target="_blank" rel="noopener"'}`;
   // The item that stands for a method: what it makes, or for burning logs, the logs.
   const methodItem = m => Object.keys(m.out)[0] || Object.keys(m.in)[0];
   const plural = (name, n) => (n === 1 || /s$/i.test(name) ? name : name + 's');
@@ -300,7 +328,7 @@ export function createPlanner(ctx) {
     if (i.src === 'sales') return `median of ${i.n} sale${i.n === 1 ? '' : 's'}${i.last ? `, last ${ago(i.last)}` : ''}`;
     if (i.src === 'offers') return `median of ${i.n} open offer${i.n === 1 ? '' : 's'}`;
     if (i.src === 'dose') return '¾ of the 4-dose price';
-    if (i.src === 'shop') return 'no trades: shop value';
+    if (i.src === 'alch') return i.untraded ? 'no trades: high alch' : 'high alch';
     return '';
   }
   // "3,948 Ranarr weed" chips; with prices when known.
@@ -634,6 +662,7 @@ export function createPlanner(ctx) {
       ${buys ? `<span>Buying it all: <b>${f.costMissing.length ? '?' : gpShort(f.cost)}</b> gp</span>` : ''}
       ${makes ? `<span>What you make is worth: <b>${worth.missing.length ? '?' : gpShort(worth.total)}</b> gp</span>` : ''}
       ${buys && makes ? (known ? `<span>Net: <b class="${worth.total - f.cost >= 0 ? 'c-win' : 'c-lose'}">${worth.total - f.cost >= 0 ? '+' : ''}${gpShort(worth.total - f.cost)}</b> gp</span>` : `<span class="c-faint">(some prices are still unknown)</span>`) : ''}
+      ${(buys || makes) && prices.mode === 'alch' ? '<span class="c-faint" title="Change this on the Prices tab">(high alch prices)</span>' : ''}
     </div>`;
     // Tools the chosen method needs (never used up)
     const tools = [...new Set(f.segments.flatMap(s => ix.byId.get(s.id).tools || []))];
@@ -651,18 +680,36 @@ export function createPlanner(ctx) {
       ${toolLine}${money}${balance}</div>`;
   }
 
-  function unitNote(key, ix, mixed) {
+  function unitNote(key, ix, mixed, even) {
     const each = textFor(key).each;
-    if (!usesBank(key)) return `To goal = how many on their own · Profit is what one ${each} sells for.`;
+    const alch = prices.mode === 'alch' ? ' at high alch' : '';
+    if (!usesBank(key)) return `To goal = how many on their own · Profit is what one ${each} sells for${alch}.`;
     const units = [...new Set(ix.train.map(m => m.units || ''))];
     const counted = units.length === 1 && units[0] ? ` Counts are in ${units[0]}.` : mixed ? ' A row marked "per log" counts logs.' : '';
-    return `To goal = how many on their own · From bank = how many your bank covers now · Profit is per ${each}, bought from scratch.${counted}`;
+    return `To goal = how many on their own · From bank = how many your bank covers now${even ? ' · Even out = what to collect so nothing in your bank is left over' : ''} · Profit is per ${each}, bought from scratch${alch}.${counted}`;
+  }
+
+  // "Even out": what to collect so every ingredient in your bank gets used. Your
+  // most plentiful one decides how many you could make (605 kwuarm and 518
+  // limpwurt: collect 87 limpwurt, and the bank covers 605 instead of 518).
+  const EVEN_TIP = 'What to collect so nothing in your bank is left over: your most plentiful ingredient decides how many you could make.';
+  // Only where something takes two or more things (not essence or logs on their own).
+  const hasEven = ix => ix.train.some(m => Object.keys(m.in).length > 1);
+  function evenTd(m, r) {
+    const b = r.balance;
+    if (!b) return '<td class="l even"><span class="c-faint">–</span></td>';
+    const names = Object.entries(b.collect).filter(([, n]) => n > 0).map(([k, n]) => `${fmt(n)} ${ITEMS[k]?.name || k}`);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+    const count = n => (m.unit ? `${fmt(n)} ${n === 1 ? m.unit : m.units || m.unit + 's'}` : `${fmt(n)} × ${m.name}`);
+    const tip = `Collect ${list}, and your bank covers ${count(b.runs)} instead of ${fmt(r.have)}.`;
+    return `<td class="l even" title="${esc(tip)}"><span class="even-in">${itemList(b.collect, { small: true })}</span> <span class="c-faint">→</span> <b class="c-level">${fmt(b.runs)}</b></td>`;
   }
 
   function tableHtml(goal, plan, ix, cur) {
     const excluded = new Set(goal.excluded || []);
     const bankCols = usesBank(goal.skill);
-    const cols = bankCols ? 10 : 6;
+    const evenCol = bankCols && hasEven(ix);
+    const cols = bankCols ? (evenCol ? 11 : 10) : 6;
     let rows = plan.table.map(r => ({ r, m: ix.byId.get(r.id) }));
     if (S.sort === 'xp') rows.sort((a, b) => b.m.xp - a.m.xp);
     else if (S.sort === 'cheap') rows.sort((a, b) => (a.r.econ.gpPerXp ?? Infinity) - (b.r.econ.gpPerXp ?? Infinity));
@@ -690,6 +737,7 @@ export function createPlanner(ctx) {
           (e.profit != null ? `\nCosts ${gpShort(e.cost)}, worth ${gpShort(e.value)}: ${e.profit >= 0 ? 'profit' : 'loss'} ${gpShort(Math.abs(e.profit))}${per}` : '');
         const bankTds = bankCols ? `
           <td>${goal.useBank === false ? '–' : r.have ? `<span class="c-level">${fmt(r.have)}</span>` : '0'}</td>
+          ${evenCol ? evenTd(m, r) : ''}
           <td>${r.needed ? fmt(r.toMake) : '–'}</td>
           <td class="l">${r.needed ? itemList(r.collect, { small: true }) : ''}</td>` : '';
         return `<tr class="${r.locked ? 'dim ' : ''}${chosen ? 'hl ' : ''}${excluded.has(m.id) ? 'off' : ''}" data-method="${m.id}" title="${esc(title)}">
@@ -709,9 +757,9 @@ export function createPlanner(ctx) {
     return `<div class="plan-sec"><h4>Every option <span class="c-faint">(on its own, from ${cur ? `level ${cur.level}` : 'now'}; click one to train with it)</span></h4>
       ${groupBar}
       <div class="bar wrap"><span class="c-muted small-note">Sort</span><div class="seg">${sBtn('level', 'Level')}${sBtn('xp', 'XP each')}${sBtn('cheap', 'Cheapest XP')}</div>
-        <span class="c-faint small-note">${unitNote(goal.skill, ix, mixed)}</span></div>
+        <span class="c-faint small-note">${unitNote(goal.skill, ix, mixed, evenCol)}</span></div>
       <div class="table-wrap"><table class="grid plan-t">
-        <thead><tr><th>Lvl</th><th class="l">${textFor(goal.skill).what}</th><th>XP</th><th>To goal</th>${bankCols ? '<th>From bank</th><th>Still</th><th class="l">Collect</th>' : ''}<th>Profit</th><th>gp/XP</th>${bankCols ? '<th title="Let the bank plan use this">Use</th>' : ''}</tr></thead>
+        <thead><tr><th>Lvl</th><th class="l">${textFor(goal.skill).what}</th><th>XP</th><th>To goal</th>${bankCols ? `<th>From bank</th>${evenCol ? `<th class="l" title="${esc(EVEN_TIP)}">Even out</th>` : ''}<th>Still</th><th class="l">Collect</th>` : ''}<th>Profit</th><th>gp/XP</th>${bankCols ? '<th title="Let the bank plan use this">Use</th>' : ''}</tr></thead>
         <tbody>${body}</tbody></table></div></div>`;
   }
 
@@ -851,6 +899,7 @@ export function createPlanner(ctx) {
       ${problems ? `<ul class="shot-problems">${problems}</ul>` : ''}
       ${rows ? `<div class="shot-list">${rows}</div>` : '<p class="c-faint">None of the items the planner uses are in these screenshots.</p>'}
       ${missing.length ? `<label class="check shot-clear"><input type="checkbox" id="shots-clear"> Also clear ${missing.length} item${missing.length === 1 ? '' : 's'} that ${missing.length === 1 ? 'isn\'t' : 'aren\'t'} in your bank anymore: ${missing.map(itemName).join(', ')}</label>` : ''}
+      ${rows && Array.isArray(bank().order) ? `<label class="check shot-clear"><input type="checkbox" id="shots-order" checked> Put the All view back in your bank's order (you've moved items around there)</label>` : ''}
       <div class="bar wrap">
         ${rows ? `<button type="button" class="btn small" data-act="shots-apply">Update my bank</button>` : ''}
         <button type="button" class="btn small" data-act="shots-discard">${rows ? 'Discard' : 'Close'}</button>
@@ -876,26 +925,52 @@ export function createPlanner(ctx) {
     if ($('shots-clear')?.checked) {
       for (const slug of Object.keys(b.items)) if (!m.items.some(i => i.slug === slug)) { delete b.items[slug]; changed++; }
     }
+    // Where each item is in the bank, for the All view's order. Screenshots of
+    // the whole bank replace what was known; a part of it updates what it shows.
+    const slots = m.complete ? {} : { ...(b.slots || {}) };
+    for (const it of m.items) {
+      if (!it.slots?.length) continue;
+      if (ticked.has(it.slug)) slots[it.slug] = Math.min(...it.slots);
+      else if (b.slots?.[it.slug] != null) slots[it.slug] = b.slots[it.slug];
+    }
+    b.slots = slots;
+    const reordered = $('shots-order')?.checked;
+    if (reordered) delete b.order;
     saveBank(b);
     S.shots = null;
-    showMsg('bank-msg', `Bank updated from your screenshots: ${changed} item${changed === 1 ? '' : 's'} changed.`, 'ok');
+    showMsg('bank-msg', `Bank updated from your screenshots: ${changed} item${changed === 1 ? '' : 's'} changed.${reordered ? ' All is in your bank\'s order again.' : ''}`, 'ok');
     renderBank();
   }
 
   // ── Bank view ───────────────────────────────────────────────────────────
   function renderBank() {
+    if (bankDrag?.hold()) return;          // don't pull items out from under a drag
     renderAccount('bank-account', 'bank');
     renderShots();
     const body = $('bank-body');
     if (!S.account) { $('bank-head').innerHTML = ''; body.innerHTML = ''; return; }
     renderBankHead();
     if (S.bankView === 'all') {
-      // Everything you have, most valuable first (items without a price last).
-      const have = bankSubset(bank().items, 'all');
+      // Everything you have: in your order (drag items around), or most valuable first.
+      const b = bank();
+      const have = bankSubset(b.items, 'all');
       const worth = slug => { const p = prices.gp(slug); return p == null ? -1 : p * have[slug]; };
-      const list = Object.keys(have).sort((a, b) => worth(b) - worth(a) || itemName(a).localeCompare(itemName(b)));
+      const byValue = S.allSort === 'value';
+      const list = byValue
+        ? Object.keys(have).sort((x, y) => worth(y) - worth(x) || itemName(x).localeCompare(itemName(y)))
+        : allOrder(b, Object.keys(have));
+      const own = Array.isArray(b.order), inGame = list.some(slug => b.slots?.[slug] != null);
+      const note = byValue ? 'Drag an item to make this your own order.'
+        : own ? 'Your own order. Drag items to move them.'
+        : inGame ? 'In the order they have in your bank, from your screenshots. Drag items to move them.'
+        : 'Drag items to move them. Reading your bank from screenshots puts them in the order they have in-game.';
+      const oBtn = (k, label) => `<button type="button" class="${S.allSort === k ? 'on' : ''}" data-allsort="${k}" aria-pressed="${S.allSort === k}">${label}</button>`;
+      const reset = own && !byValue ? `<button type="button" class="linkish" data-act="bank-order-reset">${inGame ? 'Back to your bank\'s order' : 'Reset order'}</button>` : '';
       body.innerHTML = list.length
-        ? `<div class="card bank-group"><h4>Everything you have <span class="c-faint small-note">most valuable first</span></h4><div class="bank-grid">${list.map(bankCell).join('')}</div></div>`
+        ? `<div class="card bank-group"><div class="bank-all-head"><h4>Everything you have</h4>
+            <div class="seg" role="group" aria-label="Order">${oBtn('yours', 'Your order')}${oBtn('value', 'Most valuable')}</div>
+            <span class="c-faint small-note">${note}</span>${reset}</div>
+            <div class="bank-grid movable" id="bank-all-grid">${list.map(bankCell).join('')}</div></div>`
         : `<div class="empty">Nothing in your bank yet. Read it from screenshots above, or pick a skill to type in what you have.</div>`;
     } else {
       const groups = BANK_GROUPS[S.bankView] || [];
@@ -926,9 +1001,9 @@ export function createPlanner(ctx) {
     }[view] || '';
     $('bank-head').innerHTML = `${skillSwitch(Object.keys(BANK_GROUPS), view, { all: true, values })}<div class="bank-sum">
       <span>${kinds ? `<b>${kinds}</b> kind${kinds === 1 ? '' : 's'} of ${skillName ? esc(skillName) + ' ' : ''}item` : skillName ? `No ${esc(skillName)} items yet` : 'Nothing entered yet'}${b.updated ? ` · updated ${ago(b.updated)}` : ''}</span>
-      ${kinds ? `<span>${skillName ? `${esc(skillName)} items are worth` : 'Worth'} about <b class="c-xp">${gpShort(value.total)}</b> gp${value.missing.length ? ` <span class="c-faint">(${value.missing.length} without a price)</span>` : ''}</span>` : ''}
+      ${kinds ? `<span>${skillName ? `${esc(skillName)} items are worth` : 'Worth'} about <b class="c-xp">${gpShort(value.total)}</b> gp${prices.mode === 'alch' ? ' <span class="c-faint" title="Change this on the Prices tab">at high alch</span>' : ''}${value.missing.length ? ` <span class="c-faint">(${value.missing.length} without a price)</span>` : ''}</span>` : ''}
       <span class="grow"></span>
-      <button type="button" class="btn small" data-act="bank-prices">Get prices</button>
+      ${prices.mode === 'alch' ? '' : '<button type="button" class="btn small" data-act="bank-prices">Get prices</button>'}
       <button type="button" class="btn small danger" data-act="bank-clear">Clear bank</button>
     </div>
     <p class="note">Type what you have: 1500, 1.5k or 2m all work. Only the items the planner uses are listed; more skills come in later updates.
@@ -938,7 +1013,7 @@ export function createPlanner(ctx) {
   function bankCell(slug) {
     const n = bank().items[slug] || 0;
     const p = prices.gp(slug);
-    return `<label class="bank-cell${n ? ' has' : ''}" title="${esc(ITEMS[slug].name)}\n${esc(priceTip(slug))}">
+    return `<label class="bank-cell${n ? ' has' : ''}" data-slug="${slug}" title="${esc(ITEMS[slug].name)}\n${esc(priceTip(slug))}">
       ${itemIcon(slug)}
       <span class="bn">${itemName(slug)}</span>
       <input class="input small num" data-bank="${slug}" inputmode="decimal" value="${n ? fmt(n) : ''}" placeholder="0" aria-label="${itemName(slug)} in bank">
@@ -951,32 +1026,44 @@ export function createPlanner(ctx) {
     const st = prices.status();
     const head = $('prices-head');
     const running = st.busy || st.queued;
+    const alch = prices.mode === 'alch';
+    const mBtn = (k, label, tip) => `<button type="button" class="${prices.mode === k ? 'on' : ''}" data-pmode="${k}" aria-pressed="${prices.mode === k}" title="${esc(tip)}">${label}</button>`;
     head.innerHTML = `${skillSwitch(Object.keys(INDEX), S.bankSkill)}<div class="card">
       <div class="bar wrap">
-        <button type="button" class="btn small" data-act="prices-refresh"${running ? ' disabled' : ''}>Check prices now</button>
+        <span class="c-muted small-note">Use</span>
+        <div class="seg" role="group" aria-label="Which prices">${mBtn('market', 'Market prices', 'What players pay on markets.lostcity.rs')}${mBtn('alch', 'High alch', 'What High Level Alchemy gives for each item')}</div>
+        ${alch ? '' : `<button type="button" class="btn small" data-act="prices-refresh"${running ? ' disabled' : ''}>Check prices now</button>
         ${running ? `<button type="button" class="btn small" data-act="prices-stop">Stop</button><span class="busy">Checking ${fmt(Math.min(st.done + 1, st.total))} of ${fmt(st.total)}…</span>` : ''}
-        ${st.error && !running ? `<span class="c-lose small-note">${esc(st.error)}${ctx.fullMarket ? '' : ' Prices work best inside LostKit.'}</span>` : ''}
+        ${st.error && !running ? `<span class="c-lose small-note">${esc(st.error)}${ctx.fullMarket ? '' : ' Prices work best inside LostKit.'}</span>` : ''}`}
       </div>
-      <p class="note">Prices come from player listings on <a href="https://markets.lostcity.rs" target="_blank" rel="noopener">markets.lostcity.rs</a>:
-        the median of recent sales where there are any, otherwise of open offers. ${ctx.fullMarket ? '' : 'In a normal browser only open offers can be read; LostKit also sees the sales. '}
-        Items are checked one at a time and kept for 12 hours. Type your own price to override any of them.</p>
+      ${alch
+        ? `<p class="note">Every item is priced at what High Level Alchemy gives for it: 3/5 of its value, the game's own sum. Bank values, profit and gp per XP all use these.
+          Your own prices sit this out; they're kept for <b>Market prices</b>, which also has what players pay.</p>`
+        : `<p class="note">Prices come from player listings on <a href="https://markets.lostcity.rs" target="_blank" rel="noopener">markets.lostcity.rs</a>:
+          the median of recent sales where there are any, otherwise of open offers, and high alch for items nobody trades. ${ctx.fullMarket ? '' : 'In a normal browser only open offers can be read; LostKit also sees the sales. '}
+          Items are checked one at a time and kept for 12 hours. A price you type in is used instead of the market's or high alch, and stays until you clear it.
+          Click an item to open it on the market${ctx.inLostKit ? ' (LostKit\'s ◀ button brings you back here)' : ''}.</p>`}
     </div>`;
     const groups = priceGroups(S.bankSkill);
     $('prices-body').innerHTML = groups.map(g => `<div class="table-wrap price-wrap"><table class="grid prices-t">
-      <thead><tr><th class="l">${esc(g.name)}</th><th>Price</th><th class="l">From</th><th class="l">Checked</th><th>Your price</th></tr></thead>
+      <thead><tr><th class="l">${esc(g.name)}</th><th>Price</th><th class="l">From</th><th class="l">${alch ? 'Market' : 'Checked'}</th>${alch ? '' : '<th>Your price</th>'}</tr></thead>
       <tbody>${g.items.filter(s => ITEMS[s] && !ITEMS[s].untradeable).map(priceRow).join('')}</tbody></table></div>`).join('');
   }
 
   function priceRow(slug) {
     const i = prices.info(slug);
+    const alch = prices.mode === 'alch';
     const at = prices.fetchedAt(slug);
     const own = prices.overrides[slug];
+    // With high alch prices in use, the market's price (or yours) is shown next to them.
+    const market = !alch ? null : own != null ? { gp: own, src: 'you' } : prices.market(slug);
+    const last = alch ? (market && !market.untraded ? `<span title="${esc(sourceText(market))}">${gpShort(market.gp)}${market.src === 'you' ? ' (yours)' : ''}</span>` : '') : at ? ago(at) : '';
     return `<tr>
-      <td class="l"><span class="sk-cell">${itemIcon(slug, true)} ${itemName(slug)}</span></td>
+      <td class="l"><a class="sk-cell mk" ${marketLink(slug)} title="${esc(`Open ${ITEMS[slug]?.name || slug} on the market`)}">${itemIcon(slug, true)} ${itemName(slug)}</a></td>
       <td>${i ? `<b>${gpShort(i.gp)}</b>` : '<span class="c-faint">–</span>'}</td>
       <td class="l small-note">${i ? esc(sourceText(i)) : at ? 'not traded' : '<span class="c-faint">not checked</span>'}</td>
-      <td class="l small-note c-faint">${at ? ago(at) : ''}</td>
-      <td><input class="input small num" data-price="${slug}" inputmode="decimal" value="${own != null ? own : ''}" placeholder="market" aria-label="Your price for ${itemName(slug)}"></td>
+      <td class="l small-note c-faint">${last}</td>
+      ${alch ? '' : `<td><input class="input small num${own != null ? ' set' : ''}" data-price="${slug}" inputmode="decimal" value="${own != null ? own : ''}" placeholder="market" aria-label="Your price for ${itemName(slug)}" title="${own != null ? 'Your price: used until you clear this box' : 'Type a price to use instead of the market\'s'}"></td>`}
     </tr>`;
   }
 
@@ -1044,6 +1131,18 @@ export function createPlanner(ctx) {
       root.addEventListener('change', onChange);
       root.addEventListener('input', onInput);
     }
+    bankDrag = sortable({
+      root: $('view-bank'),
+      item: '#bank-all-grid .bank-cell',
+      skip: 'input',
+      onDrop(cell) {
+        const b = bank();
+        b.order = [...cell.parentNode.children].map(c => c.dataset.slug).filter(Boolean);
+        saveLayout(b);
+        if (S.allSort !== 'yours') { S.allSort = 'yours'; saveUi(); }   // it's your own order now
+      },
+      onEnd({ dropped, stale }) { if (dropped || stale) renderBank(); },
+    });
     // Screenshots dropped or pasted on the Bank tab. A file dropped anywhere else
     // on the page is ignored rather than opened in place of the tool.
     const onBank = () => S.tab === 'bank' && !$('view-bank')?.hidden && S.account;
@@ -1090,6 +1189,15 @@ export function createPlanner(ctx) {
       saveUi();
       render(S.tab);
       if (S.tab === 'prices') wantPrices([S.bankSkill]);
+      return;
+    }
+    const allsort = t.closest('[data-allsort]');
+    if (allsort) { S.allSort = allsort.dataset.allsort === 'value' ? 'value' : 'yours'; saveUi(); renderBank(); return; }
+    const pmode = t.closest('[data-pmode]');
+    if (pmode) {
+      prices.setMode(pmode.dataset.pmode);
+      render(S.tab);
+      if (prices.mode === 'market') wantPrices([S.bankSkill]);
       return;
     }
     const gshow = t.closest('[data-gshow]');
@@ -1149,6 +1257,13 @@ export function createPlanner(ctx) {
         ctx.goTab('bank');
         break;
       case 'bank-prices': prices.want(Object.keys(bank().items), { force: true }); renderBankHead(); break;
+      case 'bank-order-reset': {
+        const b = bank();
+        delete b.order;
+        saveLayout(b);
+        renderBank();
+        break;
+      }
       case 'shots-pick': pickScreenshots(); break;
       case 'shots-apply': applyShots(); break;
       case 'shots-discard': S.shots = null; renderShots(); break;

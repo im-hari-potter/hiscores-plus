@@ -301,16 +301,18 @@ form.inline { display: inline-flex; gap: 4px; }
 .tile .next.maxed { color: var(--gold-hi); font-weight: bold; }
 .tile { cursor: grab; user-select: none; -webkit-user-select: none; }
 .tile.unranked { opacity: 0.55; }
-.tile-placeholder { opacity: 0.25 !important; border-style: dashed; }
-.tile-ghost {
+/* Dragging into a new order (sortable.js): Lookup tiles, the bank's All view */
+.drag-placeholder { opacity: 0.25 !important; border-style: dashed !important; }
+.drag-ghost {
   position: fixed;
   z-index: 50;
   pointer-events: none;
+  margin: 0;
   opacity: 0.95;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
   transform: rotate(2deg) scale(1.05);
 }
-body.tiles-dragging, body.tiles-dragging * { cursor: grabbing !important; user-select: none; }
+body.dragging, body.dragging * { cursor: grabbing !important; user-select: none; }
 .tiles-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0 2px 6px; font-family: var(--small); font-size: 13px; color: var(--faint); }
 .tiles-bar .seg button { padding: 3px 9px; }
 .tile.unranked .v { color: var(--faint); }
@@ -532,6 +534,12 @@ table.plan-t .per { font-family: var(--small); font-size: 12px; color: var(--fai
 .bank-cell .bv { grid-column: 2; font-family: var(--small); font-size: 12px; color: var(--faint); min-height: 0; }
 .bank-cell.has { border-color: var(--gold); }
 .bank-cell.has .bn { color: var(--text); }
+.bank-all-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 6px; }
+.bank-all-head h4 { margin: 0; }
+.bank-all-head .seg button { padding: 2px 9px; }
+.bank-grid.movable .bank-cell { cursor: grab; user-select: none; -webkit-user-select: none; }
+.bank-grid.movable .bank-cell .input { cursor: text; user-select: text; -webkit-user-select: text; }
+table.plan-t td.even .it-chip:last-child { margin-right: 0; }
 
 .price-wrap { margin-bottom: 8px; }
 table.prices-t { table-layout: fixed; }
@@ -542,6 +550,9 @@ table.prices-t th:nth-child(4) { width: 11%; }
 table.prices-t th:nth-child(5) { width: 13%; }
 table.prices-t td { overflow: hidden; text-overflow: ellipsis; }
 table.prices-t td .input.num { width: 100%; max-width: 96px; }
+table.prices-t td .input.num.set { border-color: var(--gold-hi); color: #fff; }
+table.prices-t a.mk { color: inherit; text-decoration: none; }
+table.prices-t a.mk:hover, table.prices-t a.mk:focus-visible { color: #fff; text-decoration: underline; }
 
 .tile .goal-line { margin-top: 3px; font-family: var(--small); font-size: 12px; color: var(--gold-hi); white-space: normal; }
 

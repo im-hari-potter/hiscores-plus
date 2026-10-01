@@ -46,12 +46,16 @@ LostKit, or remove it and add it again. Your saved data stays either way.
     - how many potions are left after that, with the method you pick;
     - what to collect or buy, and a tip when your ingredients don't pair up (e.g. "collect 300 snape
       grass and your bank makes 1,000 prayer potions instead of 700");
-    - every potion side by side: how many to the goal, how many your bank covers, profit per potion,
-      and gp per XP.
+    - every potion side by side: how many to the goal, how many your bank covers, what evens it out,
+      profit per potion, and gp per XP.
+  - **Even out**, in the table of every option: what to collect so nothing in your bank is left over.
+    Your most plentiful ingredient decides. With 605 kwuarm and 518 limpwurt root, Super strength says
+    collect 87 limpwurt root, and your bank covers 605 instead of 518.
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
   its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
-  - **All** shows everything you have, most valuable first, and what your whole bank is worth. A skill's
-    tab shows only its items and what they're worth; every tab shows its value.
+  - **All** shows everything you have and what your whole bank is worth, in the order your bank has
+    in-game (once you've read it from screenshots). Drag items into your own order, or show the most
+    valuable first. A skill's tab shows only its items and what they're worth; every tab shows its value.
   - **Read it from screenshots**: open your bank in LostKit, press the screenshot key (scroll and take
     more if it doesn't fit), then drop the pictures from *Pictures › LostKit Screenshots* on the Bank
     tab, paste one, or choose them. You see what was read before anything changes, and only the
@@ -65,16 +69,23 @@ LostKit, or remove it and add it again. Your saved data stays either way.
       otherwise the low end is used.
     - Lantadyme looks exactly like an unid herb in this version, so it's read as one.
     - Items cut off at the top or bottom edge of the bank are skipped, so let screenshots overlap.
+    - Where each item sits is kept too, for All. If you've dragged items around since, you can choose
+      to put them back in your bank's order.
   - With no method picked, the bank plan finds the order that gets the most XP out of what you have
     (rune dart tips get your feathers before bronze arrows do).
   - Unidentified herbs are one "Unid herb" entry, because in-game they're all a plain "Herb". They count
     toward the bank's value, priced from the market's unid listing. Plans leave them out until you
     identify them.
 - **Prices** come from player listings on [markets.lostcity.rs](https://markets.lostcity.rs).
-  - A price is the median of recent sales. Items with no sales use open offers, and if nobody trades
-    an item, its shop value is used.
+  - A price is the median of recent sales. Items with no sales use open offers, and if the market has
+    nothing for an item, its high alch value is used: 3/5 of its value, the game's own sum.
   - A 3-dose potion with no trades of its own is priced at ¾ of the 4-dose.
-  - Type your own price to override any of them.
+  - Type your own price and it's used instead of the market's or high alch, until you clear it.
+  - Click an item on the Prices tab to open its page on the market. Inside LostKit it opens right in
+    the tool's tab, and LostKit's ◀ button brings you back.
+  - Or switch to **High alch** to price everything at what High Level Alchemy gives for it. Bank values,
+    profit and gp per XP all follow, and the Prices tab shows the market's price beside it. These are
+    the game's own numbers, so your prices sit this out (they're kept for when you switch back).
   - Items are checked one at a time and kept for 12 hours.
 
 Saved players, gains history, goals and banks stay in your own browser. **Settings** has backup and
@@ -107,7 +118,8 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
 - Planner files:
   - `planner.js` holds the maths, all in tenths of XP like the game.
   - `planner-ui.js` builds the Goals, Bank and Prices views.
-  - `prices-core.js` and `prices.js` handle the market.
+  - `prices-core.js` and `prices.js` handle the market (and high alch).
+  - `sortable.js` drags things into a new order: the Lookup tiles and the bank's All view.
   - `bankread.js` reads a bank screenshot. It loads only when used, along with `bankread-data.js` and
     `bankicons.png`, which `build-data.mjs` also generates (bank layout, the p11 font and the icons to
     compare with). The tests paint pretend screenshots with `bankfake.mjs`.

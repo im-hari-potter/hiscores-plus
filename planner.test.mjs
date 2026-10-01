@@ -72,6 +72,21 @@ test("Ostap's example: 74 to 78 Herblore with 1,000 ranarr and 700 snape grass",
   assert.deepEqual(plan.fill.buy, { ranarr_weed: 3948, snape_grass: 4248, vial_water: 4248 });
 });
 
+test('even out: 605 kwuarm and 518 limpwurt want 87 more limpwurt (v2.4.2)', () => {
+  const opts = bank => ({ bank, currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(78), unlimited: VIALS });
+  let r = row(planGoal(ix, opts({ kwuarm: 605, limpwurt_root: 518, vial_water: 2230 })), 'hb_3dose2strength');
+  assert.equal(r.have, 518);
+  assert.deepEqual(r.balance, { runs: 605, collect: { limpwurt_root: 87 } });
+  // the other way round, and with some of the kwuarm already made into unfinished potions
+  r = row(planGoal(ix, opts({ kwuarm: 500, limpwurt_root: 518 })), 'hb_3dose2strength');
+  assert.deepEqual(r.balance, { runs: 518, collect: { kwuarm: 18 } });
+  r = row(planGoal(ix, opts({ kwuarm: 505, kwuarmvial: 100, limpwurt_root: 518 })), 'hb_3dose2strength');
+  assert.deepEqual(r.balance, { runs: 605, collect: { limpwurt_root: 87 } });
+  // nothing to even out once it pairs up, or with the bank left out
+  assert.equal(row(planGoal(ix, opts({ kwuarm: 518, limpwurt_root: 518 })), 'hb_3dose2strength').balance, null);
+  assert.equal(row(planGoal(ix, { ...opts({ kwuarm: 605, limpwurt_root: 518 }), useBank: false }), 'hb_3dose2strength').balance, null);
+});
+
 test('unid herbs sit out of the plan until they are identified', () => {
   const res = planBank(ix, { bank: { unidentified_guam: 500, snape_grass: 10 }, startXp10: 11_962_500, unlimited: VIALS });
   assert.equal(res.steps.length, 0);

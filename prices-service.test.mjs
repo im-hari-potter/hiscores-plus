@@ -3,7 +3,7 @@
 // and when it stops.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Prices } from './prices.js';
+import { Prices, highAlch } from './prices.js';
 
 const coins = n => ({ quantity: n, item: { slug: 'coins' } });
 const sale = (p, day) => ({ type: 'sell', quantity: 1, soldAt: `2026-09-${String(day).padStart(2, '0')}T00:00:00Z`, offers: [{ title: 'For each item:', items: [coins(p)] }] });
@@ -48,16 +48,65 @@ test('item pages: first by HTML (learning the version), then as JSON; 3-dose fal
   assert.ok(calls.some(c => c.path.includes('4doseprayerrestore')), 'the 4-dose was looked up');
 });
 
-test('an item the market does not list gets its shop value; your own price wins', async () => {
+test('high alch is 3/5 of an item\'s value, at least 1 coin, like the spell', () => {
+  assert.equal(highAlch('snape_grass'), 6, 'value 10');
+  assert.equal(highAlch('yew_longbow'), 768, 'value 1,280');
+  assert.equal(highAlch('feather'), 1, 'value 2: 1.2 rounds down');
+  assert.equal(highAlch('arrow_shaft'), 1, 'value 1: never less than 1 coin');
+  assert.equal(highAlch('not_an_item'), null);
+});
+
+test('an item the market does not list is priced at high alch; your own price wins', async () => {
   stubFetch(() => ({ status: 404, body: 'nope' }));
   const p = new Prices({ origin: 'https://m.test', routes: ['page'], gapMs: 0 });
+  assert.equal(p.info('snape_grass'), null, 'not checked yet: no price');
   p.want(['snape_grass']);
   await done(p);
-  assert.deepEqual({ gp: p.info('snape_grass').gp, src: p.info('snape_grass').src }, { gp: 10, src: 'shop' });
+  assert.deepEqual({ gp: p.info('snape_grass').gp, src: p.info('snape_grass').src, untraded: p.info('snape_grass').untraded }, { gp: 6, src: 'alch', untraded: true });
   p.setOverride('snape_grass', 450);
   assert.deepEqual(p.info('snape_grass'), { gp: 450, src: 'you' });
   p.setOverride('snape_grass', null);
-  assert.equal(p.info('snape_grass').src, 'shop');
+  assert.equal(p.info('snape_grass').src, 'alch');
+});
+
+test('high alch prices for everything: no market needed, and your own prices wait for market prices', async () => {
+  const calls = stubFetch(u => {
+    const slug = u.pathname.split('/').pop();
+    return { body: html(page({ item: { slug }, listings: { data: [] }, soldListings: { data: [sale(3000, 20)] } })) };
+  });
+  const p = new Prices({ origin: 'https://m.test', routes: ['page'], gapMs: 0 });
+  p.want(['ranarr_weed']);
+  await done(p);
+  assert.equal(p.info('ranarr_weed').src, 'sales');
+  p.setMode('alch');
+  assert.deepEqual(p.info('ranarr_weed'), { gp: highAlch('ranarr_weed'), src: 'alch' });
+  assert.deepEqual(p.info('kwuarm'), { gp: 32, src: 'alch' }, 'priced without ever being checked');
+  assert.equal(p.market('ranarr_weed').gp, 3000, 'the market\'s price is still there to compare');
+  const asked = calls.length;
+  assert.equal(p.want(['kwuarm', 'limpwurt_root']), 0, 'nothing is fetched for it');
+  assert.equal(calls.length, asked);
+  p.setOverride('kwuarm', 2500);
+  assert.deepEqual(p.info('kwuarm'), { gp: 32, src: 'alch' }, 'high alch is the game\'s own price');
+  p.setMode('market');
+  assert.equal(p.info('ranarr_weed').gp, 3000, 'market prices are kept for when you switch back');
+  assert.deepEqual(p.info('kwuarm'), { gp: 2500, src: 'you' }, 'and so is your own price');
+  p.setOverride('kwuarm', null);
+  assert.equal(p.info('kwuarm'), null);
+});
+
+test('your own price stays until you clear it, whatever the market says', async () => {
+  stubFetch(u => {
+    const slug = u.pathname.split('/').pop();
+    return { body: html(page({ item: { slug }, listings: { data: [] }, soldListings: { data: [sale(3000, 20)] } })) };
+  });
+  const p = new Prices({ origin: 'https://m.test', routes: ['page'], gapMs: 0 });
+  p.setOverride('ranarr_weed', 2750);
+  p.want(['ranarr_weed'], { force: true });
+  await done(p);
+  assert.equal(p.cache.ranarr_weed.p, 3000, 'the market was checked');
+  assert.deepEqual(p.info('ranarr_weed'), { gp: 2750, src: 'you' }, 'but your price is the one used');
+  p.setOverride('ranarr_weed', null);
+  assert.equal(p.info('ranarr_weed').src, 'sales');
 });
 
 test('the JSON API route (normal browsers): open offers', async () => {
