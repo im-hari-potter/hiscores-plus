@@ -44,10 +44,12 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
   needs, the XP it gives, and what it takes and makes. The maths is done in tenths of XP, like the
   game does.
 - How many you need = the XP still to go ÷ the XP each one gives, rounded up.
+- **Gross** is what something is worth, with nothing taken off. **Net** takes off what you pay for its
+  supplies, so it can be negative: a loss.
 - A plan has three parts:
   1. **From your bank**: what the items in your bank make, best XP first (the one you train with goes
      first when it can), including steps on the way like unfinished potions. Each step shows what it
-     makes is worth, and the total is its **gross profit**.
+     makes is worth, and the total is its **Gross**.
   2. **Then, to reach your goal**: the rest, made the way you pick under **Train with**. If you're
      short of levels for it, the plan works up to it with the best one at each level on the way
      (willows to 45, maples to 60, then yews). Below that: what to collect or buy, what to bring, what
@@ -64,7 +66,7 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
 
 #### Check your prices first
 
-Costs, profits and gp per XP are only as good as the prices behind them. Market prices come from what
+Costs, gross, net and gp per XP are only as good as the prices behind them. Market prices come from what
 players have listed and sold lately, and some items have few listings or none. **Look over the Prices
 tab for the items you'll use, and pick or type the price that's right for you** (see Prices below).
 Anything without a price shows **?** until it has one.
@@ -72,7 +74,7 @@ Anything without a price shows **?** until it has one.
 #### Use my bank
 
 - **On** (the default): your bank is put to work first.
-  - **From your bank** lists what it makes and what each part is worth. The total is **gross profit**:
+  - **From your bank** lists what it makes and what each part is worth. The total is **Gross**:
     your banked supplies are already yours, so nothing is taken off for them.
   - Everything after it comes after all your bank makes: its XP counts toward the goal, and what's left
     in your bank is used before anything is collected.
@@ -98,18 +100,18 @@ the table's **Plan to make** column (1,000 prayer potions, then 2,000 super atta
 |---|---|---|
 | **Use** (first) | Lets the bank plan make it (see below) | the same |
 | **XP** | XP for one | the same |
-| **Profit/item** | What one sells for, less what it takes, bought from scratch | the same |
+| **Net/item** | What one sells for, less what it takes, bought from scratch | the same |
 | **gp/XP** | What each XP costs you (negative: you make money doing it) | the same |
 | **To goal** | not shown | How many to reach the goal, on their own |
 | **Plan to make** | not shown | How many you'll make in your mix (see above) |
 | **From bank** | How many your bank makes of it now | not shown |
-| **Gross profit from banked supplies** | What your bank plan makes of it (its part of From your bank) is worth, before any evening out. Your banked supplies are yours already | not shown |
+| **Gross from banked supplies** | What your bank plan makes of it (its part of From your bank) is worth, before any evening out. Your banked supplies are yours already | not shown |
 | **Even out** | What to collect so nothing in your bank is left over: your most plentiful ingredient decides | not shown |
-| **Gross after using bank** | What your bank makes of it (once evened out, where Even out says so) is worth, less what evening out takes. Gross: your banked supplies are yours already | not shown |
+| **Net after even out** | What your bank makes of it once evened out is worth, less what evening out takes to collect. Your banked supplies are yours already. Shown with Even out | not shown |
 | **Still needed to goal** | How many more to reach your goal, after everything your bank makes | After your mix, once you've planned one |
 | **Supplies needed** | What those take, beyond what's left in your bank | not shown |
-| **Profit after buying supplies** | What the ones still needed are worth, less what their supplies cost | not shown |
-| **Total net gp toward goal** | Gross profit from banked supplies + profit after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy. Gross after using bank isn't part of it, since evening out would count those supplies twice | not shown |
+| **Net after buying supplies** | What the ones still needed are worth, less what their supplies cost | not shown |
+| **Total net gp toward goal** | Gross from banked supplies + net after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy. Net after even out isn't part of it, since evening out would count those supplies twice | not shown |
 
 Sort the table by level, XP each, cheapest XP, or (with your bank in use) **Total net**, most gp toward
 your goal first.
@@ -129,7 +131,7 @@ goal and the gp totals count XP you won't get. Unticked options also leave the T
 #### Vials of water
 
 **I'll buy vials of water as I go** is on by default for Herblore: vials never hold a plan back, and
-they're left out of the supplies needed and of every cost and profit. Turn it off to plan around the
+they're left out of the supplies needed and of every cost and net. Turn it off to plan around the
 vials in your bank and count them like any other supply.
 
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
@@ -167,7 +169,7 @@ vials in your bank and count them like any other supply.
   - **Your price**: type one in and it's used until you pick another or clear it.
   - Switch a whole skill or one list at once (high alch for Fletching, say, then logs back to the
     market). That leaves prices you typed in be.
-  - Bank values, profit and gp per XP all use the price each item has.
+  - Bank values, gross, net and gp per XP all use the price each item has.
   - Market prices are checked one at a time and kept for 12 hours.
   - Click an item on the Prices, Goals or Bank tab to open its page on the market. Inside LostKit it
     opens right in the tool's tab, and LostKit's ◀ button brings you back.

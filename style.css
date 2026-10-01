@@ -541,6 +541,9 @@ table.plan-t .per { font-family: var(--small); font-size: 12px; color: var(--fai
 .bank-grid.movable .bank-cell .input { cursor: text; user-select: text; -webkit-user-select: text; }
 table.plan-t td.even .it-chip:last-child { margin-right: 0; }
 table.grid th.wrap { white-space: normal; line-height: 1.15; min-width: 88px; }
+/* Even out and Net after even out go together: a dark line on each side */
+table.plan-t .sep-l { border-left: 1px solid #000; }
+table.plan-t .sep-r { border-right: 1px solid #000; }
 table.plan-t .mix-in { width: 84px; }
 
 .price-wrap { margin-bottom: 8px; }

@@ -129,11 +129,11 @@ test('"I\'ll buy vials of water as I go": on, vials are left out of what to coll
   assert.equal(rOn.collect.vial_water, undefined);
   assert.equal(rOff.collect.vial_water, rOff.toMake, 'off: every vial still to make');
   assert.deepEqual(rOn.econ.inputs, { kwuarm: 1, limpwurt_root: 1 });
-  assert.equal(rOn.econ.profit, 700, '3,000 − 2,000 − 300');
-  assert.equal(rOff.econ.profit, 680, 'and 20 for the vial');
+  assert.equal(rOn.econ.net, 700, '3,000 − 2,000 − 300');
+  assert.equal(rOff.econ.net, 680, 'and 20 for the vial');
 });
 
-test('total profits per row: after evening out, and after collecting the rest (v2.4.4)', () => {
+test('totals per row: net after even out, and after collecting the rest (v2.4.4)', () => {
   const price = { kwuarm: 2000, limpwurt_root: 300, '3dose2strength': 3000, avantoe: 900, snape_grass: 50, '3dosefisherspotion': 1200 };
   const plan = planGoal(ix, {
     bank: { kwuarm: 605, limpwurt_root: 518, avantoe: 403, snape_grass: 403 },
@@ -150,17 +150,18 @@ test('total profits per row: after evening out, and after collecting the rest (v
   assert.equal(fish.balance, null);
   assert.deepEqual(fish.gains.even, { total: 403 * 1200, value: 403 * 1200, cost: 0, missing: [] });
   // the total net: what the bank plan makes of it before evening out (518, as
-  // From your bank shows), plus the profit after buying supplies. Not the gross
-  // after using bank: the 87 kwuarm left over would count twice.
+  // From your bank shows), plus the net after buying supplies. Not the net
+  // after even out: the 87 kwuarm left over would count twice.
   assert.deepEqual(ss.gains.before, { total: 518 * 3000, value: 518 * 3000, cost: 0, missing: [] });
   assert.deepEqual([ss.fromPlan, fish.fromPlan, row(plan, 'hb_3dose1attack').fromPlan], [518, 403, 0], 'what the bank plan makes of each');
   assert.equal(ss.gains.net.total, 518 * 3000 + ss.gains.collect.total);
   assert.notEqual(ss.gains.net.total, ss.gains.even.total + ss.gains.collect.total);
   assert.equal(fish.gains.net.total, 403 * 1200 + fish.gains.collect.total);
-  // nothing made from the bank: just the profit after buying supplies
+  // nothing made from the bank: just the net after buying supplies
   assert.equal(row(plan, 'hb_3dose1attack').gains.before, null);
   assert.deepEqual(row(plan, 'hb_3dose1attack').gains.net.missing, row(plan, 'hb_3dose1attack').gains.collect.missing);
-  // nothing for it in the bank: nothing to show for that part
+  // nothing for it in the bank: nothing to even out, nothing to show for it
+  assert.equal(row(plan, 'hb_3dose1attack').balance, null);
   assert.equal(row(plan, 'hb_3dose1attack').gains.even, null);
   assert.ok(row(plan, 'hb_3dose1attack').gains.collect.missing.length, 'no prices for attack potions here');
   // without the bank there are no totals
@@ -255,16 +256,16 @@ test('finishing with a potion you cannot make yet plans the levels before it', (
   ]);
 });
 
-test('prices: cost, profit and gp per XP of one action', () => {
+test('prices: cost, net and gp per XP of one action', () => {
   const price = { ranarr_weed: 3000, snape_grass: 400, vial_water: 5, '3doseprayerrestore': 3800 };
   const e = methodEconomics(ix, ix.byId.get('hb_3doseprayerrestore'), k => price[k] ?? null);
   assert.deepEqual(e.inputs, { ranarr_weed: 1, vial_water: 1, snape_grass: 1 });
   assert.equal(e.cost, 3405);
   assert.equal(e.value, 3800);
-  assert.equal(e.profit, 395);
+  assert.equal(e.net, 395);
   assert.ok(Math.abs(e.gpPerXp - (-395 / 87.5)) < 1e-9);
   const unknown = methodEconomics(ix, ix.byId.get('hb_3dose1magic'), k => price[k] ?? null);
-  assert.equal(unknown.profit, null);
+  assert.equal(unknown.net, null);
   assert.ok(unknown.missing.includes('cactus_potato'));
   assert.deepEqual(bankValue({ ranarr_weed: 2, torstol: 1 }, k => price[k] ?? null), { total: 6000, missing: ['torstol'] });
 });
@@ -335,11 +336,11 @@ test('runecraft: the rune you picked waits for its level, then takes over', () =
   assert.equal(levelForXp10(xp10ForLevel(50) + plan.fromBank.steps[0].xp10), 54);
 });
 
-test('runecraft: profit per essence counts the runes it makes at your level', () => {
+test('runecraft: net per essence counts the runes it makes at your level', () => {
   const price = { blankrune: 50, airrune: 10 };
   const e = methodEconomics(rc, rc.byId.get('rc_airrune'), k => price[k] ?? null, { level: 44 });
   assert.equal(e.value, 5 * 10);
-  assert.equal(e.profit, 0);
+  assert.equal(e.net, 0);
 });
 
 // ── Woodcutting ───────────────────────────────────────────────────────────
@@ -373,7 +374,7 @@ test('woodcutting: logs to chop, with no bank involved', () => {
     'willows to 45, maples to 60, then yews');
 
   const e = methodEconomics(wc, wc.byId.get('wc_willow_logs'), k => ({ willow_logs: 30 })[k] ?? null);
-  assert.equal(e.profit, 30);
+  assert.equal(e.net, 30);
   assert.ok(Math.abs(e.gpPerXp - (-30 / 67.5)) < 1e-9, 'negative: you make money');
 });
 
@@ -396,7 +397,7 @@ test('firemaking: the bank burns its best logs first', () => {
   assert.equal(plan.fill.id, 'fm_willow_logs');
   const price = { maple_logs: 25 };
   const e = methodEconomics(fm, fm.byId.get('fm_maple_logs'), k => price[k] ?? null);
-  assert.equal(e.profit, -25);
+  assert.equal(e.net, -25);
 });
 
 // ── Fletching ─────────────────────────────────────────────────────────────

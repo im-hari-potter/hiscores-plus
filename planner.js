@@ -329,18 +329,19 @@ function without(items, leaveOut) {
 const times = (out, n) => Object.fromEntries(Object.entries(out).map(([item, q]) => [item, q * n]));
 
 // Economics of one action of m, bought from scratch: what goes in (down to buyable
-// items), what comes out, profit, and gp per XP (negative = you make money).
+// items), what comes out, the net (worth less cost: negative is a loss), and gp
+// per XP (negative = you make money).
 export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited = new Set() } = {}) {
   const need = without(expand(ix, m, 1, new Stock(), { level, unlimited }).buy, unlimited);
   const cost = valueOf(need, priceOf);
   const value = valueOf(outAt(m, level), priceOf);
   const known = !cost.missing.length && !value.missing.length;
-  const profit = value.total - cost.total;
+  const net = value.total - cost.total;
   return {
     inputs: need,
     cost: cost.total, value: value.total, missing: [...cost.missing, ...value.missing],
-    profit: known ? profit : null,
-    gpPerXp: known && m.xp > 0 ? -profit / (m.xp / 10) : null,
+    net: known ? net : null,
+    gpPerXp: known && m.xp > 0 ? -net / (m.xp / 10) : null,
   };
 }
 
@@ -463,7 +464,7 @@ export function planGoal(ix, opts) {
   const bankStock = new Stock(bank);
   const after = useBank ? fromBank.leftover : new Stock();
   // What the bank plan makes of each method, as From your bank shows it: the
-  // profit before any evening out.
+  // gross before any evening out.
   const bankMade = new Map(), bankRuns = new Map();
   if (useBank) {
     for (const st of fromBank.steps) {
@@ -493,9 +494,10 @@ export function planGoal(ix, opts) {
         if (Object.keys(extra).length) balance = { runs: most, collect: extra };
       }
     }
-    // Totals, counting what's in your bank as already yours (gross): what the
-    // bank makes of it once evened out, less what evening out takes; and what
-    // the rest of the goal makes, less what's still to collect.
+    // Totals, counting what's in your bank as already yours: what the bank
+    // makes of it once evened out, less what evening out takes (Net after even
+    // out); and what the rest of the goal makes, less what's still to collect
+    // (Net after buying supplies).
     const made = n => times(outAt(m, lvl), n);
     const gains = {
       even: !useBank || gathers(m) ? null
@@ -504,9 +506,10 @@ export function planGoal(ix, opts) {
       collect: useBank && still > 0 ? gainOf(made(still), collect, priceOf) : null,
     };
     // The total net toward the goal: what the bank plan makes of it, before
-    // evening out, plus the profit after buying the supplies still needed.
-    // (Gross after using bank would count what evening out takes twice: the
-    // supplies left in the bank go to the ones still needed as well.)
+    // evening out (Gross from banked supplies), plus the net after buying the
+    // supplies still needed. (Net after even out would count what evening out
+    // takes twice: the supplies left in the bank go to the ones still needed
+    // as well.)
     gains.before = bankMade.has(m.id) ? gainOf(bankMade.get(m.id), {}, priceOf) : null;
     gains.net = gains.before || gains.collect ? {
       total: (gains.before?.total || 0) + (gains.collect?.total || 0),
