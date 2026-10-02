@@ -200,3 +200,40 @@ test('snapshots: one can be deleted on its own, and the last one takes the histo
   assert.equal(mem.has('lchs.snap.demo_main'), false);
   delete globalThis.localStorage;
 });
+
+test('recent players: one can be removed, or the list cleared, and it stays gone until you look them up again (v2.7)', async () => {
+  const mem = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
+    getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => { mem.set(k, String(v)); }, removeItem: k => { mem.delete(k); },
+  } });
+  const { players } = await import('./store.js');
+  for (const n of ['alice', 'bob', 'carol']) players.pushRecent(n, { explicit: true });
+  assert.deepEqual(players.recent(), ['Carol', 'Bob', 'Alice']);
+  players.removeRecent('BOB');
+  assert.deepEqual(players.recent(), ['Carol', 'Alice']);
+  // Compare, Gains or Goals fetching Bob again in the background doesn't bring him back
+  players.pushRecent('Bob');
+  assert.deepEqual(players.recent(), ['Carol', 'Alice']);
+  // (the others still move to the front that way, as before)
+  players.pushRecent('alice');
+  assert.deepEqual(players.recent(), ['Alice', 'Carol']);
+  // looking him up yourself does, and from then on he's a recent name like any other
+  players.pushRecent('bob', { explicit: true });
+  assert.deepEqual(players.recent(), ['Bob', 'Alice', 'Carol']);
+  players.pushRecent('carol');
+  players.pushRecent('bob');
+  assert.deepEqual(players.recent(), ['Bob', 'Carol', 'Alice']);
+  // clearing takes them all, and keeps them out the same way
+  players.clearRecent();
+  assert.deepEqual(players.recent(), []);
+  players.pushRecent('Carol');
+  players.pushRecent('dave');
+  assert.deepEqual(players.recent(), ['Dave'], 'a name that was never removed is added as before');
+  players.pushRecent('Carol', { explicit: true });
+  assert.deepEqual(players.recent(), ['Carol', 'Dave']);
+  // saved players are another list: removing a recent name leaves them alone
+  players.toggleSaved('Alice');
+  players.removeRecent('Alice');
+  assert.deepEqual(players.saved(), ['Alice']);
+  delete globalThis.localStorage;
+});

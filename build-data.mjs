@@ -15,6 +15,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 
 const sharp = createRequire(import.meta.url)('sharp');   // from NODE_PATH / a global install
 
@@ -68,6 +69,7 @@ const places = {};           // skill -> a choice of place that changes what a s
 const fixedPrices = {};      // item -> gp it's always worth (coins)
 const virtualItems = {};     // those items: slug -> { id, name, cost, iconOf, parts }
 const unidHerbs = {};        // the one entry every unidentified herb is counted under
+const unchargedOf = {};      // a charged item -> the same thing with no charges left, a bank item of its own (an amulet of glory)
 
 async function herblore() {
   const herbs = await readConfig(scripts('skill_herblore/configs/herbs.obj'));
@@ -144,6 +146,20 @@ async function herblore() {
       name: outName, level: p.level, xp: p.xp,
       in: { [p.solvent]: 1, [p.ingredient]: 1 }, out: { [p.out]: 1 },
     });
+  }
+
+  // Two potions that share an ingredient: when a bank can make either, the one
+  // named first gets it first (Ostap's call, v2.7: the one worth having), and
+  // the other waits until that one can't be made. Super attacks get the irits
+  // before superantipoisons, prayer potions the snape grass before fishing
+  // potions. (An order of your own, dragged on the goal, overrides it.)
+  const FIRST = [['3dose2attack', '3dose2antipoison'], ['3doseprayerrestore', '3dosefisherspotion']];
+  const potionRow = out => methods.find(m => m.id === `hb_${out}`) || (() => { throw new Error(`herblore: no potion ${out}`); })();
+  const leaves = m => Object.keys(m.in).flatMap(k => { const u = methods.find(x => x.kind === 'prep' && x.out[k]); return u ? Object.keys(u.in) : [k]; });
+  for (const [first, then] of FIRST) {
+    const a = potionRow(first), b = potionRow(then);
+    if (!leaves(a).some(k => k !== 'vial_water' && leaves(b).includes(k))) throw new Error(`herblore: ${first} and ${then} share no ingredient`);
+    (b.after ||= []).push(a.id);
   }
 
   // Empty vials in the bank count toward vials of water (fill them at any water source).
@@ -690,6 +706,12 @@ async function crafting() {
       const base = rowOf(from);
       const final = need(charged.get(to) || to);
       enchanted.push(final);
+      // What the spell itself makes is the uncharged one: not what a row makes
+      // (it's traded charged), but banks hold them, so it's an item of its own.
+      if (charged.has(to)) {
+        unchargedOf[final] = need(to);
+        nameOverride[to] = `${ITEM.get(to).name} (uncharged)`;
+      }
       after(base.id, {
         id: `cr_ench_${final}`, skill: 'crafting', group: base.group, kind: 'xp', ...(base.tools ? { tools: base.tools } : {}),
         name: `${ITEM.get(final).name} (${base.parts ? 'make, string & enchant' : 'make & enchant'})`,
@@ -792,7 +814,7 @@ async function crafting() {
     ...supplies,
     { name: 'Made: leather', items: rest('Needle & thread') },
     { name: 'Made: jewellery', items: rest('Jewellery') },
-    { name: 'Made: enchanted jewellery', items: enchanted },
+    { name: 'Made: enchanted jewellery', items: enchanted.flatMap(k => (unchargedOf[k] ? [unchargedOf[k], k] : [k])) },
     { name: 'Made: pottery, glass and staves', items: [...rest('Pottery & glass'), ...rest('Spinning')] },
   ];
   // Priced, but not a bank item: the market's sets.
@@ -826,6 +848,7 @@ async function calculatorTables(file, names) {
 // out: limestone (it's on the map, at level 10). A gem rock gives one gem by
 // chance, so what it makes is the server's chances for each.
 const miningNotes = [];
+const minedRocks = new Map();                 // ore -> { level, xp }: what a rock gives, for the bar rows (miningBars)
 async function mining() {
   const dir = p => scripts('skill_mining/' + p);
   const x10 = xp => Math.round(xp * 10);
@@ -883,6 +906,7 @@ async function mining() {
     [GEM_ROCK]: `In Shilo Village. One gem a rock, by chance (out of ${total}): ${gems.map(chance).join(', ')}.`,
     limestone: "Not on LostHQ's calculator: the server's own level and XP.",
   };
+  for (const [key, r] of rocks) if (key !== GEM_ROCK) minedRocks.set(key, r);
   for (const key of order) {
     const r = rocks.get(key);
     const gem = key === GEM_ROCK;
@@ -922,6 +946,7 @@ await mining();
 //               calculator's "Gauntlets" row).
 // A method's opt says what each choice changes about it.
 const smithingNotes = [];
+const smeltedBars = [];      // the bars a furnace makes, in the calculator's order: { bar, in, level, lost } (for miningBars)
 const choices = {};          // skill -> the choices a goal has: [{ id, label, tip }]
 const chargeItems = {};      // what a worn item gives while it lasts: slug -> { id, name, of, per }
 async function smithing() {
@@ -1034,6 +1059,8 @@ async function smithing() {
     if (!s) throw new Error(`smithing: the server smelts no ${key}`);
     differ(key, [row.level, x10(row.xp), row.ingredients], [s.level, s.xp, s.in]);
     smelted.push(key);
+    // (lost: the ore a bar takes on average where a furnace can lose it, iron's 2)
+    smeltedBars.push({ bar: key, in: s.in, level: s.level, ...(key === 'iron_bar' ? { lost: { iron_ore: orePerBar }, ring } : {}) });
     const m = { id: `sm_${key}`, skill: 'smithing', group: SMELT, kind: 'xp', name: name(key), level: s.level, xp: s.xp, in: s.in, out: { [key]: 1 } };
     if (key === 'iron_bar') {
       m.in = { [need('iron_ore')]: orePerBar };
@@ -1125,6 +1152,558 @@ async function smithing() {
 
 await smithing();
 
+// ── Mining, by the bar ─────────────────────────────────────────────────────
+// A second way to count Mining (v2.7): the ore a bar takes, mined together. A
+// steel bar is 1 iron ore and 2 coal, so its row is the XP of all three and a
+// plan says how much of each to mine. One row for every bar a furnace makes
+// from ore you can mine (the server's smelting table, as Smithing has it); an
+// iron bar twice, since a furnace loses half the ore without a ring of forging.
+// Counted in bars; nothing goes in, like the rocks.
+function miningBars() {
+  const lower = k => ITEM.get(k).name.toLowerCase();
+  const amount = (k, n) => `${n === 1 ? '' : `${n} `}${lower(k)}`;                // "iron ore", "2 coal"
+  const listed = takes => Object.entries(takes).map(([k, n]) => `${n} ${lower(k)}`).join(' and ');
+  const row = (id, bar, takes, level, label, note) => {
+    const rocks = Object.keys(takes).map(k => minedRocks.get(k));
+    const one = `${lower(bar)}${label ? ` (${label})` : ''}`;
+    methods.push({
+      id, skill: 'mining', group: 'Bars', kind: 'xp', unit: 'bar', units: 'bars',
+      // "Ore for 8,400 steel bars: 8,400 Iron ore + 16,800 Coal"
+      lead: 'Ore for', as: [one, `${lower(bar)}s${label ? ` (${label})` : ''}`],
+      name: `${ITEM.get(bar).name}${label ? ` (${label})` : ''}`,
+      level: Math.max(...rocks.map(r => r.level)),
+      xp: Object.entries(takes).reduce((a, [k, n]) => a + n * minedRocks.get(k).xp, 0),
+      in: {}, out: takes, icon: need(bar),
+      ...(Object.keys(takes).length > 1 || Object.values(takes)[0] > 1 ? { parts: Object.entries(takes).map(([k, n]) => [amount(k, n), n * minedRocks.get(k).xp]) } : {}),
+      note: `Mine ${listed(takes)} for each bar. ${note ? `${note} ` : ''}Smelting it takes Smithing ${level}.`,
+    });
+  };
+  let made = 0;
+  for (const b of smeltedBars) {
+    if (!Object.keys(b.in).every(k => minedRocks.has(k))) continue;             // (elemental ore is dropped, not mined)
+    made++;
+    if (!b.lost) { row(`mi_bar_${b.bar}`, b.bar, b.in, b.level); continue; }
+    const ringName = ITEM.get(b.ring).name.toLowerCase();
+    row(`mi_bar_${b.bar}`, b.bar, b.lost, b.level, '', `Half the ore is lost in a furnace, so a bar takes ${Object.values(b.lost)[0]} on average: with a ${ringName} or Superheat Item, see the row below.`);
+    row(`mi_bar_${b.bar}_ring`, b.bar, b.in, b.level, ringName, `With a ${ringName} worn, or made with Superheat Item, every ore is a bar.`);
+  }
+  if (made !== smeltedBars.length - 1) throw new Error(`mining: expected a row for every bar but the elemental one, found ${made} of ${smeltedBars.length}`);
+  miningNotes.push(`${methods.filter(m => m.skill === 'mining' && m.group === 'Bars').length} bar rows (the ore a bar takes, mined together)`);
+}
+miningBars();
+
+// ── Fishing ────────────────────────────────────────────────────────────────
+// One method per fish, XP per catch. The rows are LostHQ's Fishing calculator
+// (js/calculators/fishing.js), each checked against the server, where a fish's
+// XP is in its fishing struct (or in the script, for what a big net or a
+// karambwan vessel brings up) and its level in the script of its spot.
+// A rod uses up a bait, or a fly rod a feather, with every catch: that goes
+// in, so a plan lists it. Nothing else takes anything, and like Mining no bank
+// is involved: the gear is named, never counted.
+const fishingNotes = [];
+const outOfTheWay = new Set();                // fish only a quest or an out-of-the-way spot gives (set aside, here and in Cooking)
+async function fishing() {
+  const dir = p => scripts('skill_fishing/' + p);
+  const x10 = xp => Math.round(xp * 10);
+  const { readdir } = await import('node:fs/promises');
+  const { fishes: calc } = await calculatorTables('fishing.js', ['fishes']);
+
+  // ── The server's side ──
+  // A fish's XP: the struct its obj names. (Any obj file: the lava eel's is with its quest.)
+  const structs = await readConfig(dir('configs/fishing.struct'));
+  const structXp = new Map();
+  for (const f of (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.obj'))) {
+    const text = await readFile(scripts(f), 'utf8');
+    if (!text.includes('fishing_struct')) continue;
+    for (const b of parseConfig(text).values()) {
+      if (!b.params.fishing_struct) continue;
+      const st = structs.get(b.params.fishing_struct);
+      if (!st) throw new Error(`fishing: ${b.name} names a struct that isn't there`);
+      structXp.set(b.name, Number(st.params.productexp));
+    }
+  }
+  // The spots' scripts, block by block ([label,x], [proc,x], [opnpc1,x] …).
+  const blocks = [];
+  for (const f of await readdir(dir('scripts/fishing_spots'))) {
+    const text = (await readFile(dir('scripts/fishing_spots/' + f), 'utf8')).replace(/\/\/[^\n]*/g, '');
+    for (const part of text.split(/^(?=\[)/m)) {
+      const h = part.match(/^\[(\w+),([^\]]+)\]/);
+      if (h) blocks.push({ kind: h[1], name: h[2], body: part.slice(h[0].length) });
+    }
+  }
+  const procs = new Map(blocks.filter(b => b.kind === 'proc').map(b => [b.name, b]));
+  const calledProcs = b => [...b.body.matchAll(/~(\w+)/g)].map(m => procs.get(m[1])).filter(Boolean);
+  const levelIn = body => { const m = body.match(/stat\(fishing\) < (\d+)/); return m ? Number(m[1]) : null; };
+  // the level a block asks for (itself, or the proc that checks for it); none: level 1
+  const levelOf = b => levelIn(b.body) ?? calledProcs(b).map(p => levelIn(p.body)).find(l => l != null) ?? 1;
+  // the gear it asks for
+  const gearOf = b => (b.body.match(/~check_fish_equipment\((\w+)\)/) || [])[1]
+    || calledProcs(b).map(p => (p.body.match(/inv_total\(inv, (\w+)\) < 1/) || [])[1]).find(Boolean) || null;
+  const caught = new Map();                  // fish -> { level, xp, gear, bait }
+  const put = (fish, c, where) => {
+    if (!(c.xp > 0) || !c.gear) throw new Error(`fishing: can't read ${fish} in ${where}`);
+    const seen = caught.get(fish);
+    if (seen && seen.xp !== c.xp) throw new Error(`fishing: ${fish} gives ${seen.xp} and ${c.xp} XP`);
+    // (caught in more than one place, shrimps at the karambwanji spot too: the lowest level is the fish's)
+    if (!seen || c.level < seen.level) caught.set(fish, c);
+    else if (c.level === seen.level && (c.gear !== seen.gear || c.bait !== seen.bait)) throw new Error(`fishing: ${fish} is caught two ways at level ${c.level}`);
+  };
+  const CATCH = /inv_add\(inv, (\w+), 1\);\s*(?:mes\("[^"]*"\);\s*)?stat_advance\(fishing, (\d+)\)/g;
+  for (const b of blocks) {
+    if (b.kind === 'proc') continue;
+    const level = levelOf(b), gear = gearOf(b);
+    // a roll for one fish or two; the second has a level of its own
+    for (const m of b.body.matchAll(/(if \(stat\(fishing\) >= (\d+)\) \{\s*)?~fish_roll(?:_loc)?\(([^)]*)\)/g)) {
+      const args = m[3].split(',').map(a => a.trim());
+      const [fish1, fish2] = args, bait = args[args.length - 1] === 'null' ? null : args[args.length - 1];
+      if (fish1 !== 'null') put(fish1, { level, xp: structXp.get(fish1), gear, bait }, b.name);
+      if (fish2 !== 'null') {
+        if (!m[2]) throw new Error(`fishing: ${fish2} has no level in ${b.name}`);
+        put(fish2, { level: Number(m[2]), xp: structXp.get(fish2), gear, bait }, b.name);
+      }
+    }
+    // a net that brings up several things, each on a roll of its own, some from a higher level
+    for (const call of b.body.matchAll(/~(fish_roll_\w+);/g)) {
+      const p = procs.get(call[1]);
+      if (!p) continue;
+      let from = level;
+      for (const m of p.body.matchAll(new RegExp(`if \\(\\$level < (\\d+)\\) \\{\\s*return;|${CATCH.source}`, 'g'))) {
+        if (m[1]) from = Number(m[1]); else put(m[2], { level: from, xp: Number(m[3]), gear, bait: null, several: true }, p.name);
+      }
+    }
+    // caught without the shared roll (Tai Bwo Wannai's two)
+    for (const m of b.body.matchAll(CATCH)) put(m[1], { level, xp: Number(m[2]), gear, bait: null }, b.name);
+  }
+  // A karambwan takes the raw karambwanji in the vessel with every try, caught or not.
+  const vesselLoaded = caught.get('tbwt_raw_karambwan')?.gear;
+  const karambwan = (blocks.find(b => b.name === 'attempt_fish_karambwan') || {}).body || '';
+  const vessel = (karambwan.match(new RegExp(`inv_del\\(inv, ${vesselLoaded}, 1\\);\\s*inv_add\\(inv, (\\w+), 1\\);`)) || [])[1];
+  if (!vessel || (karambwan.match(new RegExp(`inv_del\\(inv, ${vesselLoaded}, 1\\)`, 'g')) || []).length !== 2) throw new Error("fishing: can't read what a karambwan try takes");
+  if (!/%tbwt_lubufu < \^tbwt_lubufu_complete/.test(karambwan)) throw new Error('fishing: karambwan no longer wait for Lubufu');
+
+  // ── The calculator's rows ──
+  // What a big net brings up besides fish: not a way to train, so not rows.
+  const NOT_FISH = new Set(['leather_boots', 'seaweed', 'leather_gloves', 'oystershell', 'casket']);
+  for (const [key, row] of Object.entries(calc)) {
+    const c = caught.get(key);
+    if (!c) throw new Error(`fishing: the server catches no ${key}`);
+    if (c.level !== row.level || c.xp !== x10(row.xp)) throw new Error(`fishing ${key}: the calculator says level ${row.level}, ${row.xp} XP; the server level ${c.level}, ${c.xp / 10} XP`);
+  }
+  for (const key of caught.keys()) {
+    if (!(key in calc) && !NOT_FISH.has(key)) throw new Error(`fishing: the server catches ${key}, which the calculator doesn't list: look at it, then list it`);
+  }
+  // Tai Bwo Wannai Trio's two, the lava eel of Heroes' Quest (an oily rod, and it can't be traded), and Mort Myre's swamp eel.
+  const ASIDE = new Set(['tbwt_raw_karambwanji', 'tbwt_raw_karambwan', 'raw_lava_eel', 'mort_slimey_eel']);
+  for (const k of ASIDE) { if (!caught.has(k)) throw new Error(`fishing: no ${k} to set aside`); outOfTheWay.add(k); }
+  const netted = [...caught].filter(([k, c]) => c.several && !NOT_FISH.has(k)).sort((a, b) => a[1].level - b[1].level);
+  const extras = [...caught].filter(([k, c]) => c.several && NOT_FISH.has(k)).map(([k]) => need(k));
+  const lower = k => ITEM.get(k).name.toLowerCase();
+  const fish = k => lower(k).replace(/^raw /, '');
+  nameOverride[need(vessel)] = `${ITEM.get(vessel).name} (empty)`;
+  for (const [key] of Object.entries(calc)) {
+    const c = caught.get(key);
+    const gear = key === 'tbwt_raw_karambwan' ? need(vessel) : need(c.gear);
+    const note = c.several
+      ? `A big net brings up several things at once: ${netted.map(([k, n]) => `${fish(k)}${n.level > netted[0][1].level ? ` (from level ${n.level})` : ''}`).join(', ')}, and now and then ${extras.map(lower).join(', ').replace(/, ([^,]*)$/, ' or $1')}. Only the ${fish(key)} is counted here.`
+      : key === 'tbwt_raw_karambwan' ? `Tai Bwo Wannai Trio: once Lubufu has shown you how. Every try takes the ${lower('tbwt_raw_karambwanji')} in your vessel, caught or not; those aren't counted.`
+      : null;
+    // aside: not what a plan trains with unless you pick it. A big net's fish come
+    // with others, so the XP of one says little; the rest wait for a quest.
+    const aside = c.several || ASIDE.has(key);
+    methods.push({
+      id: `fi_${key}`, skill: 'fishing', group: 'Fish', kind: 'xp', tools: [gear],
+      name: ITEM.get(need(key)).name, level: c.level, xp: c.xp,
+      in: c.bait ? { [need(c.bait)]: 1 } : {}, out: { [key]: 1 },
+      ...(aside ? { aside: 1 } : {}), ...(note ? { note } : {}),
+    });
+  }
+  fishingNotes.push(`${Object.keys(calc).length} fish; a bait or feather a catch for ${[...caught.values()].filter(c => c.bait).length} of them; a big net also brings up ${extras.map(lower).join(', ')} (not rows)`);
+}
+
+await fishing();
+
+// ── Cooking ────────────────────────────────────────────────────────────────
+// The rows are LostHQ's Cooking calculator (js/calculators/cooking.js): its five
+// tabs, in its order. Every row is checked against the server: its cooking
+// table, and its scripts for what isn't cooked on a fire or a range (a wine, a
+// pizza's topping, a chocolate cake, a chompy on its spit). Where the two differ
+// the server's number is used and the difference printed; one this script
+// hasn't seen before stops it.
+//
+// What the calculator leaves to you comes from the server too:
+//   - what a row is made of. A fish or a piece of meat is one raw thing. A pie,
+//     a pizza, a cake, a stew and a wine are put together first; those steps
+//     have no XP, so they're planned through, like unfinished potions.
+//   - a topped pizza and a chocolate cake are the calculator's whole job (baked,
+//     then topped). Here the baking is a row of its own that feeds the topping
+//     row and is planned through, so the XP comes to the same.
+//   - burning. A cook can fail, and how often is the server's own, by level:
+//     on a fire, on a range, on Lumbridge Castle's range, with cooking gauntlets
+//     worn. A row's chance is [low, high], what stat_random is given; a plan
+//     counts the raw food that takes on average. CHOICES says which applies.
+const cookingNotes = [];
+async function cooking() {
+  const dir = p => scripts('skill_cooking/' + p);
+  const x10 = xp => Math.round(xp * 10);
+  const name = k => nameOverride[k] || ITEM.get(need(k)).name;
+  const lower = k => name(k).toLowerCase();
+  const { cookingXp: calc } = await calculatorTables('cooking.js', ['cookingXp']);
+  const TABS = { fish: 'Fish', meat: 'Meat', pies: 'Pies & pizza', gnome: 'Gnome', other: 'Other' };
+  for (const tab of Object.keys(calc)) if (!TABS[tab]) throw new Error(`cooking.js has a tab this script doesn't know: ${tab}`);
+
+  // Where the server and the calculator differ: the server's is used.
+  const KNOWN = { jug_wine: { xp: 1100 }, cooked_chompy: { xp: 140 }, mantaray: { xp: 2163 }, pineapple_pizza: { xp: 1880 } };
+  const check = (key, what, calcValue, serverValue) => {
+    if (calcValue === serverValue) return;
+    if (KNOWN[key]?.[what] !== serverValue) throw new Error(`cooking ${key}: the calculator says ${what} ${calcValue}, the server ${serverValue}`);
+    cookingNotes.push(`${ITEM.get(key).name}: ${what} ${what === 'xp' ? serverValue / 10 : serverValue} (the server, used) vs ${what === 'xp' ? calcValue / 10 : calcValue} (LostHQ's calculator)`);
+  };
+
+  // ── The server's side ──
+  // The cooking table: what a raw thing cooks into, its level and XP, and its
+  // chances of not burning.
+  const table = [...(await readConfig(dir('configs/cooking_source/cooking_generic.dbrow'))).values()].map(row => ({ row: row.name, ...fields(row) }));
+  const byCooked = new Map();
+  for (const r of table) {
+    if (!r.cooked || r.cooked[0] === 'null' || !(Number(r.experience?.[0]) > 0)) continue;
+    (byCooked.get(r.cooked[0]) || byCooked.set(r.cooked[0], []).get(r.cooked[0])).push(r);
+  }
+  const cookScript = await readFile(dir('scripts/cooking.rs2'), 'utf8');
+  // How the script picks a chance, which the data below relies on: a range's
+  // own where it has one; gauntlets before Lumbridge's range; 1,1 always works.
+  const relies = [
+    [/if \(\$cooking_source = cooking_oven\) \{[\s\S]*?if \(\$low_range > null \| \$high_range > null\) \{\s*\$low = \$low_range;/, "a range's own chance"],
+    [/if \(inv_total\(worn, (\w+)\) > 0 & \(\$low_gauntlets > null \| \$high_gauntlets > null\)\) \{\s*\$low = \$low_gauntlets;[\s\S]*?\} else if \(loc_type = (\w+) & \(\$low_cookomatic > null \| \$high_cookomatic > null\)\)/, 'gauntlets before the Lumbridge range'],
+    [/\} else if \(\$low = 1 & \$high = 1\) \{\s*\$passes_roll = true;\s*\} else \{\s*\$passes_roll = stat_random\(cooking, \$low, \$high\);/, 'the roll'],
+  ].map(([re, what]) => cookScript.match(re) || (() => { throw new Error(`cooking: can't find ${what} in the script`); })());
+  const gauntlets = need(relies[1][1]);
+  if (!(await readFile(scripts('quests/quest_cook/configs/quest_cook.loc'), 'utf8')).includes(`[${relies[1][2]}]`)) throw new Error("cooking: the Lumbridge range isn't the Cook's Assistant one any more");
+  // stat_random's sum: the chances in 256 of a try working at a level
+  const unitsAt = ([low, high], level) => Math.min(256, Math.floor((low * (99 - level)) / 98) + Math.floor((high * (level - 1)) / 98) + 1);
+  const pair = v => (v ? v.map(Number) : null);
+  const never = (c, level) => !c || (c[0] === 1 && c[1] === 1) || unitsAt(c, level) >= 256;      // never burns from that level on
+  const sameChance = (a, b) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
+  // A row's chances: chance (on a range, or a fire where that's all it cooks
+  // on), and what each choice makes of it.
+  const chances = (r, level) => {
+    const base = pair(r.successchance), onRange = pair(r.successchance_range), lumbridge = pair(r.successchance_cookomatic), worn = pair(r.successchance_gauntlets);
+    const fireOnly = !!r.cantcookmessage_range, rangeOnly = !!r.cantcookmessage_fire;
+    if (!base) throw new Error(`cooking: ${r.row} has no chance of success`);
+    const usual = fireOnly ? base : onRange || base;
+    const opt = {};
+    if (!fireOnly && !rangeOnly && onRange && !sameChance(onRange, base)) opt.fire = { chanceAt: base };
+    if (!fireOnly && lumbridge) opt.lumbridge = { chanceAt: lumbridge };
+    if (worn) opt.gauntlets = { chanceWorn: worn };
+    const any = [usual, base, lumbridge, worn].some(c => c && !never(c, level));
+    if (!any) return { fireOnly, rangeOnly };
+    opt.ignore = { chance: null, chanceAt: null, chanceWorn: null };
+    return { chance: usual, opt, fireOnly, rangeOnly };
+  };
+
+  const made = { Fish: [], Meat: [], 'Pies & pizza': [], Gnome: [], Other: [] };
+  const raws = { Fish: [], Meat: [] };
+  const mine = [];                            // every Cooking method, rows and steps
+  const push = m => { mine.push(m); methods.push(m); return m; };
+  // A row that's one thing cooked on a fire or a range.
+  const cookRow = (tab, key, r, more = {}) => {
+    const group = TABS[tab];
+    const level = Math.max(1, Number(r.levelrequired[0]));
+    const c = chances(r, level);
+    const from = need(r.uncooked[0]);
+    made[group].push(key);
+    if (raws[group]) raws[group].push(from);
+    const where = c.rangeOnly ? 'Needs a range: it can\'t be cooked on a fire.' : c.fireOnly ? 'Warmed over a fire: a range won\'t do.' : null;
+    const note = [more.note, where].filter(Boolean).join(' ');
+    const { note: _n, id: idOf, ...rest } = more;
+    return push({
+      id: idOf || `ck_${key}`, skill: 'cooking', group, kind: 'xp',
+      name: name(key), level, xp: Number(r.experience[0]), in: { [from]: 1 }, out: { [need(key)]: 1 },
+      ...(r.additional ? { tools: [need(r.additional[0])] } : {}),
+      ...(c.chance ? { chance: c.chance, opt: c.opt } : {}),
+      ...rest, ...(note ? { note } : {}),
+    });
+  };
+  const serverRows = key => byCooked.get(key) || (() => { throw new Error(`cooking: the server cooks no ${key}`); })();
+  const seen = new Set();
+  const generic = (tab, key, row, more) => {
+    const rows = serverRows(key);
+    for (const r of rows) seen.add(r.row);
+    check(key, 'level', row.level, Math.max(1, Number(rows[0].levelrequired[0])));
+    check(key, 'xp', x10(row.xp), Number(rows[0].experience[0]));
+    return rows.map((r, i) => cookRow(tab, key, r, i ? { ...more, id: `ck_${key}_${r.uncooked[0]}`, name: `${name(key)} (${lower(r.uncooked[0]).replace(/^raw /, '')})` } : more));
+  };
+  const step = (id, product, takes, more = {}) => push({ id, skill: 'cooking', group: 'Preparing', kind: 'prep', name: name(product), level: 1, xp: 0,
+    in: Object.fromEntries(Object.entries(takes).map(([k, n]) => [need(k), n])), out: { [need(product)]: 1 }, ...more });
+  // What a script's label takes from the inventory and puts in it (named items only).
+  const label = (text, what) => {
+    const i = text.indexOf(`[label,${what}]`);
+    if (i < 0) throw new Error(`cooking: can't find ${what} in the script`);
+    const body = text.slice(i + 1).split(/\n\[/)[0];
+    return { body, takes: [...body.matchAll(/inv_del\(inv, (\w+), 1\)/g)].map(m => m[1]), gives: [...body.matchAll(/inv_add\(inv, (\w+), 1\)/g)].map(m => m[1]) };
+  };
+  const expect = (what, got, want) => {
+    if (JSON.stringify([...got].sort()) !== JSON.stringify([...want].sort())) throw new Error(`cooking ${what}: the script has ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+  };
+  const levelIn = (body, what) => fromScript(body, /stat\(cooking\) < (\d+)/, `the level for ${what}`);
+
+  // Names: two karambwans and two lots of jogre bones share a name in-game.
+  nameOverride.tbwt_poorly_cooked_karambwan = `${ITEM.get(need('tbwt_poorly_cooked_karambwan')).name} (poorly)`;
+  for (const k of ['tbwt_burnt_jogre_bones_marinated_in_karambwanji', 'tbwt_burnt_jogre_bones_in_raw_karambwanji_paste']) nameOverride[k] = `${ITEM.get(need(k)).name} (burnt bones)`;
+
+  // ── Steps with no XP, from the scripts ──
+  // Dough: a pot of flour and water (a bucket; a jug works too in the game).
+  const doughScript = await readFile(dir('scripts/cooking_inv/scripts/dough/dough.rs2'), 'utf8');
+  const doughs = [...label(doughScript, 'dough_interface').body.matchAll(/\$choice = (\w+);/g)].map(m => m[1]);
+  expect('dough', doughs, ['bread_dough', 'pastry_dough', 'pizza_base', 'uncooked_pitta_bread']);
+  expect('dough takes', label(doughScript, 'dough_interface').takes, ['pot_flour']);
+  const water = need('bucket_water'), flour = need('pot_flour');
+  if (!(await readConfig(scripts('general_use/configs/water_sources.obj'))).get(water)?.params.is_water_source) throw new Error('cooking: a bucket of water no longer makes dough');
+  for (const d of doughs) step(`ck_${d}`, d, { [flour]: 1, [water]: 1 });
+  // Pies: dough in a dish, then the filling (each needs its level to fill).
+  const pieScript = await readFile(dir('scripts/cooking_inv/scripts/pies/pies.rs2'), 'utf8');
+  expect('pie shell', [label(pieScript, 'make_pie_shell').takes, label(pieScript, 'make_pie_shell').gives].flat(), ['pastry_dough', 'piedish', 'pie_shell']);
+  step('ck_pie_shell', 'pie_shell', { pastry_dough: 1, piedish: 1 });
+  expect('uncooked pie', label(pieScript, 'make_uncooked_pie').takes, ['pie_shell']);
+  const pieStructs = await readConfig(dir('configs/cooking_inv/configs/pies/pies.struct'));
+  const pizzaStructs = await readConfig(dir('configs/cooking_inv/configs/pizza/pizza.struct'));
+  // which ingredient fills which pie, and tops which pizza: named on the ingredient's obj
+  const fillings = new Map(), toppings = new Map();
+  const { readdir } = await import('node:fs/promises');
+  for (const f of (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.obj'))) {
+    const text = await readFile(scripts(f), 'utf8');
+    if (!/uncooked_pie_struct|pizza_topping_struct/.test(text)) continue;
+    for (const b of parseConfig(text).values()) {
+      if (b.params.uncooked_pie_struct) (fillings.get(b.params.uncooked_pie_struct) || fillings.set(b.params.uncooked_pie_struct, []).get(b.params.uncooked_pie_struct)).push(b.name);
+      if (b.params.pizza_topping_struct) (toppings.get(b.params.pizza_topping_struct) || toppings.set(b.params.pizza_topping_struct, []).get(b.params.pizza_topping_struct)).push(b.name);
+    }
+  }
+  // (where two things do, the first of these is the one a plan lists; the other is in the row's note)
+  const FIRST = ['cooked_meat', 'pineapple_ring'];
+  const pick = list => [...list].sort((a, b) => FIRST.includes(b) - FIRST.includes(a));
+  const others = list => (list.length > 1 ? ` ${list.slice(1).map(k => name(k)).join(' or ')} can go on instead.` : '');
+  const pieOf = new Map();                    // uncooked pie -> { level, filling: [..] }
+  for (const [st, list] of fillings) {
+    const b = pieStructs.get(st);
+    if (!b) throw new Error(`cooking: no pie struct ${st}`);
+    pieOf.set(b.params.product, { level: Number(b.params.levelrequired), filling: pick(list) });
+    step(`ck_${b.params.product}`, b.params.product, { pie_shell: 1, [pick(list)[0]]: 1 }, { level: Number(b.params.levelrequired) });
+  }
+  // Pizza: a base, a tomato, then cheese (from level 35).
+  const pizzaScript = await readFile(dir('scripts/cooking_inv/scripts/pizza/pizza.rs2'), 'utf8');
+  const tomatoed = label(pizzaScript, 'make_incomplete_pizza'), cheesed = label(pizzaScript, 'make_uncooked_pizza');
+  expect('incomplete pizza', [tomatoed.takes, tomatoed.gives].flat(), ['tomato', 'pizza_base', 'incomplete_pizza']);
+  expect('uncooked pizza', [cheesed.takes, cheesed.gives].flat(), ['cheese', 'incomplete_pizza', 'uncooked_pizza']);
+  step('ck_incomplete_pizza', 'incomplete_pizza', { pizza_base: 1, tomato: 1 }, { level: levelIn(tomatoed.body, 'a pizza') });
+  step('ck_uncooked_pizza', 'uncooked_pizza', { incomplete_pizza: 1, cheese: 1 }, { level: levelIn(cheesed.body, 'a pizza') });
+  // Cake: flour, an egg and milk in a tin (the tin comes back when it's baked).
+  const cakeScript = await readFile(dir('scripts/cooking_inv/scripts/cakes/cakes.rs2'), 'utf8');
+  const mixed = label(cakeScript, 'make_uncooked_cake');
+  expect('uncooked cake', [mixed.takes, mixed.gives].flat(), ['pot_flour', 'egg', 'bucket_milk', 'cake_tin', 'pot_empty', 'uncooked_cake', 'bucket_empty']);
+  step('ck_uncooked_cake', 'uncooked_cake', { [flour]: 1, egg: 1, bucket_milk: 1 }, { tools: [need('cake_tin')] });
+  // Stew: a potato in a bowl of water, then meat; a curry is that with spice.
+  const stewScript = await readFile(dir('scripts/cooking_inv/scripts/stew/stew.rs2'), 'utf8');
+  const started = label(stewScript, 'make_incomplete_stew'), stewed = label(stewScript, 'make_uncooked_stew'), spiced = label(stewScript, 'make_curry');
+  expect('incomplete stew', [started.takes, started.gives].flat(), ['bowl_water', 'stew2', 'stew1']);
+  expect('uncooked stew', stewed.gives, ['uncooked_stew']);
+  if (!/\[opheldu,potato\]\s*switch_obj \(last_useitem\) \{\s*case bowl_water : @make_incomplete_stew/.test(stewScript)) throw new Error('cooking: a potato no longer starts a stew');
+  const meatScript = await readFile(dir('scripts/cooking_inv/scripts/meat/cooked_meat.rs2'), 'utf8');
+  const stewMeat = pick(['cooked_meat', 'cooked_chicken'].filter(k => new RegExp(`\\[opheldu,${k}\\][\\s\\S]*?case stew1 : @make_uncooked_stew`).test(meatScript)));
+  if (!stewMeat.length) throw new Error('cooking: no meat goes into a stew');
+  expect('curry', [spiced.takes, spiced.gives].flat(), ['uncooked_stew', 'spicespot', 'uncooked_curry']);
+  step('ck_stew1', 'stew1', { bowl_water: 1, potato: 1 }, { level: levelIn(started.body, 'a stew') });
+  step('ck_uncooked_stew', 'uncooked_stew', { stew1: 1, [stewMeat[0]]: 1 }, { level: levelIn(stewed.body, 'a stew') });
+  step('ck_uncooked_curry', 'uncooked_curry', { uncooked_stew: 1, spicespot: 1 });
+  // Wine: grapes squeezed into a jug of water; it ferments on its own.
+  const wineScript = await readFile(dir('scripts/cooking_inv/scripts/wine/wine.rs2'), 'utf8');
+  const squeezed = label(wineScript, 'make_wine');
+  expect('wine', [squeezed.takes, squeezed.gives].flat(), ['grapes', 'jug_water', 'jug_unfermented_wine']);
+  step('ck_jug_unfermented_wine', 'jug_unfermented_wine', { grapes: 1, jug_water: 1 }, { level: levelIn(squeezed.body, 'wine') });
+  const ferment = wineScript.match(/if \(stat_random\(cooking, (\d+), (\d+)\) = true\) \{\s*inv_add\(inv, (\w+), 1\);\s*stat_advance\(cooking, (\d+)\);\s*\} else \{[^}]*inv_add\(inv, (\w+), 1\);/);
+  if (!ferment) throw new Error("cooking: can't read how wine ferments");
+  // Swamp paste: swamp tar and flour.
+  const pasted = label(await readFile(scripts('quests/quest_seaslug/scripts/quest_seaslug.rs2'), 'utf8'), 'make_swamp_paste');
+  expect('raw swamp paste', [pasted.takes, pasted.gives].flat(), ['swamp_tar', 'pot_flour', 'pot_empty', 'rawswamppaste']);
+  step('ck_rawswamppaste', 'rawswamppaste', { swamp_tar: 1, [flour]: 1 });
+  // Gnome cooking: Gianne dough shaped in a mould, a tray or a tin (which you get back at the end).
+  const gnomeStructs = await readConfig(dir('configs/gnome_cooking/gnome_cooking.struct'));
+  const gnomeObjs = await readConfig(dir('configs/gnome_cooking/gnome_cooking.obj'));
+  expect('raw gnome food', label(await readFile(dir('scripts/gnome_cooking/gianne_dough.rs2'), 'utf8'), 'make_raw_gnome').takes, ['gianne_dough']);
+  const shapedIn = new Map();                 // raw gnome food -> the tin it's shaped in
+  for (const b of gnomeObjs.values()) {
+    const st = b.params.gnome_cooking_struct && gnomeStructs.get(b.params.gnome_cooking_struct);
+    if (st?.params.product) shapedIn.set(st.params.product, b.name);
+  }
+
+  // ── The calculator's rows ──
+  const NOTES = {
+    tbwt_cooked_karambwan: 'Cooked thoroughly: a choice you have once Tai Bwo Wannai Trio is done. Before that a karambwan comes out poorly cooked.',
+    tbwt_poorly_cooked_karambwan: 'How a karambwan comes out until Tai Bwo Wannai Trio is done.',
+    tbwt_cooked_karambwanji: 'Burnt, it turns to ashes.',
+    lava_eel: null,
+    cooked_ugthanki_meat: null,
+  };
+  for (const [tab, rows] of Object.entries(calc)) {
+    for (const [key, row] of Object.entries(rows)) {
+      if (byCooked.has(key)) {
+        const from = byCooked.get(key)[0].uncooked[0];
+        const tin = shapedIn.get(from);
+        if (tin) step(`ck_${from}`, from, { gianne_dough: 1 }, { tools: [need(tin)] });
+        generic(tab, key, row, NOTES[key] ? { note: NOTES[key] } : {});
+      } else if (key === 'cooked_chompy') {
+        // roasted on an ogre spit, by its own script
+        const chompy = await readFile(scripts('quests/quest_chompybird/scripts/raw_chompy.rs2'), 'utf8');
+        const roast = label(chompy, 'cook_chompy_offquest');
+        const roll = roast.body.match(/stat_random\(cooking, (\d+), (\d+)\)/);
+        const spit = chompy.slice(chompy.indexOf('[oplocu,chompybird_spitroast_empty]')).split(/\n\[/)[0];
+        if (!roll || !roast.takes.includes('raw_chompy') || !roast.gives.includes(key)) throw new Error("cooking: can't read how a chompy is roasted");
+        if (!/%chompybird = \^chompybird_complete\) \{\s*@cook_chompy_offquest/.test(spit)) throw new Error('cooking: a chompy no longer waits for Big Chompy Bird Hunting');
+        const level = levelIn(spit, 'a chompy'), xp = fromScript(roast.body, /stat_advance\(cooking, (\d+)\)/, 'the XP for a chompy');
+        check(key, 'level', row.level, level);
+        check(key, 'xp', x10(row.xp), xp);
+        made[TABS[tab]].push(key);
+        raws[TABS[tab]].push(need('raw_chompy'));
+        const chance = [Number(roll[1]), Number(roll[2])];
+        push({ id: `ck_${key}`, skill: 'cooking', group: TABS[tab], kind: 'xp', name: name(key), level, xp, in: { raw_chompy: 1 }, out: { [need(key)]: 1 },
+          ...(never(chance, level) ? {} : { chance, opt: { ignore: { chance: null, chanceAt: null, chanceWorn: null } } }),
+          note: 'Roasted on an ogre spit-roast, once Big Chompy Bird Hunting is done: not on a fire or a range, so those choices change nothing.' });
+      } else if ([...toppings.keys()].some(st => pizzaStructs.get(st)?.params.product === key)) {
+        // a topped pizza: the plain one (its own row, above), then the topping
+        const [st, list] = [...toppings].find(([t]) => pizzaStructs.get(t).params.product === key);
+        const p = pizzaStructs.get(st).params;
+        const base = mine.find(m => m.id === 'ck_plain_pizza') || (() => { throw new Error('cooking: the plain pizza has to come before the topped ones'); })();
+        const topped = label(pizzaScript, 'make_pizza_with_topping');
+        expect('topped pizza', topped.takes, ['plain_pizza']);
+        const topping = pick(list);
+        check(key, 'level', row.level, Number(p.levelrequired));
+        check(key, 'xp', x10(row.xp), base.xp + Number(p.productexp));
+        made[TABS[tab]].push(key);
+        push({ id: `ck_${key}`, skill: 'cooking', group: TABS[tab], kind: 'xp', name: name(key), level: Number(p.levelrequired), xp: Number(p.productexp),
+          in: { plain_pizza: 1, [need(topping[0])]: 1 }, out: { [need(key)]: 1 },
+          note: `The topping goes on a baked plain pizza: ${Number(p.productexp) / 10} XP for that, on top of the ${base.xp / 10} for baking it.${others(topping)}` });
+      } else if (key === 'chocolate_cake') {
+        const iced = label(cakeScript, 'make_chocolate_cake');
+        const base = mine.find(m => m.id === 'ck_cake') || (() => { throw new Error('cooking: the cake has to come before the chocolate cake'); })();
+        expect('chocolate cake', [iced.takes, iced.gives].flat(), ['cake', 'chocolate_cake']);
+        const level = levelIn(iced.body, 'a chocolate cake'), xp = fromScript(iced.body, /stat_advance\(cooking, (\d+)\)/, 'the XP for a chocolate cake');
+        if (!/\[opheldu,chocolate_bar\][\s\S]*?case cake : @make_chocolate_cake/.test(cakeScript) || !/\[opheldu,chocolate_dust\][\s\S]*?case cake : @make_chocolate_cake/.test(cakeScript)) throw new Error('cooking: chocolate no longer goes on a cake');
+        check(key, 'level', row.level, level);
+        check(key, 'xp', x10(row.xp), base.xp + xp);
+        made[TABS[tab]].push(key);
+        push({ id: `ck_${key}`, skill: 'cooking', group: TABS[tab], kind: 'xp', name: name(key), level, xp, in: { cake: 1, [need('chocolate_bar')]: 1 }, out: { [need(key)]: 1 },
+          note: `Chocolate goes on a baked cake: ${xp / 10} XP for that, on top of the ${base.xp / 10} for baking it. ${name('chocolate_dust')} can go on instead.` });
+      } else if (key === ferment[3]) {
+        // wine: made by squeezing, the XP when it has fermented (or it goes bad)
+        const level = levelIn(squeezed.body, 'wine'), xp = Number(ferment[4]);
+        check(key, 'level', row.level, level);
+        check(key, 'xp', x10(row.xp), xp);
+        made[TABS[tab]].push(key);
+        const chance = [Number(ferment[1]), Number(ferment[2])];
+        push({ id: `ck_${key}`, skill: 'cooking', group: TABS[tab], kind: 'xp', name: name(key), level, xp, in: { jug_unfermented_wine: 1 }, out: { [need(key)]: 1 },
+          ...(never(chance, level) ? {} : { chance, opt: { ignore: { chance: null, chanceAt: null, chanceWorn: null } } }),
+          note: `Grapes squeezed into a jug of water. The XP comes when it has fermented, a few seconds on; it can go bad instead (${lower(need(ferment[5]))}), which is counted like a burn. No fire or range in it, so those choices change nothing.` });
+      } else throw new Error(`cooking: the server has no ${key}`);
+    }
+  }
+  // Wrapping an oomlie: a step with XP of its own, which the calculator leaves out.
+  const oomlie = label(await readFile(dir('scripts/cooking_inv/scripts/oomlie_bird_meat/oomlie_bird_meat.rs2'), 'utf8'), 'make_oomlie_wrap');
+  expect('oomlie wrap', [oomlie.takes, oomlie.gives].flat(), ['palm_leaf', 'raw_oomlie', 'wrapped_oomlie']);
+  const wrapXp = fromScript(oomlie.body, /stat_advance\(cooking, (\d+)\)/, 'the XP for wrapping an oomlie');
+  const wrapAt = mine.findIndex(m => m.id === 'ck_cooked_oomlie');
+  if (wrapAt < 0 || mine[wrapAt].in.wrapped_oomlie !== 1) throw new Error('cooking: the oomlie wrap is no longer what gets cooked');
+  const wrap = { id: 'ck_wrapped_oomlie', skill: 'cooking', group: TABS.meat, kind: 'xp', name: name('wrapped_oomlie'), level: levelIn(oomlie.body, 'an oomlie wrap'), xp: wrapXp,
+    in: { raw_oomlie: 1, palm_leaf: 1 }, out: { wrapped_oomlie: 1 }, note: `Not on LostHQ's calculator: wrapping the meat in a palm leaf gives ${wrapXp / 10} XP on the server, before it's cooked.` };
+  mine.splice(wrapAt, 0, wrap);
+  methods.splice(methods.indexOf(mine[wrapAt + 1]), 0, wrap);
+  raws.Meat.splice(raws.Meat.indexOf('wrapped_oomlie'), 0, need('raw_oomlie'), need('palm_leaf'));
+  cookingNotes.push(`${name('wrapped_oomlie')}: ${wrapXp / 10} XP on the server; not in LostHQ's calculator (added)`);
+
+  // Every row of the server's table that gives XP has a row here; so has every
+  // script that gives Cooking XP, or it's one of these, looked at and left out.
+  for (const r of table) if (Number(r.experience?.[0]) > 0 && r.cooked?.[0] !== 'null' && !seen.has(r.row)) throw new Error(`cooking: the server cooks ${r.cooked[0]} (${r.row}), which the calculator doesn't list: look at it, then list it`);
+  const LEFT_OUT = {
+    'skill_cooking/scripts/gnome_cooking/gnome_battas.rs2': 'finishing a gnome batta', 'skill_cooking/scripts/gnome_cooking/gnome_bowls.rs2': 'finishing a gnome bowl',
+    'skill_cooking/scripts/gnome_cooking/gnome_food_finish.rs2': 'garnishing gnome food', 'skill_cooking/scripts/gnome_cooking/gnome_cocktail_finish.rs2': 'finishing a gnome cocktail',
+    'skill_cooking/scripts/cooking_inv/scripts/ugthanki_kebab/ugthanki_kebab.rs2': 'an ugthanki kebab', 'areas/area_gnome/scripts/gnome_restaurant.rs2': 'gnome restaurant deliveries',
+    'quests/quest_tbwt/scripts/tbwt_jogre_bones.rs2': 'pasting jogre bones',
+    'areas/area_karamja/scripts/tbwt_tinsay_final.rs2': 'a quest reward', 'quests/quest_hero/scripts/quest_hero.rs2': 'a quest reward', 'quests/quest_cook/scripts/quest_cook.rs2': 'a quest reward',
+    'quests/quest_chompybird/scripts/quest_chompybird.rs2': 'a quest reward', 'quests/quest_fluffs/scripts/quest_fluffs.rs2': 'a quest reward', '_test/scripts/cheats/cheat_maxme.rs2': 'a test cheat',
+  };
+  const USED = ['skill_cooking/scripts/cooking.rs2', 'skill_cooking/scripts/cooking_inv/scripts/cakes/cakes.rs2', 'skill_cooking/scripts/cooking_inv/scripts/oomlie_bird_meat/oomlie_bird_meat.rs2',
+    'skill_cooking/scripts/cooking_inv/scripts/wine/wine.rs2', 'skill_cooking/scripts/cooking_inv/scripts/pizza/pizza.rs2', 'quests/quest_chompybird/scripts/raw_chompy.rs2'];
+  for (const f of (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.rs2'))) {
+    const file = f.replace(/\\/g, '/');
+    if (USED.includes(file) || LEFT_OUT[file]) continue;
+    if ((await readFile(scripts(f), 'utf8')).includes('stat_advance(cooking')) throw new Error(`cooking: ${file} gives Cooking XP and isn't accounted for: look at it, then list it`);
+  }
+
+  // A row whose product another row or step uses feeds it: with the raw thing
+  // in your bank it's cooked on the way, and that XP counts. The two bakes the
+  // calculator folds into a topped pizza and a chocolate cake are planned
+  // through from scratch as well.
+  const inputs = new Set(mine.flatMap(m => Object.keys(m.in)));
+  for (const m of mine) if (m.kind === 'xp' && Object.keys(m.out).some(k => inputs.has(k))) m.feeds = 1;
+  for (const id of ['ck_plain_pizza', 'ck_cake']) {
+    const m = mine.find(x => x.id === id);
+    if (!m?.feeds) throw new Error(`cooking: ${id} no longer feeds a row`);
+    m.through = 1;
+  }
+  // aside: not what a plan trains with unless you pick it (or your bank holds
+  // it). Quest food, and the two fish no fishing spot gives (only the trawler):
+  // otherwise a karambwan, 190 XP at level 1, would be every plan's own pick.
+  const fished = new Set(methods.filter(m => m.skill === 'fishing').flatMap(m => Object.keys(m.out)).filter(k => !outOfTheWay.has(k)));
+  for (const m of mine) if (m.group === TABS.fish && !fished.has(Object.keys(m.in)[0])) m.aside = 1;
+  const aside = mine.filter(m => m.aside).map(m => m.id);
+  const ASIDE = ['ck_tbwt_cooked_karambwanji', 'ck_tbwt_poorly_cooked_karambwan', 'ck_tbwt_cooked_karambwan', 'ck_mort_slimey_eel_cooked', 'ck_lava_eel', 'ck_seaturtle', 'ck_mantaray'];
+  if (JSON.stringify(aside) !== JSON.stringify(ASIDE)) throw new Error(`cooking: the fish set aside are ${aside.join(', ')}: look at them, then list them`);
+  // A chance belongs to a row that cooks one thing: plans count on it.
+  for (const m of mine) if (m.chance && (Object.keys(m.in).length !== 1 || Object.values(m.in)[0] !== 1 || m.kind !== 'xp')) throw new Error(`cooking: ${m.id} has a chance but isn't one thing cooked`);
+
+  // The choices on a goal: where you cook, gauntlets, and whether burnt food is counted.
+  const rows = mine.filter(m => m.chance);
+  const stops = (m, c) => { for (let l = m.level; l <= 99; l++) if (never(c, l)) return l; return null; };
+  const eg = id => mine.find(m => m.id === id) || (() => { throw new Error(`cooking: no ${id} to give as an example`); })();
+  const shark = eg('ck_shark'), lobster = eg('ck_lobster');
+  const stopText = l => (l == null ? 'never stop burning' : `stop burning at level ${l}`);
+  // a fire against a range, at the level a food is first cooked: which burns more of it
+  const list = ms => ms.map(m => m.name.toLowerCase()).join(', ').replace(/, ([^,]*)$/, ' and $1');
+  const onFire = rows.filter(m => m.opt.fire);
+  const worse = onFire.filter(m => unitsAt(m.opt.fire.chanceAt, m.level) < unitsAt(m.chance, m.level)), better = onFire.filter(m => !worse.includes(m));
+  if (!worse.length || worse.length + better.length !== onFire.length) throw new Error("cooking: can't say what a fire burns more of");
+  choices.cooking = [
+    { id: 'heat', label: 'Cook on', options: [{ id: 'range', name: 'A range' }, { id: 'lumbridge', name: "Lumbridge Castle's range" }, { id: 'fire', name: 'A fire' }],
+      tip: `Where you cook decides how often food burns. A range: the usual. Lumbridge Castle's range (once Cook's Assistant is done) burns less of ${rows.filter(m => m.opt.lumbridge).length} low-level foods. ` +
+        `A fire burns more ${list(worse)}${better.length ? `, and a little less ${list(better)}` : ''}; the rest burn the same. Pies, pizzas, cakes and bread need a range whatever you pick.` },
+    { id: 'gauntlets', label: 'Cooking gauntlets',
+      tip: `On: ${rows.filter(m => m.opt.gauntlets).map(m => m.name.toLowerCase()).join(', ').replace(/, ([^,]*)$/, ' and $1')} burn less. Lobsters ${stopText(stops(lobster, lobster.opt.gauntlets.chanceWorn))} instead of ${stops(lobster, lobster.chance)}; sharks ${stopText(stops(shark, shark.opt.gauntlets.chanceWorn))} (without, they ${stopText(stops(shark, shark.chance))}).` },
+    { id: 'burnt', label: 'Burnt food', options: [{ id: 'count', name: 'Count it' }, { id: 'ignore', name: 'Leave it out' }],
+      tip: "Count it: a plan allows for what burns, by the server's own chances at each level: more raw food to collect, and less XP from what's in your bank. Leave it out: every cook works, the way LostHQ's calculator counts." },
+  ];
+
+  // The Bank tab: what goes in, by kind, then what comes out.
+  const group = (label2, items) => ({ name: label2, items: [...new Set(items)].map(need) });
+  const ins = id => Object.keys(mine.find(m => m.id === id).in);
+  bankGroups.cooking = [
+    group('Raw fish', raws.Fish),
+    group('Raw meat', raws.Meat),
+    group('Pies and bread', [flour, water, 'bread_dough', 'pastry_dough', 'piedish', 'pie_shell', ...[...pieOf].flatMap(([pie, p]) => [p.filling[0], pie]), 'uncooked_pitta_bread'].filter(k => !mine.some(x => x.kind === 'xp' && x.out[k]))),
+    group('Pizza and cake', ['pizza_base', 'tomato', 'incomplete_pizza', 'cheese', 'uncooked_pizza', ...mine.filter(m => m.in.plain_pizza).flatMap(m => Object.keys(m.in).filter(k => k !== 'plain_pizza' && !mine.some(x => x.kind === 'xp' && x.out[k]))),
+      'egg', 'bucket_milk', 'uncooked_cake', 'chocolate_bar']),
+    group('Stew, wine and the rest', ['bowl_water', 'potato', 'stew1', 'uncooked_stew', 'spicespot', 'uncooked_curry', 'grapes', 'jug_water', 'jug_unfermented_wine', 'swamp_tar', 'rawswamppaste',
+      'gianne_dough', ...made.Gnome.flatMap(k => ins(`ck_${k}`)), ...['ck_tbwt_jogre_bones_marinated_in_karambwanji', 'ck_tbwt_burnt_jogre_bones_marinated_in_karambwanji'].flatMap(ins)]),
+    group('Cooked: fish', made.Fish),
+    group('Cooked: meat', made.Meat),
+    group('Cooked: pies and pizza', made['Pies & pizza']),
+    group('Cooked: the rest', [...made.Gnome, ...made.Other]),
+  ];
+  const listed = new Set(bankGroups.cooking.flatMap(g => g.items));
+  for (const k of new Set(mine.flatMap(m => [...Object.keys(m.in), ...Object.keys(m.out)]))) if (!listed.has(k)) throw new Error(`cooking: ${k} is used but isn't in a bank group`);
+  if (listed.size !== bankGroups.cooking.reduce((a, g) => a + g.items.length, 0)) throw new Error('cooking: an item is in two bank groups');
+  cookingNotes.push(`${mine.filter(m => m.kind === 'xp').length} rows, ${mine.filter(m => m.kind === 'prep').length} steps; ${rows.length} can burn (${rows.filter(m => m.opt.fire).length} with another chance on a fire, ${rows.filter(m => m.opt.lumbridge).length} less on the Lumbridge range, ${rows.filter(m => m.opt.gauntlets).length} less with gauntlets)`);
+  cookingNotes.push(`left out, as the calculator does: ${[...new Set(Object.values(LEFT_OUT))].filter(v => !/quest reward|cheat/.test(v)).join(', ')}`);
+}
+
+await cooking();
+
 // ── Catalog of every item the data mentions ───────────────────────────────
 const used = new Set();
 for (const m of methods) {
@@ -1157,8 +1736,17 @@ names.forEach((name, n) => {
     sheet.copy(atlas, ((dy + y) * PER_ROW * SIZE + dx) * 4, from, from + SIZE * 4);
   }
 });
-await sharp(atlas, { raw: { width: PER_ROW * SIZE, height: rows * SIZE, channels: 4 } })
-  .png({ compressionLevel: 9, palette: false }).toFile('items.png');
+// A sheet's address carries a stamp of its contents. Where an icon sits is in
+// the data, so the two have to come from the same build: with the stamp in the
+// address the data names, a browser can't pair new positions with a sheet it
+// kept from an earlier release (which showed every icon wrong after v2.6.0
+// until its cache ran out).
+const stamped = async (file, png) => {
+  await writeFile(file, png);
+  return `${file}?v=${createHash('sha1').update(png).digest('hex').slice(0, 10)}`;
+};
+const iconSheet = await stamped('items.png', await sharp(atlas, { raw: { width: PER_ROW * SIZE, height: rows * SIZE, channels: 4 } })
+  .png({ compressionLevel: 9, palette: false }).toBuffer());
 
 // ── gamedata.js ────────────────────────────────────────────────────────────
 const items = {};
@@ -1215,7 +1803,17 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // magic/spell/magicLevel, through } }. through: a method that feeds is planned
 // through from scratch as well, like a prep step, and its XP counts (bars you
 // smelt yourself). icon: the item a method is shown as, when it isn't the first
-// thing it makes (a gem rock).
+// thing it makes (a gem rock; the bar a Mining row mines the ore for).
+// lead and as: a row counted in what its output is for, with the words to say so
+// (lead "Ore for", as ["steel bar", "steel bars"]: "Ore for 400 steel bars: …").
+// after: methods that share an ingredient with this one and get it first when a
+// bank can make either (Herblore: super attacks before superantipoisons).
+// aside: not what a plan trains with unless you pick it or your bank holds it
+// (quest food; a big net's fish). chance: a method that can fail, as [low,
+// high], what the server's roll is given: how often it works depends on your
+// level (Cooking: food burns), and plans count the tries it takes. A goal's
+// choices can set chanceAt (another fire) and chanceWorn (cooking gauntlets),
+// which go before it.
 // An item with gp is always worth that (a coin is 1 gp): no market price. One
 // with charge is what a worn item gives while it lasts (a ring of forging's 140
 // bars): a step on the way turns the item into them, so plans count whole rings.
@@ -1223,6 +1821,9 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 export const GAME_REVISION = 274;
 export const ICON_SIZE = ${SIZE};
 export const ICONS_PER_ROW = ${PER_ROW};
+// The icon sheet these positions are for: its address, with a stamp of its
+// contents, so a browser never pairs them with a sheet from another release.
+export const ICON_SHEET = ${JSON.stringify(iconSheet)};
 
 export const ITEMS = ${JSON.stringify(items, null, 0).replace(/\},"/g, '},\n  "').replace(/^\{/, '{\n  ').replace(/\}$/, '\n}')};
 
@@ -1257,6 +1858,8 @@ console.log(`gamedata.js: ${methods.length} methods, ${names.length} items; item
 for (const note of craftingNotes) console.log(`  crafting: ${note}`);
 for (const note of miningNotes) console.log(`  mining: ${note}`);
 for (const note of smithingNotes) console.log(`  smithing: ${note}`);
+for (const note of fishingNotes) console.log(`  fishing: ${note}`);
+for (const note of cookingNotes) console.log(`  cooking: ${note}`);
 
 // ── Bank screenshots ───────────────────────────────────────────────────────
 // What bankread.js needs to read a bank from a screenshot, loaded only when one
@@ -1364,8 +1967,11 @@ async function bankScreenshots() {
         && (ITEM.get(slug).tradeable === true || KEEPSAKES.has(slug))) {
         // "Ring of dueling(7)" … "(1)" are one name; beside the (8) they're the same ring, part used
         const bare = n => n.replace(/\s*\(\d+\)$/, '');
-        const ours = items[kept.slug].name;
-        const twin = bare(ITEM.get(slug).name) === bare(ours) ? `${bare(ours)} (fewer charges)` : bare(ITEM.get(slug).name);
+        const ours = items[kept.slug].name, theirs = ITEM.get(slug).name;
+        // (the very same name and picture is the same thing as far as a bank shows: Tutorial Island's raw
+        // shrimps and pot of flour, an incomplete stew with the meat in before the potato. Nothing to say.)
+        if (theirs === ITEM.get(kept.slug).name) return;
+        const twin = bare(theirs) === bare(ours) ? `${bare(ours)} (fewer charges)` : bare(theirs);
         if (twin !== ours && !kept.like?.includes(twin)) (kept.like ||= []).push(twin);
       }
       return;
@@ -1377,7 +1983,9 @@ async function bankScreenshots() {
   // Enchanted jewellery looks exactly like the plain piece it's made from. In a
   // bank it's far more often the enchanted one (a ring of dueling, not an emerald
   // ring), so that's what such an icon is read as; the plain one is noted under also.
-  const enchantedFirst = methods.filter(m => m.id.startsWith('cr_ench_')).map(m => Object.keys(m.out)[0]);
+  // An amulet of glory with no charges left looks the same again: it's the next
+  // guess, before the plain dragonstone amulet.
+  const enchantedFirst = methods.filter(m => m.id.startsWith('cr_ench_')).map(m => Object.keys(m.out)[0]).flatMap(k => (unchargedOf[k] ? [k, unchargedOf[k]] : [k]));
   for (const name of [...enchantedFirst, ...names]) if (fixedPrices[name] == null) add(name);
   for (const [v, base] of variants) add(v, { of: base });
   const ours = new Set(entries.map(x => x.e.slug));
@@ -1396,8 +2004,8 @@ async function bankScreenshots() {
     const dx = (n % PER_ROW) * SIZE, dy = Math.floor(n / PER_ROW) * SIZE;
     for (let y = 0; y < SIZE; y++) px.copy(bAtlas, ((dy + y) * PER_ROW * SIZE + dx) * 4, y * SIZE * 4, (y + 1) * SIZE * 4);
   });
-  await sharp(bAtlas, { raw: { width: PER_ROW * SIZE, height: bRows * SIZE, channels: 4 } })
-    .png({ compressionLevel: 9, palette: false }).toFile('bankicons.png');
+  const bankSheet = await stamped('bankicons.png', await sharp(bAtlas, { raw: { width: PER_ROW * SIZE, height: bRows * SIZE, channels: 4 } })
+    .png({ compressionLevel: 9, palette: false }).toBuffer());
 
   await writeFile('bankread-data.js', `// Generated by build-data.mjs. Do not edit by hand; change the script and re-run it.
 // What bankread.js reads a bank screenshot with. Layout from Lost City's bank
@@ -1416,6 +2024,8 @@ export const STACK_FONT = ${JSON.stringify(font)};
 // also: other planner items with the very same icon; like: names of items the
 // planner doesn't use that have it too (an amulet of glory, a jug of wine).
 export const BANK_ICONS_PER_ROW = ${PER_ROW};
+// (its address, stamped with its contents: this list and the sheet go together)
+export const BANK_ICON_SHEET = ${JSON.stringify(bankSheet)};
 export const BANK_ICONS = [
 ${entries.map(({ e }) => '  ' + JSON.stringify(e)).join(',\n')},
 ];

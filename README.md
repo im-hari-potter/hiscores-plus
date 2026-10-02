@@ -20,6 +20,8 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 - **Lookup** shows every skill's level, XP, rank, XP to the next level, and **Top %**. Top % is your rank
   divided by the number of players ranked in that skill.
   - Sort the tiles by level, XP, rank or Top %, or drag them into your own layout.
+  - The names you've looked up are kept under **Recent**. Take one off with its ✕, or **Clear** the
+    list. A name comes back when you look that player up again.
   - Tiles show your goals once you set some: the goal in yellow, and the tile's bar becomes your
     progress toward it (since you set it) in place of the bar to the next level.
 - **Combat** shows only the combat skills and your combat level, worked out with the game's own formula.
@@ -34,22 +36,26 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 The planner works out what it takes to reach a goal, from your XP on the hiscores, what's in your bank
 and the prices you set. Any skill can have a goal. A skill with its full planner (marked with a dot
 when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woodcutting**,
-**Firemaking**, **Fletching**, **Crafting**, **Mining** and **Smithing**, with the other skills to
-follow.
+**Firemaking**, **Fletching**, **Crafting**, **Mining**, **Smithing**, **Fishing** and **Cooking**,
+with the other skills to follow.
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
     or only one skill.
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
+  - **Edit** (beside a goal's title) moves the goalpost: type a new target, or switch the goal to
+    another kind (level, XP, rank, top %). Its plan, ticks, order and progress bar stay as they are.
 
 #### How the calculators work
 
 - Every number comes from the game itself (Lost City's server content): the level each way to train
   needs, the XP it gives, and what it takes and makes. The maths is done in tenths of XP, like the
-  game does. The rows of Crafting, Mining and Smithing are those of LostHQ's calculators
-  ([Crafting](https://2004.losthq.rs/?p=calculators&calc=crafting),
+  game does. The rows of Crafting, Mining, Smithing, Fishing and Cooking are those of LostHQ's
+  calculators ([Crafting](https://2004.losthq.rs/?p=calculators&calc=crafting),
   [Mining](https://2004.losthq.rs/?p=calculators&calc=mining),
-  [Smithing](https://2004.losthq.rs/?p=calculators&calc=smithing)), each one checked against the
+  [Smithing](https://2004.losthq.rs/?p=calculators&calc=smithing),
+  [Fishing](https://2004.losthq.rs/?p=calculators&calc=fishing),
+  [Cooking](https://2004.losthq.rs/?p=calculators&calc=cooking)), each one checked against the
   server; where the two differ, the server's number is used.
 - How many you need = the XP still to go ÷ the XP each one gives, rounded up.
 - **Gross** is what something is worth, with nothing taken off. **Net** takes off what you pay for its
@@ -57,7 +63,8 @@ follow.
 - A plan has three parts:
   1. **From your bank**: what the items in your bank make, best XP first (the one you train with goes
      first when it can), including steps on the way like unfinished potions. Each step shows what it
-     makes is worth, and the total is its **Gross**.
+     makes is worth, and the total is its **Gross**. Drag its lines to change what your bank is used
+     for first (see Your own order below).
   2. **Then, to reach your goal**: the rest, made the way you pick under **Train with**. If you're
      short of levels for it, the plan works up to it with the best one at each level on the way
      (willows to 45, maples to 60, then yews). Below that: what to collect or buy, what to bring, what
@@ -65,6 +72,10 @@ follow.
   3. **Every option**: one row for each way to train, side by side (see the table below). Click a row
      to train with it.
 - Per skill:
+  - Herblore: where two potions want the same herb or secondary, the more useful one gets it first.
+    Super attack uses your irits before Superantipoison does, and Prayer potion your snape grass
+    before Fishing potion. The one you train with still goes first, and so does anything you drag
+    above it.
   - Runecraft counts in essence, and shows how many runes each essence makes at your level (×2, ×3…).
   - Woodcutting needs nothing but an axe, so its plan is the logs to chop and what they're worth.
   - Firemaking burns the logs in your bank, best first.
@@ -106,7 +117,8 @@ follow.
         (counted even where a staff would save them). Enchanting gives Magic XP, not Crafting XP,
         so the row's XP is the plain piece's; hover over the row for the Magic level it takes and
         the Magic XP of one cast. An amulet of glory is then charged at the Fountain of Heroes,
-        which costs nothing.
+        which costs nothing. An **uncharged** amulet of glory is an item of its own in your bank
+        and on the Prices tab; the row makes the charged one.
       - The bank plan makes the plain piece (the XP is the same) unless you pick the enchanted one
         under **Train with** and have the runes in your bank, or you've unticked the plain one.
     - **Battlestaves**: the orb on a battlestaff is an unpowered orb charged with a Charge Orb spell
@@ -129,9 +141,18 @@ follow.
     - A **gem rock** gives one gem by chance, so what it makes is the server's chances: out of 128,
       opal 60, jade 30, red topaz 15, sapphire 9, emerald 5, ruby 5, diamond 4.
     - **Limestone** (level 10, 26.5 XP) is added: the server has it, the calculator doesn't.
+    - **Bars** (beside **Rocks**, above the table) plans by the bar: a row is the ore one bar takes,
+      mined in the furnace's own proportions. A steel bar is 1 iron ore and 2 coal, 135 XP; a runite
+      bar 1 runite ore and 8 coal, 525 XP. A plan's line reads "Ore for 10,635 steel bars: 10,635 Iron
+      ore + 21,270 Coal". The level is the Mining level the ore takes; the row's tooltip has the
+      Smithing level to smelt it.
+      - Iron has two rows: 2 ore a bar (half the ore is lost in a furnace), or 1 with a ring of forging
+        or Superheat Item.
+      - Rocks are what a plan picks by itself. Click a bar's row, or pick it under Train with, to plan
+        by the bar; bars work in a mix too.
   - Smithing has every row of LostHQ's Smithing calculator: its smelting list, and what each metal
     makes on the anvil. The table shows one at a time: **Smelting**, **Bronze**, **Iron**,
-    **Steel**, **Mithril**, **Adamant**, **Rune**.
+    **Steel**, **Mithril**, **Adamant**, **Rune**, in that order however the table is sorted.
     - Ore in your bank is smelted on the way to what you smith, and that XP counts: at level 99,
       100 runite ore, 800 coal and 7 bars make 21 platebodies and a scimitar.
     - Three choices sit on the goal. They stand in for the calculator's two extra rows and its
@@ -154,6 +175,47 @@ follow.
     - Cannonballs come out of a furnace with an ammo mould; everything else takes a hammer. Dart
       tips wait for The Tourist Trap and claws for Death Plateau: hover over the row.
     - The Elemental Workshop's bar is there, as on the calculator. It can't be superheated.
+  - Fishing has every fish of LostHQ's Fishing calculator. It never uses your bank, like Woodcutting
+    and Mining: a plan is the fish to catch and what they're worth.
+    - **Also bring** names the gear for the spot: a net, a rod, a harpoon, a lobster pot.
+    - A catch with a rod takes a **bait or a feather**, listed to buy. (What's in your bank isn't
+      counted for those.)
+    - A **big net** brings up mackerel, cod and bass together, and now and then boots, gloves,
+      seaweed, an oyster or a casket. Each of the three fish has its row, counted on its own.
+    - A plan doesn't pick a big net's fish by itself, nor karambwanji, karambwan, slimey eels or lava
+      eels, which take a quest or an out-of-the-way spot. Click one to train with it.
+  - Cooking has every row of LostHQ's Cooking calculator, in its tabs: **Fish**, **Meat**,
+    **Pies & pizza**, **Gnome** and **Other**. The table shows one tab at a time.
+    - Raw fish and meat in your bank are cooked. A pie, a pizza, a cake, a stew or a wine is put
+      together first, and anything on the way counts: flour and water, dough, a pie shell.
+    - **Burnt food is counted**, by the server's own chances, a level at a time. At level 51 on a
+      range, 188 lobsters in 256 cook. So 400 raw lobsters come to about 298 lobsters (two levels are
+      gained on the way, and each burns less), and 1,050 more take about 1,312 raw ones.
+      - A row says how much burns at your level now ("27% burn"); hover over it for the level it stops
+        at. Lobsters stop burning at 74, sharks never do without gauntlets.
+      - Everything in your bank goes on the range: 400 raw lobsters are 400 cooked, about 102 of them
+        burnt.
+      - Food that can't burn any more is cooked first where that gains a level before the rest goes
+        on. Drag the lines to cook in another order.
+    - Three choices sit on the goal:
+      - **Cook on**: a range (how it starts), Lumbridge Castle's range (it burns less of 19 low-level
+        foods, once Cook's Assistant is done), or a fire (cod, swordfish, shark, sea turtle and manta
+        ray burn more on one). Pies, pizzas, cakes and bread need a range whatever you pick.
+      - **Cooking gauntlets**: on, lobster, swordfish and shark burn less. Lobsters stop burning at 64
+        and sharks at 94.
+      - **Burnt food**: **Count it** (how it starts), or **Leave it out**: every cook works, the way
+        LostHQ's calculator counts.
+    - A topped pizza is a plain pizza baked, then the topping; a chocolate cake is a cake baked, then
+      the chocolate. The row's XP has the bake in it, as on the calculator (a meat pizza: 143 + 26).
+    - Where the calculator and the server differ, the server is followed: a jug of wine is 110 XP
+      (the calculator says 200), a cooked chompy 14 (100), a pineapple pizza 188 (195) and a manta ray
+      216.3 (216.2). Wrapping an oomlie in a palm leaf (10 XP) is added: the server has it, the
+      calculator doesn't.
+    - Left out, as on the calculator: finishing gnome dishes and cocktails, ugthanki kebabs, gnome
+      restaurant deliveries, and pasting jogre bones.
+    - Dough takes a bucket of water here; in the game a jug of water does too.
+    - Quest food (karambwan, slimey eel, lava eel) and the two fish only the trawler gives (sea
+      turtle, manta ray) aren't what a plan picks by itself: click one to train with it.
 - Click an item a plan says to collect, buy or bring to open its page on the market.
 
 #### Check your prices first
@@ -172,6 +234,18 @@ Anything without a price shows **?** until it has one.
     in your bank is used before anything is collected.
 - **Off**: the plan starts from scratch, as if your bank were empty. Plan a mix of your own instead
   (below), or let one way to train take you all the way.
+
+#### Your own order
+
+The lines under **From your bank** can be dragged up and down, by the grip at their left. Your bank
+then goes to the top line first, and down the list from there: drag Fishing potion above Prayer
+potion and it gets the snape grass first.
+
+- The order is kept with the goal. **Back to the usual order** undoes it.
+- **N more your bank could make instead** lists what the lines above leave nothing for
+  (superantipoison, when super attacks took the irits). Click one to put it first.
+- Anything you haven't placed follows the usual rules, after the ones you have.
+- **Round up my supplies** keeps to your order too.
 
 #### Plan a mix (Use my bank off)
 
@@ -244,6 +318,9 @@ your bank. It's one or the other: the table below already shows both side by sid
     the battlestaffs and runes to collect, and a few spare balls of wool don't ask for dragonstones.
   - In Smithing it's **rings of forging** and the **runes** for Superheat Item: 1,000 iron ore and
     3 rings round up to 1,000 bars, with 5 more rings to collect.
+  - In Cooking it rounds up what a row takes directly: the topping for a baked pizza, the chocolate
+    for a cake, the palm leaf for an oomlie. What goes into a pie, a dough or a stew isn't rounded
+    up: 30 apples and 20 pie dishes make 20 pies, and the dishes for the rest aren't listed.
   - **To round up your supplies, collect** lists it all, and the money line takes its cost off: Gross,
     Rounding up your supplies, Net.
   - Everything after it (Then, Still needed to goal, Supplies needed) comes after the rounded-up bank.
@@ -301,9 +378,11 @@ supplies** looks past that (see above): it uses up your herbs and lists the vial
       otherwise the low end is used.
     - Some items look exactly like another one in this version, and a picture can't tell them apart:
       soda ash and ashes, a sapphire ring and a ring of recoil, a cadantine potion (unf) and a
-      lantadyme one, lantadyme and an unid herb. Each stack of those has a **drop-down** in the review:
-      pick the one it is. Your pick is kept for next time, and when your bank holds both, each has its
-      own line.
+      lantadyme one, lantadyme and an unid herb, the raw meats (beef, rat, bear, rabbit, ugthanki),
+      the three pies. Each stack of those has a **drop-down** in the review: pick the one it is. Your
+      pick is kept for next time, and when your bank holds both, each has its own line.
+      - An amulet of glory, an uncharged one and a strung dragonstone amulet look the same too. Three
+        such stacks start as one of each, in that order.
       - The first time, it's the one you typed into your bank yourself, if you did. Otherwise soda ash
         rather than ashes, an unid herb rather than lantadyme, and the enchanted piece rather than the
         plain one (a ring of dueling(8), not an emerald ring), since that's what a bank mostly holds.
@@ -311,8 +390,8 @@ supplies** looks past that (see above): it uses up your herbs and lists the vial
       - A stack that an earlier read filed under the other name moves over (the review says "was
         under Ashes").
     - Things the planner doesn't use can look like one it does, and the review names them next to it:
-      a jug of wine looks like wine of Zamorak, and a plain staff or a Dramen staff like a battlestaff.
-      Untick those.
+      a plain staff or a Dramen staff looks like a battlestaff, and a seasoned sardine like a raw one.
+      Untick those. (A jug of wine looks like wine of Zamorak: Cooking uses it, so that's a drop-down.)
     - Tools (a chisel, a hammer, moulds, a needle) and thread are left out: a plan names the tools a
       row needs, it never counts them. Thread can still be typed in on the Crafting tab if you count
       yours.
@@ -351,8 +430,11 @@ restore.
 - The market's sale history can also only be read inside LostKit. A normal browser gets open offers
   from the market's JSON API.
 - The numbers are the game's own (Lost City's server content), so a few may surprise you: achey tree
-  logs give no Firemaking XP in this version, any axe can be used at any Woodcutting level, and a
-  steel bar makes 2 nails.
+  logs give no Firemaking XP in this version, any axe can be used at any Woodcutting level, a
+  steel bar makes 2 nails, and a cooked chompy is 14 Cooking XP.
+- After an update, press Ctrl+R once if something looks off: a browser can hold on to the last
+  version's files for a few minutes. (Item icons name their own sheet since v2.7, so they can't end
+  up mixed with an older one.)
 
 ## Development
 
@@ -364,15 +446,20 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
   Playwright).
 - The skill data in `gamedata.js` and the icons in `items.png` are generated. To regenerate them, run
   `node build-data.mjs <Content checkout> <LostHQ 2004 checkout>` (needs `sharp`).
+  - `gamedata.js` names its icon sheet with a stamp of the picture (`items.png?v=…`), and
+    `bankread-data.js` does the same for `bankicons.png`. Where an icon sits is in the data, so the
+    two always have to be from the same build: upload them together.
   - Content is [LostCityRS/Content](https://github.com/LostCityRS/Content), branch 274.
   - The LostHQ checkout is [LostHQ/2004](https://github.com/LostHQ/2004).
-  - The rows of Crafting, Mining and Smithing are read from LostHQ's `js/calculators/` and checked
-    against Content one by one. The build stops at any difference it hasn't been told about.
+  - The rows of Crafting, Mining, Smithing, Fishing and Cooking are read from LostHQ's
+    `js/calculators/` and checked against Content one by one. The build stops at any difference it
+    hasn't been told about.
 - Planner files:
   - `planner.js` holds the maths, all in tenths of XP like the game.
   - `planner-ui.js` builds the Goals, Bank and Prices views.
   - `prices-core.js` and `prices.js` handle the market (and high alch).
-  - `sortable.js` drags things into a new order: the Lookup tiles and the bank's All view.
+  - `sortable.js` drags things into a new order: the Lookup tiles, the bank's All view and a bank
+    plan's lines.
   - `bankread.js` reads a bank screenshot. It loads only when used, along with `bankread-data.js` and
     `bankicons.png`, which `build-data.mjs` also generates (bank layout, the p11 font and the icons to
     compare with). The tests paint pretend screenshots with `bankfake.mjs`.
@@ -382,8 +469,8 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
 - Hiscores come from the Lost City hiscores API.
 - Levels and XP for the planner, and the bank layout and font the screenshot reader uses, come from
   Lost City's server content and client (MIT).
-- Item names and icons, and the rows of the Crafting, Mining and Smithing calculators, come from
-  [LostHQ](https://2004.losthq.rs) (GPL-3.0).
+- Item names and icons, and the rows of the Crafting, Mining, Smithing, Fishing and Cooking
+  calculators, come from [LostHQ](https://2004.losthq.rs) (GPL-3.0).
 - Prices come from [markets.lostcity.rs](https://markets.lostcity.rs). How they're read follows
   LostKit's own price check.
 - Skill icons and RuneScape fonts come from [LostKit](https://github.com/LostHQ/LostKit-Electron)

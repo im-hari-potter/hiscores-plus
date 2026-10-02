@@ -13,7 +13,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.6.0';
+const VERSION = '2.7.0';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -186,6 +186,7 @@ const planner = createPlanner({
   defaultAccount: () => prefs.lastLookup || players.saved()[0] || null,
   lookupProfile: () => state.lookup.profile,
   // Fetching the planned account's XP is a lookup like any other: keep a snapshot for Gains.
+  // (pushRecent, here and wherever a fetch isn't you looking someone up: a name removed from Recent stays out)
   onProfile: profile => { snapshots.add(profile); players.pushRecent(profile.name); },
   onChange: () => { if (state.tab === 'lookup') renderTiles(); },
   goTab: tab => setTab(tab),
@@ -217,6 +218,7 @@ function setTab(tab) {
 }
 
 // Chips for saved and recent players. mode 'lookup' opens them, 'compare' toggles them.
+// A recent name has a ✕ to take it off the list, and the list can be cleared.
 function chipsHtml(mode) {
   const saved = players.saved();
   const savedSafe = new Set(saved.map(toSafeName));
@@ -229,12 +231,20 @@ function chipsHtml(mode) {
   };
   let html = '';
   if (saved.length) html += `<span class="label">Saved</span>` + saved.map(n => chip(n, 'saved')).join('');
-  if (recent.length) html += `<span class="label">Recent</span>` + recent.map(n => chip(n, '')).join('');
+  if (recent.length) {
+    html += `<span class="label">Recent</span>` + recent.map(n => `<span class="chip-group">${chip(n, '')}<button type="button" class="chip chip-x" data-unrecent="${esc(n)}" title="Remove ${esc(n)} from recent" aria-label="Remove ${esc(n)} from recent">✕</button></span>`).join('') +
+      `<button type="button" class="linkish chips-clear" data-action="recent-clear" title="Clear the recent names (saved players stay)">Clear</button>`;
+  }
   return html;
+}
+function renderChips() {
+  if (state.tab === 'lookup') $('lookup-chips').innerHTML = chipsHtml('lookup');
+  if (state.tab === 'compare') $('compare-chips').innerHTML = chipsHtml('compare');
 }
 
 // ── Lookup ───────────────────────────────────────────────────────────────
-async function doLookup(rawName, { force = false } = {}) {
+// auto: not you looking someone up (the tool reopening on your last lookup, a link's address).
+async function doLookup(rawName, { force = false, auto = false } = {}) {
   const problem = checkName(rawName);
   if (problem) { showMsg('lookup-msg', esc(problem), 'error'); return; }
   const name = toDisplayName(rawName);
@@ -251,7 +261,7 @@ async function doLookup(rawName, { force = false } = {}) {
     const snap = snapshots.add(profile);
     state.lookup = { profile, previous: snap.previous, snapSaved: snap.saved };
     state.calc = { levels: calcLevelsFrom(profile), source: profile.name };
-    players.pushRecent(profile.name);
+    players.pushRecent(profile.name, { explicit: !auto });
     savePrefs();
     $('lookup-result').dataset.for = '';     // rebuild the calculator with the fresh levels
     renderLookup();
@@ -494,7 +504,7 @@ function addToCompare(rawName) {
   state.compare.names.push(name);
   showMsg('compare-msg', '');
   savePrefs();
-  loadCompareOne(name);
+  loadCompareOne(name, { explicit: true });
   return true;
 }
 
@@ -509,7 +519,7 @@ function removeFromCompare(name) {
   updateHash();
 }
 
-async function loadCompareOne(name, { force = false } = {}) {
+async function loadCompareOne(name, { force = false, explicit = false } = {}) {
   const safe = toSafeName(name);
   state.compare.loading.add(safe);
   delete state.compare.errors[safe];
@@ -520,7 +530,7 @@ async function loadCompareOne(name, { force = false } = {}) {
     if (profile) {
       state.compare.profiles[safe] = profile;
       snapshots.add(profile);
-      players.pushRecent(profile.name);
+      players.pushRecent(profile.name, { explicit });
     } else {
       state.compare.errors[safe] = 'No hiscores entry';
     }
@@ -817,7 +827,7 @@ async function updateGains({ force = true } = {}) {
     else {
       const res = snapshots.add(profile);
       showMsg('gains-msg', res.saved ? '' : `No change since the last snapshot (${esc(when(res.previous?.t || Date.now()))}).`);
-      players.pushRecent(profile.name);
+      players.pushRecent(profile.name, { explicit: force });
     }
   } catch (e) {
     showMsg('gains-msg', errorText(e), 'error');
@@ -984,7 +994,7 @@ function updateHash() {
 
 function applyHash() {
   const [tab, a, b] = decodeURIComponent(location.hash.slice(1)).split('/');
-  if (tab === 'lookup' && a) { state.tab = 'lookup'; doLookup(a); return true; }
+  if (tab === 'lookup' && a) { state.tab = 'lookup'; doLookup(a, { auto: true }); return true; }
   if (tab === 'compare' && a) {
     state.tab = 'compare';
     state.compare.names = a.split(',').filter(n => !checkName(n)).slice(0, MAX_COMPARE).map(toDisplayName);
@@ -1062,6 +1072,8 @@ function wire() {
   // Delegated clicks inside the views
   document.querySelector('main').addEventListener('click', e => {
     const t = e.target;
+    const unrecent = t.closest('[data-unrecent]');
+    if (unrecent) { players.removeRecent(unrecent.dataset.unrecent); renderChips(); return; }
     const chip = t.closest('[data-chip]');
     if (chip) {
       const name = chip.dataset.chip;
@@ -1121,6 +1133,10 @@ function wire() {
         break;
       case 'refresh-lookup':
         if (p) doLookup(p.name, { force: true });
+        break;
+      case 'recent-clear':
+        players.clearRecent();
+        renderChips();
         break;
       case 'tiles-reset':
         state.tileOrder = [...DEFAULT_ORDER];
@@ -1246,7 +1262,7 @@ function start() {
   const routed = location.hash.length > 1 && applyHash();
   if (!routed && state.tab === 'lookup' && prefs.lastLookup) $('lookup-name').value = prefs.lastLookup;
   render();
-  if (!routed && state.tab === 'lookup' && prefs.lastLookup) doLookup(prefs.lastLookup);
+  if (!routed && state.tab === 'lookup' && prefs.lastLookup) doLookup(prefs.lastLookup, { auto: true });
   afterRoute();
   // Refresh any player counts older than a day and a half, in the background.
   totals.loaded.then(() => totals.refresh());

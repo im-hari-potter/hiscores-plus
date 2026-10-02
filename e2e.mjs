@@ -5,6 +5,10 @@ const { chromium } = createRequire(import.meta.url)('playwright'); // resolved f
 import assert from 'node:assert/strict';
 import { fakeBank } from './bankfake.mjs';
 import { encodePng } from './testpng.mjs';
+// (the addresses of the icon sheets this build names, and the XP table, to check what the page shows)
+import { ICON_SHEET } from './gamedata.js';
+import { BANK_ICON_SHEET } from './bankread-data.js';
+import { xpForLevel, levelForXp } from './skills.js';
 
 const BASE = process.env.BASE || 'http://localhost:8787';
 const SHOTS = process.env.SHOTS || '/tmp';
@@ -24,6 +28,8 @@ const page = await ctx.newPage();
 const problems = [];
 page.on('pageerror', e => problems.push('pageerror: ' + e.message));
 page.on('console', m => { if (m.type() === 'error') problems.push('console: ' + m.text()); });
+const requested = [];                         // every address the page asks for
+page.on('request', r => requested.push(r.url()));
 
 const mockStats = async () => (await (await fetch(BASE + '/__mock/stats')).json());
 const text = sel => page.locator(sel).first().innerText();
@@ -302,6 +308,53 @@ await check('lookup tiles sort by level/XP/rank/Top %, Overall first, and can be
   assert.deepEqual((await tiles()).map(t => t.id), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21]);
 });
 
+await check('lookup: a recent name can be taken off the list, or the list cleared, and stays gone until you look them up again', async () => {
+  await page.click('.tab[data-tab="lookup"]');
+  const recent = () => page.$$eval('#lookup-chips .chip-group [data-chip]', cs => cs.map(c => c.dataset.chip));
+  const lookUp = async (name, shown) => {
+    await page.fill('#lookup-name', name);
+    await page.click('#lookup-form button');
+    await page.waitForFunction(n => document.querySelector('.pc-name')?.innerText.trim() === n, shown, { timeout: 15000 });
+  };
+  await lookUp('vwangwang', 'Vwangwang');
+  await lookUp('old badger', 'Old Badger');
+  await lookUp('lowbie', 'Lowbie');
+  const before = await recent();
+  assert.deepEqual(before.slice(0, 3), ['Lowbie', 'Old Badger', 'Vwangwang'], 'latest first');
+  assert.ok(!before.includes('Demo Main'), 'a saved player is under Saved, not Recent');
+  // each has a ✕ beside it: Old Badger goes, the rest stay as they were
+  await page.click('#lookup-chips [data-unrecent="Old Badger"]');
+  assert.deepEqual(await recent(), before.filter(n => n !== 'Old Badger'));
+  assert.equal(await text('.pc-name'), 'Lowbie', 'taking a name off the list looks nobody up');
+  // the one on screen can go too, and reopening the tool on it doesn't bring it back
+  await page.click('#lookup-chips [data-unrecent="Lowbie"]');
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.trim() === 'Lowbie', null, { timeout: 15000 });
+  assert.deepEqual(await recent(), before.filter(n => n !== 'Old Badger' && n !== 'Lowbie'));
+  // neither does Compare fetching its players again
+  await page.click('.tab[data-tab="compare"]');
+  await page.waitForSelector('#compare-chips .chip');
+  assert.ok(!(await page.$$eval('#compare-chips .chip-group [data-chip]', cs => cs.map(c => c.dataset.chip))).includes('Lowbie'));
+  await page.click('.tab[data-tab="lookup"]');
+  // looking someone up again does
+  await lookUp('old badger', 'Old Badger');
+  assert.equal((await recent())[0], 'Old Badger');
+  await page.screenshot({ path: `${SHOTS}/1b-recent-names.png` });
+  // Clear takes the whole list; saved players stay
+  assert.equal((await text('#lookup-chips .chips-clear')).trim(), 'Clear');
+  await page.click('#lookup-chips .chips-clear');
+  assert.deepEqual(await recent(), []);
+  assert.doesNotMatch(await text('#lookup-chips'), /Recent/);
+  assert.match(await text('#lookup-chips'), /Demo Main/);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.recent'))), []);
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.trim() === 'Old Badger', null, { timeout: 15000 });
+  assert.deepEqual(await recent(), [], 'still clear after a restart');
+  // (Demo Main on screen again, for the checks that follow)
+  await page.click('#lookup-chips .chip.saved');
+  await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.trim() === 'Demo Main', null, { timeout: 15000 });
+});
+
 // ── Planner: Goals, Bank, Prices ────────────────────────────────────────
 const goalText = () => page.locator('.goal').first().innerText();
 
@@ -420,6 +473,22 @@ await check("goals: Ostap's example, 700 potions from the bank, 4,251 more and 3
   assert.equal((await page.locator('tr[data-method="hb_3dose1attack"] td.even').innerText()).trim(), '–', 'nothing for it in the bank: nothing to round up');
 });
 await page.screenshot({ path: `${SHOTS}/10-goal-plan.png`, fullPage: true });
+
+await check('item icons come from the sheet this release names, never a plain items.png a browser may still hold', async () => {
+  // Where an icon sits is in gamedata.js, so the sheet has to be the one built with it: its address
+  // carries a stamp of the picture. (After v2.6.0 a browser showed the new positions on the old sheet.)
+  assert.match(ICON_SHEET, /^items\.png\?v=[0-9a-f]{10}$/);
+  const icon = page.locator('.goal .plan .item').first();
+  await icon.waitFor();
+  const shown = await icon.evaluate(el => getComputedStyle(el).backgroundImage);
+  assert.equal(shown, `url("${BASE}/${ICON_SHEET}")`);
+  const sheets = requested.filter(u => /\/items\.png/.test(u));
+  assert.ok(sheets.length > 0, 'the sheet was asked for');
+  assert.deepEqual([...new Set(sheets)], [`${BASE}/${ICON_SHEET}`], 'and only by its stamped address');
+  // the picture really is the one the stamp was made from
+  const size = await page.evaluate(async url => { const b = await (await fetch(url)).arrayBuffer(); return b.byteLength; }, ICON_SHEET);
+  assert.ok(size > 10000, `items.png is ${size} bytes`);
+});
 
 await check('goals: picking another potion and leaving the bank out change the plan', async () => {
   await page.click('tr[data-method="hb_3doserangerspotion"] td:nth-child(2)');
@@ -856,6 +925,22 @@ async function setBank(skill, amounts) {
     await page.press(`[data-bank="${item}"]`, 'Tab');
   }
 }
+// Plans for another account (its XP comes from the hiscores; its goals and bank are its own).
+async function planAs(name, shown) {
+  await page.click('.tab[data-tab="goals"]');
+  await page.fill('#plan-account input[name=account]', name);
+  await page.click('#plan-account button[type=submit]');
+  await page.waitForFunction(n => document.querySelector('#plan-account input[name=account]')?.value === n
+    && document.querySelector('#plan-account').innerText.includes('XP from the hiscores'), shown, { timeout: 15000 });
+}
+const flat = t => t.replace(/\s+/g, ' ').trim();
+// Takes a goal off the list (its ✕ asks twice), if it's there.
+async function removeGoal(card) {
+  await page.click('.tab[data-tab="goals"]');
+  if (!(await card.count())) return;
+  await card.locator('[data-act="remove-goal"]').click();
+  await card.locator('[data-act="remove-goal"]').click();
+}
 
 await check('woodcutting: no bank, logs to chop and what they are worth', async () => {
   await addGoal('woodcutting', 95);           // (a Woodcutting 94 goal is there from the move test)
@@ -1160,14 +1245,6 @@ await check('crafting: orbs are charged on the way to battlestaves, runes are co
 });
 
 await check('crafting: a spell above your Magic level says so in the Magic XP tip', async () => {
-  const flat = t => t.replace(/\s+/g, ' ').trim();
-  const planAs = async (name, shown) => {
-    await page.click('.tab[data-tab="goals"]');
-    await page.fill('#plan-account input[name=account]', name);
-    await page.click('#plan-account button[type=submit]');
-    await page.waitForFunction(n => document.querySelector('#plan-account input[name=account]')?.value === n
-      && document.querySelector('#plan-account').innerText.includes('XP from the hiscores'), shown, { timeout: 15000 });
-  };
   // Old Badger: Crafting 56 (water battlestaves from 54), Magic 50 (Charge Water Orb takes Magic 56)
   await planAs('old badger', 'Old Badger');
   const card = page.locator('.goal', { hasText: 'Crafting' });
@@ -1193,7 +1270,508 @@ await check('crafting: a spell above your Magic level says so in the Magic XP ti
   }
 });
 
-await check('mining: no bank, rocks to mine and what they are worth; limestone, and a gem rock by its chances', async () => {
+// ── v2.7, planned for Old Badger: Herblore 52, Fishing 54, Cooking 51 (each with 100 XP into its level) ──
+// A bank plan's lines as they read: "100 × Super attack +10,000 XP" (their worth in gp left out).
+const planLines = sec => sec.locator('.steps > .step').evaluateAll(els => els.map(e => e.querySelector('.step-main > div').innerText.replace(/\s+/g, ' ').trim().replace(/ ·.*$/, '')));
+// Drags one of a bank plan's lines onto another's place.
+async function dragLine(sec, from, to) {
+  // (scrolled to by hand: the plan is redrawn as prices arrive, and a redraw mid-wait would lose the element)
+  await sec.locator('.steps').first().evaluate(el => el.scrollIntoView({ block: 'center' }));
+  const a = await sec.locator(`.steps.movable > .step[data-step="${from}"]`).first().boundingBox();
+  const b = await sec.locator(`.steps.movable > .step[data-step="${to}"]`).first().boundingBox();
+  await page.mouse.move(a.x + 40, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(a.x + 60, a.y + a.height / 2, { steps: 4 });
+  await page.mouse.move(b.x + 60, b.y + (b.y < a.y ? 4 : b.height - 4), { steps: 14 });
+  await page.mouse.up();
+}
+// A goal's card, by the skill named in its heading (a Herblore plan has "Fishing potion" in it too).
+const goalCard = name => page.locator('.goal').filter({ has: page.locator('.goal-name', { hasText: new RegExp(`^${name}$`) }) });
+const noGoalFor = name => page.waitForFunction(n => ![...document.querySelectorAll('.goal .goal-name')].some(el => el.innerText.trim() === n), name);
+const goalOf = (account, skill) => page.evaluate(([a, k]) => JSON.parse(localStorage.getItem(`lchs.goals.${a}`) || '[]').find(g => g.skill === k), [account, skill]);
+const HERBS = { irit_leaf: '100', eye_of_newt: '100', unicorn_horn_dust: '100', ranarr_weed: '60', snape_grass: '100', avantoe: '80' };
+
+await check("goals: a potion waits for the more useful one its herb makes (super attack before superantipoison, prayer before fishing potion), and a bank plan's lines drag into an order of your own", async () => {
+  await planAs('old badger', 'Old Badger');
+  // 100 irits for super attacks (eye of newt) or superantipoison (unicorn horn dust); 100 snape grass for
+  // prayer potions (60 ranarrs) or fishing potions (80 avantoe)
+  await setBank('herblore', HERBS);
+  await addGoal('herblore', 60);
+  const card = goalCard('Herblore');
+  const sec = card.locator('.plan-sec').first();
+  await sec.locator('.step').first().waitFor();
+  assert.equal(flat(await card.locator('.goal-title').innerText()), 'Level 52 → 60');
+  // As it is: the irits go to super attacks and the snape grass to prayer potions first; fishing potions get
+  // the 40 snape grass that leaves. (Up to v2.6.0 it was most XP first: fishing potions and superantipoison.)
+  const USUAL = ['100 × Super attack +10,000 XP', '60 × Prayer potion +5,250 XP', '40 × Fishing potion +4,500 XP'];
+  assert.deepEqual(await planLines(sec), USUAL);
+  assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +19,750 XP → level 53');
+  const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+  assert.deepEqual([(await cells('hb_3dose2antipoison'))[6], (await cells('hb_3dosefisherspotion'))[6]], ['100', '80'], 'From bank: what each would make on its own');
+  // every line has a grip to drag it by, and the note under them says so, and what else the bank could make
+  assert.equal(await sec.locator('.steps.movable > .step > .grip').count(), 3);
+  assert.equal(flat(await sec.locator('.order-note').innerText()), 'Drag a line up or down to change what your bank is used for first. · 1 more your bank could make instead ▸');
+  assert.equal((await goalOf('old_badger', 'herblore')).order, undefined);
+
+  // Fishing potions dragged to the top: they get the snape grass first (80, as far as the avantoe goes), prayer potions the rest
+  await dragLine(sec, 'hb_3dosefisherspotion', 'hb_3dose2attack');
+  await sec.locator('.step', { hasText: '80 × Fishing potion' }).waitFor();
+  const MINE = ['80 × Fishing potion +9,000 XP', '100 × Super attack +10,000 XP', '20 × Prayer potion +1,750 XP'];
+  assert.deepEqual(await planLines(sec), MINE);
+  assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +20,750 XP → level 53');
+  assert.deepEqual((await goalOf('old_badger', 'herblore')).order, ['hb_3dosefisherspotion', 'hb_3dose2attack', 'hb_3doseprayerrestore']);
+  assert.equal(flat(await sec.locator('.order-note').innerText()),
+    'In your own order: your bank goes to the top line first, then down the list. Back to the usual order · 1 more your bank could make instead ▸');
+  assert.match(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).locator('h4').innerText()), /^Then, to reach your goal: 129,232 XP/, '149,982 to go, less 20,750');
+  // the order is the goal's: still there after a restart
+  await page.reload();
+  await sec.locator('.step').first().waitFor({ timeout: 20000 });
+  assert.deepEqual(await planLines(sec), MINE);
+
+  // What else the bank could make: superantipoison, which the super attacks leave no irits for. A click puts it first.
+  await sec.locator('[data-act="order-more"]').click();
+  const chips = sec.locator('.order-more [data-first]');
+  assert.deepEqual((await chips.allInnerTexts()).map(flat), ['Superantipoison 100']);
+  assert.equal(await chips.first().getAttribute('title'), 'Your bank could make 100 × Superantipoison on its own. Click to use your bank for it first.');
+  await page.screenshot({ path: `${SHOTS}/10l-bank-order.png`, fullPage: true });
+  await chips.first().click();
+  await sec.locator('.step', { hasText: '100 × Superantipoison' }).waitFor();
+  assert.deepEqual(await planLines(sec), ['100 × Superantipoison +10,630 XP', '80 × Fishing potion +9,000 XP', '20 × Prayer potion +1,750 XP']);
+  assert.deepEqual((await goalOf('old_badger', 'herblore')).order, ['hb_3dose2antipoison', 'hb_3dosefisherspotion', 'hb_3dose2attack', 'hb_3doseprayerrestore']);
+  assert.deepEqual((await sec.locator('.order-more [data-first]').allInnerTexts()).map(flat), ['Super attack 100'], 'the super attacks are what it could make instead now');
+  // a line dragged down: prayer potions above the fishing potions again
+  await dragLine(sec, 'hb_3dosefisherspotion', 'hb_3doseprayerrestore');
+  await sec.locator('.step', { hasText: '60 × Prayer potion' }).waitFor();
+  assert.deepEqual(await planLines(sec), ['100 × Superantipoison +10,630 XP', '60 × Prayer potion +5,250 XP', '40 × Fishing potion +4,500 XP']);
+  // Round up my supplies keeps to the order: the top line is rounded up like the rest
+  await card.locator('input[data-gopt="roundUp"]').check();
+  await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
+  assert.equal((await planLines(sec))[0], '100 × Superantipoison +10,630 XP');
+  await card.locator('input[data-gopt="roundUp"]').uncheck();
+  await sec.locator('.step', { hasText: '60 × Prayer potion' }).waitFor();
+
+  // Back to the usual order
+  await sec.locator('[data-act="order-reset"]').click();
+  await sec.locator('.step', { hasText: '100 × Super attack' }).waitFor();
+  assert.deepEqual(await planLines(sec), USUAL);
+  assert.equal((await goalOf('old_badger', 'herblore')).order, undefined);
+  assert.equal(await sec.locator('[data-act="order-reset"]').count(), 0);
+  // The potion you pick to train with still goes first, as it always did: fishing potions, picked, take the snape grass
+  await card.locator('select[data-gopt="fill"]').selectOption('hb_3dosefisherspotion');
+  await sec.locator('.step', { hasText: '80 × Fishing potion' }).waitFor();
+  assert.deepEqual(await planLines(sec), MINE);
+  await card.locator('select[data-gopt="fill"]').selectOption('hb_3doseprayerrestore');
+  await sec.locator('.step', { hasText: '60 × Prayer potion' }).waitFor();
+  // (then the most XP each: the fishing potions, which no longer wait once the ranarrs are used up)
+  assert.deepEqual(await planLines(sec), ['60 × Prayer potion +5,250 XP', '40 × Fishing potion +4,500 XP', '100 × Super attack +10,000 XP']);
+  assert.match(flat(await card.locator('.tip', { hasText: 'Tip: collect' }).innerText()), /^Tip: collect 40 Ranarr weed( \([\d.,]+[KM]?\))? and your bank makes 100 Prayer potion instead of 60\.$/);
+  // ...a tip that goes while something above it in your order takes the snape grass first: 40 more ranarrs wouldn't make 100 then
+  await dragLine(sec, 'hb_3dosefisherspotion', 'hb_3doseprayerrestore');
+  await sec.locator('.step', { hasText: '80 × Fishing potion' }).waitFor();
+  assert.deepEqual(await planLines(sec), ['80 × Fishing potion +9,000 XP', '20 × Prayer potion +1,750 XP', '100 × Super attack +10,000 XP']);
+  assert.equal(await card.locator('.tip', { hasText: 'Tip: collect' }).count(), 0);
+  await sec.locator('[data-act="order-reset"]').click();
+  await sec.locator('.step', { hasText: '60 × Prayer potion' }).waitFor();
+  assert.equal(await card.locator('.tip', { hasText: 'Tip: collect' }).count(), 1);
+});
+
+await check('goals: Edit moves the goalpost: a new target, or another kind of goal, with the plan and everything chosen for it kept', async () => {
+  await planAs('old badger', 'Old Badger');
+  const card = goalCard('Herblore');
+  const sec = card.locator('.plan-sec').first();
+  const title = async () => flat(await card.locator('.goal-title').innerText());
+  const sub = async () => flat(await card.locator('.goal-sub').innerText());
+  const edit = card.locator('[data-act="edit-goal"]');
+  const form = card.locator('[data-form="edit-goal"]');
+  const value = form.locator('[name=value]');
+  try {
+  await sec.locator('.step').first().waitFor();
+  // What an edit must leave alone: the potion picked to train with (prayer potions, from the check before), an order
+  // of its own (fishing potions dragged above them), a row unticked, and where the progress bar started (5,000 XP ago)
+  await card.locator('select[data-gopt="fill"]').selectOption('hb_3doseprayerrestore');
+  await sec.locator('.step', { hasText: '60 × Prayer potion' }).waitFor();
+  await dragLine(sec, 'hb_3dosefisherspotion', 'hb_3doseprayerrestore');
+  await sec.locator('.step', { hasText: '80 × Fishing potion' }).waitFor();
+  await card.locator('input[data-use="hb_3dose1attack"]').uncheck();
+  await page.evaluate(() => { const k = 'lchs.goals.old_badger', g = JSON.parse(localStorage.getItem(k)); g[0].startXp10 -= 50000; localStorage.setItem(k, JSON.stringify(g)); });
+  await page.click('.tab[data-tab="bank"]');
+  await page.click('.tab[data-tab="goals"]');
+  await sec.locator('.step').first().waitFor();
+  const before = await goalOf('old_badger', 'herblore');
+  assert.deepEqual([before.type, before.value, before.fillId, before.order.length, before.excluded], ['level', 60, 'hb_3doseprayerrestore', 3, ['hb_3dose1attack']]);
+  const lines = await planLines(sec);
+  assert.equal(await title(), 'Level 52 → 60');
+  assert.equal(await card.locator('.goal-bar').getAttribute('title'), '3.2% of the way since you set this goal', '5,000 of 154,982');
+
+  // Edit sits beside the goal's title and opens a line under it, with the target ready to type over
+  assert.equal(flat(await edit.innerText()), 'Edit');
+  assert.equal(await edit.getAttribute('title'), "Change this goal's target: move the goalpost");
+  assert.equal(await form.count(), 0);
+  await edit.click();
+  await form.waitFor();
+  assert.equal(flat(await form.innerText()), 'Change this goal to Level XP Rank Top % Save Cancel Its plan, ticks and progress stay as they are.');
+  assert.equal(await value.inputValue(), '60');
+  assert.equal(flat(await form.locator('[data-etype].on').innerText()), 'Level');
+  assert.deepEqual(await page.evaluate(() => [document.activeElement?.name, document.activeElement?.selectionStart, document.activeElement?.selectionEnd]), ['value', 0, 2], 'selected, ready to type over');
+  // what you've typed stays through a redraw (prices arriving)
+  await value.fill('65');
+  await page.evaluate(() => window.__skills.prices.dispatchEvent(new CustomEvent('update', { detail: {} })));
+  await page.waitForTimeout(600);
+  assert.equal(await value.inputValue(), '65');
+  // somewhere you already are isn't a goal: it says why, and nothing changes
+  await value.fill('50');
+  await value.press('Enter');
+  await form.locator('.c-lose').waitFor();
+  assert.equal(flat(await form.locator('.c-lose').innerText()), 'Old Badger is already level 52 in Herblore.');
+  assert.equal(await value.inputValue(), '50');
+  assert.equal(await title(), 'Level 52 → 60');
+  await value.fill('120');
+  await form.locator('button[type=submit]').click();
+  await form.locator('.c-lose', { hasText: 'Levels go from 2 to 99.' }).waitFor();
+  // the goalpost moved: level 70
+  await value.fill('70');
+  await value.press('Enter');
+  await form.waitFor({ state: 'detached' });
+  assert.equal(await title(), 'Level 52 → 70');
+  assert.match(await sub(), /^123,760 \/ 737,627 XP · 613,867 XP to go · 18 levels \(to 70\)$/);
+  assert.deepEqual(await goalOf('old_badger', 'herblore'), { ...before, value: 70 }, 'only the target changed');
+  assert.deepEqual(await planLines(sec), lines, 'the bank plan is as it was');
+  assert.equal(await card.locator('input[data-use="hb_3dose1attack"]').isChecked(), false);
+  assert.match(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).locator('h4').innerText()), /^Then, to reach your goal: 593,117 XP/, '613,867 to go, less the 20,750 the bank makes');
+  assert.equal(await card.locator('.goal-bar').getAttribute('title'), '0.8% of the way since you set this goal', 'the 5,000 XP gained still count: of 618,867 now');
+
+  // another kind of goal: an amount of XP. The box suggests the next level's
+  await edit.click();
+  await form.locator('[data-etype="xp"]').click();
+  assert.equal(flat(await form.locator('[data-etype].on').innerText()), 'XP');
+  assert.deepEqual([await value.inputValue(), await value.getAttribute('placeholder')], ['136594', 'XP']);
+  await value.fill('200k');
+  await value.press('Enter');
+  await form.waitFor({ state: 'detached' });
+  assert.equal(await title(), '123,760 → 200,000 XP');
+  assert.match(await sub(), /^123,760 \/ 200,000 XP · 76,240 XP to go · 4 levels \(to 56\)$/);
+  assert.deepEqual(await goalOf('old_badger', 'herblore'), { ...before, type: 'xp', value: 200000 });
+  // Cancel, and Edit again, both close it with nothing changed
+  await edit.click();
+  await value.fill('5m');
+  await form.locator('[data-act="edit-cancel"]').click();
+  assert.equal(await form.count(), 0);
+  await edit.click();
+  assert.equal(await value.inputValue(), '200000', 'what was typed and cancelled is gone');
+  await edit.click();
+  assert.equal(await form.count(), 0);
+  assert.equal(await title(), '123,760 → 200,000 XP');
+  // a rank: who holds it is looked up, as for a new goal
+  await edit.click();
+  await form.locator('[data-etype="rank"]').click();
+  await value.fill('500');
+  await page.screenshot({ path: `${SHOTS}/10m-goal-edit.png` });
+  await value.press('Enter');
+  await page.waitForFunction(() => /beat .+ \(rank 500, checked/.test([...document.querySelectorAll('.goal')].find(g => g.querySelector('.goal-name')?.innerText.trim() === 'Herblore')?.innerText || ''), null, { timeout: 15000 });
+  assert.match(await title(), /^Rank [\d,]+ → 500$/);
+  assert.deepEqual(await planLines(sec), lines);
+  // and back to the level it started as, for the checks that follow
+  await edit.click();
+  await form.locator('[data-etype="level"]').click();
+  await value.fill('60');
+  await value.press('Enter');
+  await form.waitFor({ state: 'detached' });
+  assert.equal(await title(), 'Level 52 → 60');
+  const after = await goalOf('old_badger', 'herblore');
+  assert.deepEqual({ ...after, target: undefined }, { ...before, target: undefined });
+  } finally {
+    // done with Herblore: the goal and its herbs go, whatever happened
+    await removeGoal(card);
+    await noGoalFor('Herblore');
+    await setBank('herblore', Object.fromEntries(Object.keys(HERBS).map(k => [k, ''])));
+  }
+});
+
+await check("fishing: no bank, the gear to bring and the bait or feathers to buy; a big net's fish are yours to pick", async () => {
+  await planAs('old badger', 'Old Badger');
+  await addGoal('fishing', 60);
+  const card = goalCard('Fishing');
+  try {
+    await card.locator('.plan').waitFor();
+    const t = flat(await card.innerText());
+    assert.match(t, /Level 54 → 60/);
+    assert.match(t, /Fishing only needs the gear for the spot, and a bait or a feather for every catch with a rod\. Those are listed to buy \(what's in your bank isn't counted\), so this plan doesn't use your bank\./);
+    assert.doesNotMatch(t, /From your bank|Use my bank|Round up/);
+    assert.match(t, /To reach your goal: 122,770 XP/);
+    // Swordfish (level 50, 100 XP), not bass (level 46, 100 XP too): a big net brings up whatever it likes, so
+    // its fish aren't what a plan picks by itself
+    const plan = card.locator('.plan-sec', { hasText: 'To reach your goal' });
+    assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'fi_raw_swordfish');
+    assert.equal(flat(await plan.locator('.step').innerText()), '1,228 × Raw swordfish +122,800 XP');
+    assert.equal(flat(await plan.locator('.collect', { hasText: 'Also bring' }).innerText()), 'Also bring: Harpoon');
+    assert.equal(await plan.locator('.collect', { hasText: 'To collect or buy' }).count(), 0, 'a harpoon takes no bait');
+    // every fish of the calculator, in one table (no groups to pick from)
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Fish', 'XP', 'Net/item', 'gp/XP', 'To goal', 'Plan to make']);
+    assert.deepEqual((await card.locator('tr[data-method] td:nth-child(2)').allInnerTexts()).map(flat),
+      ['Raw shrimps', 'Raw karambwanji', 'Raw sardine', 'Raw herring', 'Raw anchovies', 'Raw mackerel', 'Raw trout', 'Raw cod', 'Raw pike', 'Slimey eel', 'Raw salmon', 'Raw tuna',
+        'Raw lobster', 'Raw bass', 'Raw swordfish', 'Raw lava eel', 'Raw karambwan', 'Raw shark']);
+    assert.equal(await card.locator('.group-pick').count(), 0);
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+    const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
+    assert.deepEqual([(await cells('fi_raw_trout')).slice(0, 3), (await cells('fi_raw_trout'))[5]], [['20', 'Raw trout', '50'], '2,456']);
+    assert.deepEqual((await cells('fi_raw_shark')).slice(0, 3), ['76', 'Raw shark', '110']);
+    assert.match(await card.locator('tr[data-method="fi_raw_shark"]').getAttribute('class'), /\bdim\b/, 'above level 54');
+    // what each takes: its gear, and a bait or a feather a catch with a rod
+    assert.match(await tip('fi_raw_shrimp'), /^Raw shrimps: level 1, 10 XP each\nTools: Small fishing net/);
+    assert.match(await tip('fi_raw_trout'), /^Raw trout: level 20, 50 XP each\nNeeds \(from scratch\): 1 Feather\nTools: Fly fishing rod/);
+    assert.match(await tip('fi_raw_pike'), /^Raw pike: level 25, 60 XP each\nNeeds \(from scratch\): 1 Fishing bait\nTools: Fishing rod/);
+    assert.match(await tip('fi_raw_lobster'), /^Raw lobster: level 40, 90 XP each\nTools: Lobster pot/);
+    assert.match(await tip('fi_raw_lava_eel'), /^Raw lava eel: level 53, 60 XP each\nNeeds \(from scratch\): 1 Fishing bait\nTools: Oily fishing rod/);
+    assert.match(await tip('fi_raw_bass'),
+      /^Raw bass: level 46, 100 XP each\nTools: Big fishing net\nA big net brings up several things at once: mackerel, cod \(from level 23\), bass \(from level 46\), and now and then leather boots, seaweed, leather gloves, oyster or casket\. Only the bass is counted here\./);
+    assert.match(await tip('fi_tbwt_raw_karambwan'),
+      /^Raw karambwan: level 65, 105 XP each\nTools: Karambwan vessel \(empty\)\nTai Bwo Wannai Trio: once Lubufu has shown you how\. Every try takes the raw karambwanji in your vessel, caught or not; those aren't counted\./);
+    // trout, picked: a feather each, and a fly fishing rod
+    await card.locator('tr[data-method="fi_raw_trout"] td:nth-child(2)').click();
+    await plan.locator('.step', { hasText: 'Raw trout' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '2,456 × Raw trout +122,800 XP');
+    assert.match(flat(await plan.locator('.collect', { hasText: 'To collect or buy' }).innerText()), /^To collect or buy: 2,456 Feather( \([\d.,]+[KM]?\))?$/);
+    assert.equal(flat(await plan.locator('.collect', { hasText: 'Also bring' }).innerText()), 'Also bring: Fly fishing rod');
+    // a big net's fish can be picked, and a mix of your own planned: 500 bass first, then trout
+    await card.locator('[data-mix="fi_raw_bass"]').fill('500');
+    await card.locator('[data-mix="fi_raw_bass"]').press('Tab');
+    await card.locator('.plan-sec', { hasText: 'Your mix +50,000 XP' }).waitFor();
+    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Your mix' }).locator('.step').innerText()), /^500 × Raw bass \+50,000 XP/);
+    assert.equal(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).locator('.step').innerText()), '1,456 × Raw trout +72,800 XP');
+    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).innerText()), /To collect or buy: 1,456 Feather/);
+    await page.screenshot({ path: `${SHOTS}/10n-fishing.png`, fullPage: true });
+    await card.locator('[data-act="mix-clear"]').click();
+    // its prices: the fish, and the bait and feathers they take. No bank of its own
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="fishing"]');
+    await page.waitForSelector('[data-price="raw_shark"]');
+    assert.match(flat(await text('#prices-body')), /^Fish .*Raw shrimps.*Raw karambwan.*Raw shark.*Bait .*Fishing bait.*Feather/);
+    await page.click('.tab[data-tab="bank"]');
+    assert.equal(await page.locator('#bank-head [data-bskill="fishing"]').count(), 0);
+    assert.equal(await page.locator('#bank-head [data-bskill="cooking"]').count(), 1);
+  } finally {
+    await removeGoal(card);
+    await noGoalFor('Fishing');
+  }
+});
+
+// The server's own roll for a cook (stat_random): its chances in 256 at a level, from the two numbers a food has.
+const cookRoll = ([low, high], level) => Math.min(256, Math.floor((low * (99 - level)) / 98) + Math.floor((high * (level - 1)) / 98) + 1);
+// What that comes to over a stretch, each level at its own chance (XP in whole XP): the food cooked from `raw`
+// things, and the raw things `n` cooked take.
+function cookedFrom(chance, xpEach, raw, xp) {
+  let done = 0;
+  while (raw > 0) {
+    const level = levelForXp(Math.floor(xp)), p = cookRoll(chance, level) / 256;
+    const n = level >= 99 ? raw : Math.min(raw, Math.max(1, Math.ceil((xpForLevel(level + 1) - xp) / (p * xpEach))));
+    done += n * p; xp += n * p * xpEach; raw -= n;
+  }
+  return done;
+}
+function rawFor(chance, xpEach, n, xp) {
+  let raw = 0;
+  while (n > 0) {
+    const level = levelForXp(Math.floor(xp)), p = cookRoll(chance, level) / 256;
+    const k = level >= 99 ? n : Math.min(n, Math.max(1, Math.ceil((xpForLevel(level + 1) - xp) / xpEach)));
+    raw += k / p; xp += k * xpEach; n -= k;
+  }
+  return raw;
+}
+const LOBSTER = [38, 332], LOBSTER_GAUNTLETS = [55, 368];        // (cooking_generic.dbrow: successchance, successchance_gauntlets)
+
+await check("cooking: burnt food is counted by the server's chances, a level at a time; cooking gauntlets, a fire, and leaving it out", async () => {
+  await planAs('old badger', 'Old Badger');
+  const card = goalCard('Cooking');
+  const sec = card.locator('.plan-sec').first();
+  const then = card.locator('.plan-sec', { hasText: 'Then, to reach your goal' });
+  const START = 112045;                         // Old Badger's Cooking XP: level 51
+  const near = (shown, worked, what) => assert.ok(Math.abs(shown - worked) < 1.5, `${what}: the page says ${shown}, the server's chances come to ${worked.toFixed(2)}`);
+  try {
+    await setBank('cooking', { raw_lobster: '400' });
+    assert.match(flat(await text('#bank-head')), /Raw fish and meat cook into food; a pie, a pizza, a cake, a stew or a wine is put together first.*Burnt food is counted on a Cooking goal, where you also say what you cook on\./);
+    assert.deepEqual((await page.locator('#bank-body .bank-group h4').allInnerTexts()).map(flat),
+      ['Raw fish', 'Raw meat', 'Pies and bread', 'Pizza and cake', 'Stew, wine and the rest', 'Cooked: fish', 'Cooked: meat', 'Cooked: pies and pizza', 'Cooked: the rest']);
+    await addGoal('cooking', 60);
+    await sec.locator('.step').first().waitFor();
+    assert.equal(flat(await card.locator('.goal-title').innerText()), 'Level 51 → 60');
+    // the choices: what you cook on, cooking gauntlets, and whether burnt food counts
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /^Use my bank Round up my supplies Cook on A range Lumbridge Castle's range A fire Cooking gauntlets Burnt food Count it Leave it out 1 kind of item in your bank/);
+    assert.deepEqual([await card.locator('select[data-opt="heat"]').inputValue(), await card.locator('input[data-opt="gauntlets"]').isChecked(), await card.locator('select[data-opt="burnt"]').inputValue()], ['range', false, 'count']);
+    assert.match(await card.locator('label:has(select[data-opt="heat"])').getAttribute('title'),
+      /^Where you cook decides how often food burns\. A range: the usual\. Lumbridge Castle's range \(once Cook's Assistant is done\) burns less of 19 low-level foods\. A fire burns more cod, swordfish, shark, sea turtle and manta ray, and a little less ugthanki meat and lean snail meat; the rest burn the same\. Pies, pizzas, cakes and bread need a range whatever you pick\.$/);
+    assert.equal(await card.locator('label:has(input[data-opt="gauntlets"])').getAttribute('title'),
+      'On: lobster, swordfish and shark burn less. Lobsters stop burning at level 64 instead of 74; sharks stop burning at level 94 (without, they never stop burning).');
+    assert.equal(await card.locator('label:has(select[data-opt="burnt"])').getAttribute('title'),
+      "Count it: a plan allows for what burns, by the server's own chances at each level: more raw food to collect, and less XP from what's in your bank. Leave it out: every cook works, the way LostHQ's calculator counts.");
+
+    // On a range from level 51, 188 lobsters in 256 cook: 27 in 100 burn. All 400 go on, and about 298 come out
+    // (a few more than 400 × 188/256 = 293: two levels are gained on the way, and each burns less)
+    assert.equal(cookRoll(LOBSTER, 51), 188);
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +35,760 XP → level 53');
+    assert.match(flat(await sec.locator('.step').innerText()), /^298 × Lobster \+35,760 XP .*incl\. 400 Raw lobster cooked, about 102 burnt$/);
+    near(298, cookedFrom(LOBSTER, 120, 400, START), 'lobsters from 400 raw');
+    assert.equal(flat(await sec.locator('.step .c-lose').innerText()), 'about 102 burnt');
+    // the rest of the goal: 1,050 lobsters, as the calculator says, and the 1,312 raw ones that takes
+    assert.equal(flat(await then.locator('h4').innerText()).replace(/ Train with.*$/, ''), 'Then, to reach your goal: 125,937 XP');
+    assert.equal(flat(await then.locator('.step').innerText()), '1,050 × Lobster +126,000 XP incl. 1,312 Raw lobster cooked, about 262 burnt');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 1,312 Raw lobster( \([\d.,]+[KM]?\))?$/);
+    near(1312, rawFor(LOBSTER, 120, 1050, START + 35760), 'raw lobsters for 1,050 more');
+    // the table: Fish to start with; a row says how much burns at your level, and counts it
+    assert.deepEqual((await card.locator('.group-pick .chip').allInnerTexts()).map(flat), ['Fish', 'Meat', 'Pies & pizza', 'Gnome', 'Other', 'All']);
+    assert.equal(flat(await card.locator('.group-pick .chip.on').innerText()), 'Fish');
+    assert.match(flat((await card.locator('.plan-t thead th').allInnerTexts()).join(' ')), /^Use Lvl Food XP Net\/item gp\/XP From bank /);
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => flat(c));
+    const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
+    const badge = id => card.locator(`tr[data-method="${id}"] .burn`);
+    let lob = await cells('ck_lobster');
+    assert.deepEqual([lob[1], lob[2], lob[3], lob[6], lob[10]], ['40', 'Lobster 27% burn', '120', '293', '1,050'], 'From bank is at your level now: 400 × 188/256');
+    assert.match(lob[11], /^1,312\b/, 'Supplies needed: the raw ones');
+    assert.equal(await badge('ck_lobster').getAttribute('title'), 'About 27 in 100 burn at level 51; none from level 74. Plans count them.');
+    assert.match(await tip('ck_lobster'), /^Lobster: level 40, 120 XP each\nAbout 27 in 100 burn at level 51; none from level 74\. What it needs allows for that\.\nNeeds \(from scratch\): 1\.362 Raw lobster/);
+    assert.equal(await badge('ck_trout').count(), 0, 'trout stopped burning at 49');
+    assert.match(await tip('ck_trout'), /^Trout: level 15, 70 XP each\nNone burn at level 51 \(they stop at 49\)\.\nNeeds \(from scratch\): 1 Raw trout/);
+    assert.equal(flat(await badge('ck_shark').innerText()), '27% burn');
+    assert.equal(await badge('ck_shark').getAttribute('title'), 'About 27 in 100 burn at level 80; some always will. Plans count them.');
+    assert.deepEqual([(await cells('ck_mantaray'))[3], (await cells('ck_lava_eel'))[2]], ['216.3', 'Lava eel'], "the server's manta ray XP; a lava eel never burns");
+    assert.match(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()),
+      /Burnt food is counted: what a row takes allows for it at the level you are now\. A plan counts it a level at a time, so it burns a little less than its row says\.$/);
+    await page.screenshot({ path: `${SHOTS}/10o-cooking.png`, fullPage: true });
+
+    // Cooking gauntlets: 214 in 256 at level 51. About 340 of the 400 come out, and the rest of the goal takes fewer raw
+    await card.locator('input[data-opt="gauntlets"]').check();
+    await sec.locator('h4', { hasText: '+40,800 XP' }).waitFor();
+    assert.equal(cookRoll(LOBSTER_GAUNTLETS, 51), 214);
+    assert.match(flat(await sec.locator('.step').innerText()), /^340 × Lobster \+40,800 XP .*incl\. 400 Raw lobster cooked, about 60 burnt$/);
+    near(340, cookedFrom(LOBSTER_GAUNTLETS, 120, 400, START), 'lobsters from 400 raw, with gauntlets');
+    assert.equal(flat(await then.locator('.step').innerText()), '1,008 × Lobster +120,960 XP incl. 1,105 Raw lobster cooked, about 97 burnt');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 1,105 Raw lobster/);
+    near(1105, rawFor(LOBSTER_GAUNTLETS, 120, 1008, START + 40800), 'raw lobsters for 1,008 more, with gauntlets');
+    assert.equal(flat(await badge('ck_lobster').innerText()), '16% burn');
+    assert.equal(await badge('ck_lobster').getAttribute('title'), 'About 16 in 100 burn at level 51; none from level 64. Plans count them.');
+    assert.equal(await badge('ck_shark').getAttribute('title'), 'About 14 in 100 burn at level 80; none from level 94. Plans count them.');
+    assert.equal(flat(await badge('ck_swordfish').innerText()), '32% burn', 'no better than without, on a range');
+    assert.deepEqual((await goalOf('old_badger', 'cooking')).opts, { gauntlets: true });
+    await card.locator('input[data-opt="gauntlets"]').uncheck();
+    await sec.locator('h4', { hasText: '+35,760 XP' }).waitFor();
+
+    // A fire: lobsters the same; swordfish and sharks burn more, and cod doesn't stop until 51
+    await card.locator('select[data-opt="heat"]').selectOption('fire');
+    await page.waitForFunction(() => /39% burn/.test(document.querySelector('.goal tr[data-method="ck_swordfish"]')?.innerText || ''));
+    assert.match(flat(await sec.locator('.step').innerText()), /^298 × Lobster \+35,760 XP .*incl\. 400 Raw lobster cooked, about 102 burnt$/);
+    assert.deepEqual([flat(await badge('ck_lobster').innerText()), flat(await badge('ck_shark').innerText())], ['27% burn', '36% burn']);
+    assert.match(await tip('ck_cod'), /None burn at level 51 \(they stop at 51\)\./);
+    assert.match(await tip('ck_swordfish'), /About 39 in 100 burn at level 51; none from level 86\./);
+    // Lumbridge Castle's range: kinder to low-level food (trout stop at 45 there), the same for lobsters
+    await card.locator('select[data-opt="heat"]').selectOption('lumbridge');
+    await page.waitForFunction(() => /they stop at 45/.test(document.querySelector('.goal tr[data-method="ck_trout"]')?.title || ''));
+    assert.equal(flat(await badge('ck_lobster').innerText()), '27% burn');
+    assert.deepEqual((await goalOf('old_badger', 'cooking')).opts, { heat: 'lumbridge' });
+    await card.locator('select[data-opt="heat"]').selectOption('range');
+    await page.waitForFunction(() => /they stop at 49/.test(document.querySelector('.goal tr[data-method="ck_trout"]')?.title || ''));
+
+    // Leave it out: every cook works, as on LostHQ's calculator. No burnt food anywhere
+    await card.locator('select[data-opt="burnt"]').selectOption('ignore');
+    await sec.locator('h4', { hasText: '+48,000 XP' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +48,000 XP → level 54');
+    assert.match(flat(await sec.locator('.step').innerText()), /^400 × Lobster \+48,000 XP/);
+    assert.equal(flat(await then.locator('.step').innerText()), '948 × Lobster +113,760 XP');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 948 Raw lobster/);
+    assert.equal(await card.locator('.burn').count(), 0, 'no row says it burns');
+    assert.doesNotMatch((await card.locator('.plan-sec .step').allInnerTexts()).join(' '), /burn/i);
+    assert.doesNotMatch(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()), /burn/i);
+    lob = await cells('ck_lobster');
+    assert.deepEqual([lob[2], lob[6], lob[10]], ['Lobster', '400', '948']);
+    assert.match(await tip('ck_lobster'), /^Lobster: level 40, 120 XP each\nNeeds \(from scratch\): 1 Raw lobster/);
+    assert.deepEqual((await goalOf('old_badger', 'cooking')).opts, { burnt: 'ignore' }, 'kept with the goal');
+    await card.locator('select[data-opt="burnt"]').selectOption('count');
+    await sec.locator('h4', { hasText: '+35,760 XP' }).waitFor();
+    assert.equal((await goalOf('old_badger', 'cooking')).opts, undefined, 'counting is how it starts, so nothing is kept');
+  } finally {
+    await setBank('cooking', { raw_lobster: '' });
+    await page.click('.tab[data-tab="goals"]');
+  }
+});
+
+await check('cooking: a pie is put together on the way and every one goes in the oven; what cannot burn is cooked first; pizzas, cake and the choice of group', async () => {
+  await planAs('old badger', 'Old Badger');
+  const card = goalCard('Cooking');
+  const sec = card.locator('.plan-sec').first();
+  const then = card.locator('.plan-sec', { hasText: 'Then, to reach your goal' });
+  const BANK = { raw_lobster: '400', raw_tuna: '300', raw_trout: '200', pot_flour: '50', bucket_water: '50', cooking_apple: '30', piedish: '30' };
+  try {
+    await setBank('cooking', BANK);
+    await page.click('.tab[data-tab="goals"]');
+    // (on a range, no gauntlets, burnt food counted: as a Cooking goal starts, whatever the check before left)
+    await card.locator('.plan-opts').waitFor();
+    await card.locator('select[data-opt="heat"]').selectOption('range');
+    await card.locator('input[data-opt="gauntlets"]').uncheck();
+    await card.locator('select[data-opt="burnt"]').selectOption('count');
+    await sec.locator('.step', { hasText: 'Apple pie' }).waitFor();
+    // Trout first: they can't burn at 51, and their 14,000 XP is a level gained before anything that can goes on.
+    // Then by XP each. A pie's dough, shell and filling are made on the way; all 30 go in the oven (about 25 come
+    // out), and the 20 pots of flour that leaves are bread
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +81,630 XP → level 56');
+    const lines = (await sec.locator('.steps > .step').allInnerTexts()).map(x => flat(x).replace(/ · [^ ]+ gp( \([^)]*\))?/, ''));
+    assert.deepEqual(lines, [
+      '200 × Trout +14,000 XP',
+      '25 × Apple pie +3,250 XP incl. 30 × Pastry dough, 30 × Pie shell, 30 × Uncooked apple pie, 30 Uncooked apple pie cooked, about 5 burnt',
+      '304 × Lobster +36,480 XP incl. 400 Raw lobster cooked, about 96 burnt',
+      '271 × Tuna +27,100 XP incl. 300 Raw tuna cooked, about 29 burnt',
+      '20 × Bread +800 XP incl. 20 × Bread dough',
+    ]);
+    assert.equal(flat(await sec.locator('.order-note').innerText()), 'Drag a line up or down to change what your bank is used for first.');
+    // the plan carries on with a fish, though the bank made pies and bread too
+    assert.equal(flat(await card.locator('select[data-gopt="fill"] option:checked').innerText()), 'Lobster (lvl 40, 120 XP)');
+    assert.equal(flat(await then.locator('.step').innerText()), '668 × Lobster +80,160 XP incl. 821 Raw lobster cooked, about 153 burnt');
+    // lobsters dragged to the top: cooked at 51, more of them burn (298 where they were 304)
+    await dragLine(sec, 'ck_lobster', 'ck_trout');
+    await sec.locator('.step', { hasText: '298 × Lobster' }).waitFor();
+    assert.deepEqual((await planLines(sec)).slice(0, 2), ['298 × Lobster +35,760 XP', '200 × Trout +14,000 XP']);
+    await sec.locator('[data-act="order-reset"]').click();
+    await sec.locator('.step', { hasText: '304 × Lobster' }).waitFor();
+
+    // Pies & pizza: what each is made of, from scratch, with what burns on the way counted
+    await card.locator('[data-tgroup="Pies & pizza"]').click();
+    await card.locator('tr[data-method="ck_apple_pie"]').waitFor();
+    const names = (await card.locator('tr[data-method] td:nth-child(3)').allInnerTexts()).map(x => flat(x).replace(/ (under )?\d+% burn$/, ''));
+    assert.deepEqual(names, ['Redberry pie', 'Meat pie', 'Apple pie', 'Plain pizza', 'Meat pizza', 'Anchovy pizza', 'Pineapple pizza']);
+    const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
+    assert.match(await tip('ck_apple_pie'), /^Apple pie: level 30, 130 XP each\nAbout \d+ in 100 burn at level 51; none from level \d+\. What it needs allows for that\.\nNeeds \(from scratch\): [\d.]+ Pot of flour, [\d.]+ Bucket of water, [\d.]+ Pie dish, [\d.]+ Cooking apple/);
+    assert.match(await tip('ck_meat_pizza'),
+      /^Meat pizza: level 45, 26 XP each\nWith what's made on the way: 169 XP each \(143 of it from baking it\)\nNeeds \(from scratch\): 1\.261 Pot of flour, 1\.261 Bucket of water, 1\.261 Tomato, 1\.261 Cheese, 1 Cooked meat\nThe topping goes on a baked plain pizza: 26 XP for that, on top of the 143 for baking it\. Cooked chicken can go on instead\./);
+    assert.equal((await card.locator('tr[data-method="ck_meat_pizza"]').innerText()).split('\t')[3].trim(), '169', 'its XP with the pizza baked on the way');
+    assert.match(await tip('ck_pineapple_pizza'), /^Pineapple pizza: level 65, 45 XP each\nWith what's made on the way: 188 XP each \(143 of it from baking it\)\n/);
+    assert.equal((await card.locator('tr[data-method="ck_pineapple_pizza"]').innerText()).split('\t')[3].trim(), '188', "the server's number (LostHQ's calculator has 195)");
+    // the rest of the groups, and All
+    await card.locator('[data-tgroup="Other"]').click();
+    await card.locator('tr[data-method="ck_jug_wine"]').waitFor();
+    assert.match(await tip('ck_jug_wine'), /^Jug of wine: level 35, 110 XP each/);
+    await card.locator('[data-tgroup="Meat"]').click();
+    await card.locator('tr[data-method="ck_cooked_chompy"]').waitFor();
+    assert.match(await tip('ck_cooked_chompy'), /^Cooked chompy: level 30, 14 XP each/);
+    await card.locator('[data-tgroup="all"]').click();
+    await card.locator('tr[data-method="ck_shark"]').waitFor();
+    assert.equal(await card.locator('tr[data-method]').count(), 54, 'Fish 21, Meat 12, Pies & pizza 7, Gnome 4, Other 10');
+    assert.deepEqual((await card.locator('tr.grp').allInnerTexts()).map(flat), ['Fish', 'Meat', 'Pies & pizza', 'Gnome', 'Other']);
+    await card.locator('[data-tgroup="Fish"]').click();
+    // its prices: by the bank's groups
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="cooking"]');
+    await page.waitForSelector('[data-price="raw_shark"]');
+    assert.match(flat(await text('#prices-body')), /Raw fish .*Raw lobster.*Raw meat .*Raw beef.*Pies and bread .*Pot of flour.*Cooked: fish .*Lobster.*Cooked: pies and pizza .*Apple pie.*Cooked: the rest .*Jug of wine/);
+  } finally {
+    await setBank('cooking', Object.fromEntries(Object.keys(BANK).map(k => [k, ''])));
+    await removeGoal(card);
+    await noGoalFor('Cooking');
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="herblore"]');
+  }
+});
+
+// (back to Demo Main for the checks that follow, whatever happened above)
+try { await planAs('demo main', 'Demo Main'); } catch (e) { results.push(['FAIL', 'back to Demo Main after the Old Badger checks', e.message.split('\n')[0]]); }
+
+await check('mining: no bank, rocks to mine and what they are worth; limestone, a gem rock by its chances, and ore by the bar (steel: 2 coal to 1 iron)', async () => {
   const flat = t => t.replace(/\s+/g, ' ').trim();
   await addGoal('mining', 90);
   const card = page.locator('.goal', { hasText: 'Mining' });
@@ -1209,7 +1787,10 @@ await check('mining: no bank, rocks to mine and what they are worth; limestone, 
     // every rock of the calculator, and limestone
     const names = await card.locator('tr[data-method] td:nth-child(2)').allInnerTexts();
     assert.deepEqual(names.map(x => x.trim()), ['Clay', 'Rune essence', 'Copper ore', 'Tin ore', 'Blurite ore', 'Limestone', 'Iron ore', 'Silver ore', 'Coal', 'Gold ore', 'Gem rock', 'Mithril ore', 'Adamantite ore', 'Runite ore']);
-    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Rock', 'XP', 'Net/item', 'gp/XP', 'To goal', 'Plan to make']);
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Rock or bar', 'XP', 'Net/item', 'gp/XP', 'To goal', 'Plan to make']);
+    // rocks are what the table shows, and what a plan picks, until you ask for bars
+    assert.deepEqual((await card.locator('.group-pick .chip').allInnerTexts()).map(flat), ['Rocks', 'Bars', 'All']);
+    assert.equal(flat(await card.locator('.group-pick .chip.on').innerText()), 'Rocks');
     const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
     assert.deepEqual((await cells('mi_limestone')).slice(0, 3), ['10', 'Limestone', '26.5']);
     assert.deepEqual([(await cells('mi_limestone'))[5], (await cells('mi_coal'))[5]], ['54,177', '28,714'], 'To goal: 1,435,685 XP at 26.5 and at 50 each');
@@ -1220,6 +1801,35 @@ await check('mining: no bank, rocks to mine and what they are worth; limestone, 
     await card.locator('select[data-gopt="fill"]').selectOption('mi_gemrock');
     await card.locator('.step', { hasText: 'Gem rock' }).waitFor();
     assert.match(flat(await card.innerText()), /22,088 × Gem rock \+1,435,720 XP In Shilo Village\. One gem a rock, by chance/);
+    // Bars: the ore a bar takes, mined in the furnace's own proportions. Steel is 1 iron ore and 2 coal
+    await card.locator('[data-tgroup="Bars"]').click();
+    await card.locator('tr[data-method="mi_bar_steel_bar"]').waitFor();
+    assert.deepEqual((await card.locator('tr[data-method] td:nth-child(2)').allInnerTexts()).map(x => flat(x).replace(/ per bar$/, '')),
+      ['Bronze bar', 'Iron bar', 'Iron bar (ring of forging)', 'Silver bar', 'Steel bar', 'Gold bar', 'Mithril bar', 'Adamantite bar', 'Runite bar']);
+    const steel = await cells('mi_bar_steel_bar');
+    assert.deepEqual([steel[0], flat(steel[1]), steel[2], steel[5]], ['30', 'Steel bar per bar', '135', '10,635'], '35 XP for the iron ore and 100 for the coal; 1,435,685 XP at 135 a bar');
+    assert.match(await card.locator('tr[data-method="mi_bar_steel_bar"]').getAttribute('title'),
+      /^Steel bar: level 30, 135 XP per bar \(iron ore 35 \+ 2 coal 100\)\nMine 1 iron ore and 2 coal for each bar\. Smelting it takes Smithing 30\./);
+    assert.deepEqual([(await cells('mi_bar_mithril_bar'))[2], (await cells('mi_bar_adamantite_bar'))[2], (await cells('mi_bar_runite_bar'))[2]], ['280', '395', '525'], '4, 6 and 8 coal a bar');
+    // iron loses half its ore in a furnace: 2 ore a bar, or 1 with a ring of forging (a row of its own)
+    assert.deepEqual([(await cells('mi_bar_iron_bar'))[2], (await cells('mi_bar_iron_bar_ring'))[2]], ['70', '35']);
+    assert.match(await card.locator('tr[data-method="mi_bar_iron_bar"]').getAttribute('title'), /Mine 2 iron ore for each bar\. Half the ore is lost in a furnace, so a bar takes 2 on average/);
+    await card.locator('tr[data-method="mi_bar_steel_bar"] td:nth-child(2)').click();
+    await card.locator('.step', { hasText: 'steel bars' }).waitFor();
+    assert.equal(flat(await card.locator('.plan-sec', { hasText: 'To reach your goal' }).locator('.step').innerText()),
+      'Ore for 10,635 steel bars: 10,635 Iron ore + 21,270 Coal +1,435,725 XP');
+    assert.equal(flat(await card.locator('select[data-gopt="fill"] option:checked').innerText()), 'Steel bar (lvl 30, 135 XP per bar)');
+    assert.deepEqual(await card.locator('select[data-gopt="fill"] optgroup').evaluateAll(gs => gs.map(g => `${g.label} ${g.children.length}`)), ['Rocks 14', 'Bars 9']);
+    assert.match(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()), /A row marked "per bar" counts bars\.$/);
+    // in a mix too: 1,000 steel bars' worth first, the rest after
+    await card.locator('[data-mix="mi_bar_steel_bar"]').fill('1000');
+    await card.locator('[data-mix="mi_bar_steel_bar"]').press('Tab');
+    await card.locator('.plan-sec', { hasText: 'Your mix +135,000 XP' }).waitFor();
+    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Your mix' }).locator('.step').innerText()), /^Ore for 1,000 steel bars: 1,000 Iron ore \+ 2,000 Coal \+135,000 XP/);
+    assert.equal(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).locator('.step').innerText()),
+      'Ore for 9,635 steel bars: 9,635 Iron ore + 19,270 Coal +1,300,725 XP');
+    await page.screenshot({ path: `${SHOTS}/10k-mining-bars.png`, fullPage: true });
+    await card.locator('[data-act="mix-clear"]').click();
     // its prices: what it makes, the gems among them
     await page.click('.tab[data-tab="prices"]');
     await page.click('#prices-head [data-bskill="mining"]');
@@ -1270,8 +1880,19 @@ await check('smithing: ore is smelted on the way; bars bought, smelted or superh
     assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 26,465 Steel bar/);
     assert.match(flat(await then.innerText()), /Also bring: Hammer/);
     // the table: a tab a metal, steel's showing; things made several to a bar are counted in bars
-    assert.deepEqual((await card.locator('.group-pick .chip').allInnerTexts()).map(x => x.trim()), ['Smelting', 'Bronze', 'Iron', 'Steel', 'Mithril', 'Adamant', 'Rune', 'All']);
+    const chips = async () => (await card.locator('.group-pick .chip').allInnerTexts()).map(x => x.trim());
+    const METALS = ['Smelting', 'Bronze', 'Iron', 'Steel', 'Mithril', 'Adamant', 'Rune', 'All'];
+    assert.deepEqual(await chips(), METALS);
     assert.equal((await card.locator('.group-pick .chip.on').innerText()).trim(), 'Steel');
+    // ...in that order whatever the table is sorted by (v2.6.0 put them in the order of the sorted rows)
+    for (const sort of ['xp', 'cheap', 'net', 'level']) {
+      await card.locator(`[data-tsort-plan="${sort}"]`).click();
+      await card.locator(`[data-tsort-plan="${sort}"].on`).waitFor();
+      assert.deepEqual(await chips(), METALS, `sorted by ${sort}`);
+      await card.locator('[data-tgroup="all"]').click();
+      assert.deepEqual(await chips(), METALS, `sorted by ${sort}, showing All`);
+      await card.locator('[data-tgroup="Steel"]').click();
+    }
     assert.equal(await card.locator('tr[data-method]').count(), 24);
     const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
     assert.deepEqual((await cells('sm_steel_platebody')).slice(1, 4), ['48', 'Steel platebody', '187.5']);
@@ -1432,6 +2053,9 @@ await check('bank: read from screenshots, review, then update', async () => {
   await page.click('[data-bskill="herblore"]');
   assert.equal(await page.inputValue('[data-bank="unidentified_guam"]'), '35');
   assert.equal(await page.locator('#bank-shots .shots-result').count(), 0, 'back to the drop box');
+  // the icons it compares with come from the sheet its data names, by its stamped address (as items.png does)
+  assert.match(BANK_ICON_SHEET, /^bankicons\.png\?v=[0-9a-f]{10}$/);
+  assert.deepEqual([...new Set(requested.filter(u => /\/bankicons\.png/.test(u)))], [`${BASE}/${BANK_ICON_SHEET}`]);
 });
 
 await check('bank: a stack that looks exactly like two items asks which it is: soda ash, not ashes', async () => {
@@ -1502,6 +2126,64 @@ await check('bank: a stack that looks exactly like two items asks which it is: s
   // (the bank as it was, for the checks that follow)
   await page.evaluate(v => localStorage.setItem('lchs.bank.demo_main', v), saved);
   await page.click('[data-bskill="herblore"]');
+});
+
+await check('bank: an uncharged amulet of glory is an item of its own; stacks that look like a glory get a drop-down each', async () => {
+  const saved = await page.evaluate(() => localStorage.getItem('lchs.bank.demo_main'));
+  try {
+    await page.click('.tab[data-tab="bank"]');
+    // a charged glory, an uncharged one and a strung dragonstone amulet are drawn the same: three such stacks
+    const items = [
+      { slot: 0, icon: 'amulet_of_glory_4', count: 3 },
+      { slot: 1, icon: 'gold_bar', count: 300 },
+      { slot: 2, icon: 'amulet_of_glory_4', count: 12 },
+      { slot: 3, icon: 'amulet_of_glory_4', count: 5 },
+    ];
+    const shot = { name: 'screenshot-5.png', mimeType: 'image/png', buffer: encodePng(fakeBank({ items })) };
+    await page.setInputFiles('#shots-file', [shot]);
+    await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
+    const picks = () => page.locator('[data-shot-as^="amulet_of_glory_4@"]').evaluateAll(els => els.map(e => e.value));
+    // one of each until you say otherwise, in the order a bank is most likely to hold them
+    assert.deepEqual(await picks(), ['amulet_of_glory_4', 'amulet_of_glory', 'strung_dragonstone_amulet']);
+    assert.deepEqual(await page.locator('[data-shot-as="amulet_of_glory_4@1"] option').allInnerTexts(), ['Amulet of glory(4)', 'Amulet of glory (uncharged)', 'Dragonstoneamulet']);
+    assert.match(flat(await text('#bank-shots .note')), /3 of them look exactly like another item .*: pick which each is from its drop-down\. Your pick is kept for next time\.$/);
+    assert.match(flat(await page.locator('.shot-row', { has: page.locator('[data-shot="amulet_of_glory_4@1"]') }).innerText()), /or Amulet of glory \(fewer charges\): they look the same 12 was 0$/);
+    // the first stack is the uncharged ones here, and the second the charged
+    await page.locator('[data-shot-as="amulet_of_glory_4@0"]').selectOption('amulet_of_glory');
+    await page.waitForFunction(() => document.querySelector('[data-shot-as="amulet_of_glory_4@0"]')?.value === 'amulet_of_glory');
+    await page.locator('[data-shot-as="amulet_of_glory_4@1"]').selectOption('amulet_of_glory_4');
+    await page.waitForFunction(() => document.querySelector('[data-shot-as="amulet_of_glory_4@1"]')?.value === 'amulet_of_glory_4');
+    assert.deepEqual(await picks(), ['amulet_of_glory', 'amulet_of_glory_4', 'strung_dragonstone_amulet']);
+    await page.screenshot({ path: `${SHOTS}/9d-bank-glory.png`, fullPage: true });
+    await page.click('[data-act="shots-apply"]');
+    await page.waitForSelector('#bank-msg:not([hidden])');
+    // each lands under its own entry: the uncharged one sits just before the charged one in the Crafting bank
+    await page.click('[data-bskill="crafting"]');
+    await page.waitForSelector('[data-bank="amulet_of_glory"]');
+    assert.deepEqual([await page.inputValue('[data-bank="amulet_of_glory"]'), await page.inputValue('[data-bank="amulet_of_glory_4"]'), await page.inputValue('[data-bank="strung_dragonstone_amulet"]')], ['3', '12', '5']);
+    const made = await page.locator('#bank-body .bank-group', { hasText: 'Made: enchanted jewellery' }).locator('[data-bank]').evaluateAll(els => els.map(e => e.dataset.bank));
+    assert.deepEqual(made.slice(-2), ['amulet_of_glory', 'amulet_of_glory_4']);
+    assert.match(flat(await page.locator('#bank-body .bank-group', { hasText: 'Made: enchanted jewellery' }).innerText()), /Amulet of glory \(uncharged\).*Amulet of glory\(4\)/);
+    // read again, the picks are remembered: nothing to change
+    await page.setInputFiles('#shots-file', [shot]);
+    await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
+    assert.deepEqual(await picks(), ['amulet_of_glory', 'amulet_of_glory_4', 'strung_dragonstone_amulet']);
+    assert.equal(await page.locator('.shot-row.changed').count(), 0);
+    await page.click('[data-act="shots-discard"]');
+    // it has a price of its own, and the Crafting row still makes the charged one
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="crafting"]');
+    await page.waitForSelector('[data-price="amulet_of_glory"]');
+    assert.equal(await page.locator('[data-price="amulet_of_glory"], [data-price="amulet_of_glory_4"]').count(), 2);
+    assert.match(flat(await page.locator('#prices-body tr:has([data-price="amulet_of_glory"])').innerText()), /^Amulet of glory \(uncharged\) /);
+  } finally {
+    // (the bank as it was, for the checks that follow)
+    await page.evaluate(v => localStorage.setItem('lchs.bank.demo_main', v), saved);
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="herblore"]');
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('[data-bskill="herblore"]');
+  }
 });
 
 await check('bank: Choose screenshots opens the picker in Pictures and reads what you pick', async () => {

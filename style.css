@@ -180,6 +180,12 @@ form.inline { display: inline-flex; gap: 4px; }
 .chip.added { border-style: inset; border-color: var(--level); color: #fff; box-shadow: inset 0 0 0 40px rgba(76, 175, 80, 0.22); }
 .chip.added::after { content: ' ✓'; color: var(--win); }
 .chip .x { margin-left: 6px; color: var(--lose); }
+/* A recent name and the ✕ that takes it off the list, joined into one */
+.chip-group { display: inline-flex; }
+.chip-group .chip:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right-width: 1px; }
+.chip.chip-x { padding: 3px 5px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 1px; font-size: 11px; color: var(--faint); }
+.chip.chip-x:hover { color: var(--lose); }
+.chips .chips-clear { margin-left: 4px; font-family: var(--small); font-size: 13px; }
 
 /* Messages */
 .msg {
@@ -472,6 +478,8 @@ table.cmp tfoot td { background: #241e10; font-size: 13px; }
 }
 .mv:hover:not(:disabled) { color: #fff; background: #3a3a3a; }
 .mv:disabled { opacity: 0.3; cursor: default; }
+.goal-edit { margin-top: 6px; }
+.goal-edit .input.num { width: 110px; }
 .goal-name { font-size: 17px; color: #fff; }
 .goal-title { font-size: 15px; color: var(--muted); }
 .goal-title b { color: var(--gold-hi); font-weight: normal; }
@@ -491,6 +499,16 @@ table.cmp tfoot td { background: #241e10; font-size: 13px; }
 .steps { display: flex; flex-direction: column; gap: 3px; }
 .step { display: flex; align-items: center; gap: 8px; padding: 2px 6px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--line); border-radius: 3px; }
 .step-main { font-size: 14px; line-height: 1.35; }
+/* A bank plan's lines can be dragged into your own order: the grip says so */
+.steps.movable > .step { cursor: grab; user-select: none; -webkit-user-select: none; }
+.steps.movable > .step a, .steps.movable > .step button { cursor: pointer; }
+.step .grip { flex: 0 0 7px; align-self: stretch; min-height: 18px; margin: 4px 0 4px -1px; opacity: 0.55;
+  background: radial-gradient(circle, var(--muted) 1px, transparent 1.3px) 0 0 / 4px 5px; }
+.steps.movable > .step:hover .grip { opacity: 1; }
+.drag-ghost.step { transform: none; background: #2b2418; }
+.order-note { margin-top: 4px; }
+.order-more { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.order-more .chip { display: inline-flex; align-items: center; gap: 4px; }
 .step-main b { color: #fff; font-weight: normal; }
 .goal-flag { display: inline-block; margin-left: 4px; padding: 0 5px; border: 1px solid var(--gold); border-radius: 3px; font-family: var(--small); font-size: 12px; color: var(--gold-hi); }
 .collect { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; }
@@ -516,6 +534,8 @@ table.plan-t .per { font-family: var(--small); font-size: 12px; color: var(--fai
 .skill-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; }
 .skill-tab .ico { width: 24px; height: 24px; }
 .mult { margin-left: 4px; padding: 0 4px; border: 1px solid var(--gold-dim); border-radius: 3px; font-family: var(--small); font-size: 12px; color: var(--gold-hi); }
+/* "14% burn": how much of a food still burns at your level */
+.burn { margin-left: 4px; padding: 0 4px; border: 1px solid #7a3a2a; border-radius: 3px; font-family: var(--small); font-size: 12px; color: var(--lose); white-space: nowrap; }
 .bank-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 14px; color: var(--muted); }
 .bank-sum b { color: #fff; font-weight: normal; }
 .bank-group h4 { margin: 0 0 6px; font-weight: normal; font-size: 15px; color: var(--gold-hi); }
@@ -653,5 +673,7 @@ a.it-chip.mk:hover b { text-decoration: underline; }
 /* two items with the very same icon: a drop-down says which this stack is */
 .shot-row.twin { background: rgba(240, 196, 25, 0.07); box-shadow: inset 2px 0 0 var(--gold-dim); }
 .shot-as { max-width: 100%; padding: 2px 4px; border-color: var(--gold-dim); }
+/* (room for the longer names in it, "Amulet of glory (uncharged)", where the list has two columns or more) */
+@media (min-width: 600px) { .shot-row.twin { grid-column: span 2; } }
 .skill-tab .sw-v { font-family: var(--small); font-size: 12px; color: var(--gold-hi); font-weight: normal; }
 .skill-tab.all-tab { padding-left: 10px; }

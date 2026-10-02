@@ -47,14 +47,36 @@ export const players = {
     return i < 0;
   },
   recent() { return store.get('recent', []); },
-  pushRecent(name) {
+  // explicit: you looked this player up yourself. A name you've removed from the
+  // list only comes back that way: not when Compare, Gains or Goals fetch it
+  // again in the background, or when the tool reopens on your last lookup.
+  pushRecent(name, { explicit = false } = {}) {
     const safe = toSafeName(name);
+    const hidden = store.get('recentHidden', []);
+    if (hidden.includes(safe)) {
+      if (!explicit) return;
+      store.set('recentHidden', hidden.filter(s => s !== safe));
+    }
     const list = this.recent().filter(n => toSafeName(n) !== safe);
     list.unshift(toDisplayName(name));
     store.set('recent', list.slice(0, MAX_RECENT));
   },
-  clearRecent() { store.set('recent', []); },
+  removeRecent(name) {
+    const safe = toSafeName(name);
+    store.set('recent', this.recent().filter(n => toSafeName(n) !== safe));
+    hideRecent([safe]);
+  },
+  clearRecent() {
+    hideRecent(this.recent().map(toSafeName));
+    store.set('recent', []);
+  },
 };
+// Names removed from the recent list (the latest MAX_HIDDEN of them).
+const MAX_HIDDEN = 100;
+function hideRecent(safes) {
+  const hidden = store.get('recentHidden', []).filter(s => !safes.includes(s));
+  store.set('recentHidden', [...hidden, ...safes].slice(-MAX_HIDDEN));
+}
 
 // ── Snapshots (XP gain tracking) ──────────────────────────────────────────
 // One key per player: "snap.<safe name>" -> [{ t, s }], oldest first.

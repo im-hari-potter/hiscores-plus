@@ -112,7 +112,7 @@ test('every planner item but lantadyme has an icon to be read by', () => {
 test('an item that looks exactly like another says so (v2.5)', () => {
   const entry = slug => BANK_ICONS.find(e => e.slug === slug);
   // enchanted jewellery is the plain piece with a spell on it: read as the enchanted one (likelier in a bank), the plain one noted
-  assert.deepEqual(entry('amulet_of_glory_4'), { slug: 'amulet_of_glory_4', also: ['strung_dragonstone_amulet'], like: ['Amulet of glory (fewer charges)'] });
+  assert.deepEqual(entry('amulet_of_glory_4'), { slug: 'amulet_of_glory_4', also: ['amulet_of_glory', 'strung_dragonstone_amulet'], like: ['Amulet of glory (fewer charges)'] });
   assert.deepEqual(entry('ring_of_dueling_8'), { slug: 'ring_of_dueling_8', also: ['emerald_ring'], like: ['Ring of dueling (fewer charges)'] });
   assert.deepEqual(entry('necklace_of_minigames_8'), { slug: 'necklace_of_minigames_8', also: ['sapphire_necklace'], like: ['Games necklace (fewer charges)'] });
   assert.deepEqual(entry('ring_of_recoil'), { slug: 'ring_of_recoil', also: ['sapphire_ring'] });
@@ -120,11 +120,16 @@ test('an item that looks exactly like another says so (v2.5)', () => {
   // things the planner doesn't use that you could well have in a bank are named
   assert.deepEqual(entry('battlestaff').like, ['Dramen staff', 'Staff']);
   assert.deepEqual(entry('air_battlestaff').like, ['Staff of air', 'Mystic air staff']);
-  assert.deepEqual(entry('wine_of_zamorak').like, ['Half full wine jug', 'Jug of bad wine', 'Jug of wine', 'Unfermented wine']);
+  // (v2.7: a jug of wine and an unfermented one are Cooking's now: a choice, where they were only named)
+  assert.deepEqual(entry('wine_of_zamorak'), { slug: 'wine_of_zamorak', also: ['jug_wine', 'jug_unfermented_wine'], like: ['Half full wine jug', 'Jug of bad wine'] });
   assert.equal(entry('lawrune').like, undefined, 'not quest and minigame pieces (a board game\'s law rune)');
+  // (v2.7) the very same name and picture is nothing to point out: Tutorial Island's raw shrimps and pot of flour,
+  // an incomplete stew with the meat in first. "Fewer charges" is only said of things that have charges
+  assert.deepEqual([entry('raw_shrimp'), entry('pot_flour'), entry('stew1')], [{ slug: 'raw_shrimp' }, { slug: 'pot_flour' }, { slug: 'stew1' }]);
+  for (const e of BANK_ICONS) for (const n of e.like || []) if (/\(fewer charges\)$/.test(n)) assert.match(ITEMS[e.slug].name, /\(\d+\)$/, `${e.slug}: ${n}`);
   assert.equal(entry('unidentified_guam').like, undefined, 'unid herbs have their own note');
   const m = mergeReads([read(fakeBank({ items: [{ slot: 0, icon: 'amulet_of_glory_4', count: 3 }, { slot: 1, icon: 'ashes', count: 40 }, { slot: 2, icon: 'gold_bar', count: 500 }] }))]);
-  assert.deepEqual([item(m, 'amulet_of_glory_4').also, item(m, 'amulet_of_glory_4').like], [['strung_dragonstone_amulet'], ['Amulet of glory (fewer charges)']]);
+  assert.deepEqual([item(m, 'amulet_of_glory_4').also, item(m, 'amulet_of_glory_4').like], [['amulet_of_glory', 'strung_dragonstone_amulet'], ['Amulet of glory (fewer charges)']]);
   assert.deepEqual(item(m, 'ashes').also, ['soda_ash'], 'soda ash looks just like ashes');
   assert.equal(item(m, 'gold_bar').like, undefined);
 });
@@ -250,7 +255,7 @@ test('review: enchanted jewellery by default, the plain piece once you have type
   assert.deepEqual(first(three, {}), ['ring_of_recoil', 'sapphire_ring', 'ring_of_recoil']);
   // lookalikes the planner doesn't use stay named on the line
   const glory = reviewRows(merged([{ slot: 0, icon: 'amulet_of_glory_4', count: 3 }]))[0];
-  assert.deepEqual([glory.choices, glory.like], [['amulet_of_glory_4', 'strung_dragonstone_amulet'], ['Amulet of glory (fewer charges)']]);
+  assert.deepEqual([glory.choices, glory.like], [['amulet_of_glory_4', 'amulet_of_glory', 'strung_dragonstone_amulet'], ['Amulet of glory (fewer charges)']]);
 });
 
 test('review: any stack that looks like an unid herb can be said to be lantadyme (v2.5.1)', () => {

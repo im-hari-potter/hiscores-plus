@@ -1,11 +1,14 @@
 // Run with:  node --test
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { METHODS, ITEMS, BANK_GROUPS, SALE_GROUPS, PLACES, CHOICES, UNID_HERBS } from './gamedata.js';
+import { METHODS, ITEMS, BANK_GROUPS, SALE_GROUPS, PLACES, CHOICES, UNID_HERBS, ICON_SHEET } from './gamedata.js';
+import { BANK_ICON_SHEET } from './bankread-data.js';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { mergeUnids, minorOf, choicesInUse, amountText } from './planner-ui.js';
 import {
   xp10ForLevel, levelForXp10, goalTargetXp10, rankForTop, indexMethods, planBank, planGoal, planMix,
-  methodEconomics, maxRuns, Stock, bankValue, outAt, madeOver, gathers, castsIn, xpEach,
+  methodEconomics, maxRuns, Stock, bankValue, outAt, madeOver, gathers, castsIn, xpEach, chanceUnits, sureLevel, chanceOf, WHOLE,
 } from './planner.js';
 
 const ix = indexMethods(METHODS.filter(m => m.skill === 'herblore'));
@@ -1027,15 +1030,20 @@ test('round up my supplies, on: with nothing to collect it is the plan as it is 
 
 test('round up my supplies, on: things your bank can\'t make yet join in when they\'re one ingredient short, best XP first (v2.5)', () => {
   const opts = (bank, more = {}) => ({ bank, currentXp10: xp10ForLevel(74), targetXp10: xp10ForLevel(78), unlimited: VIALS, roundUp: true, ...more });
-  // irit with nothing to go with: super attack (eye of newt) or superantipoison (unicorn horn), the one with more XP
-  let fb = planGoal(ix, opts({ irit_leaf: 200 })).fromBank;
-  assert.deepEqual(evSteps(fb), [['hb_3dose2antipoison', 200, true, { unicorn_horn: 200 }]]);
-  // unticked, the other one takes them; both unticked, the irit stays
-  fb = planGoal(ix, opts({ irit_leaf: 200 }, { excluded: new Set(['hb_3dose2antipoison']) })).fromBank;
+  // kwuarm with nothing to go with: super strength (limpwurt root) or weapon poison (a blue dragon scale, ground), the one with more XP
+  let fb = planGoal(ix, opts({ kwuarm: 200 })).fromBank;
+  assert.deepEqual(evSteps(fb), [['hb_weapon_poison', 200, true, { blue_dragon_scale: 200 }]]);
+  // unticked, the other one takes them; both unticked, the kwuarm stays
+  fb = planGoal(ix, opts({ kwuarm: 200 }, { excluded: new Set(['hb_weapon_poison']) })).fromBank;
+  assert.deepEqual(evSteps(fb), [['hb_3dose2strength', 200, true, { limpwurt_root: 200 }]]);
+  assert.equal(fb.xp10, 200 * 1250);
+  fb = planGoal(ix, opts({ kwuarm: 200 }, { excluded: new Set(['hb_weapon_poison', 'hb_3dose2strength']) })).fromBank;
+  assert.deepEqual([fb.steps, fb.collect, fb.leftover.toObject()], [[], {}, { kwuarm: 200 }]);
+  // (irits: super attacks get them before superantipoisons, whatever the XP: see the v2.7 test)
+  fb = planGoal(ix, opts({ irit_leaf: 200 })).fromBank;
   assert.deepEqual(evSteps(fb), [['hb_3dose2attack', 200, true, { eye_of_newt: 200 }]]);
-  assert.equal(fb.xp10, 200 * 1000);
-  fb = planGoal(ix, opts({ irit_leaf: 200 }, { excluded: new Set(['hb_3dose2antipoison', 'hb_3dose2attack']) })).fromBank;
-  assert.deepEqual([fb.steps, fb.collect, fb.leftover.toObject()], [[], {}, { irit_leaf: 200 }]);
+  fb = planGoal(ix, opts({ irit_leaf: 200 }, { excluded: new Set(['hb_3dose2attack']) })).fromBank;
+  assert.deepEqual(evSteps(fb), [['hb_3dose2antipoison', 200, true, { unicorn_horn: 200 }]]);
   // a potion you can't make yet waits for its level: cadantine stays at 60...
   fb = planGoal(ix, { ...opts({ cadantine: 50, eye_of_newt: 20 }), currentXp10: xp10ForLevel(60) }).fromBank;
   assert.deepEqual(evSteps(fb), [['hb_3dose2attack', 20, true, { irit_leaf: 20 }]]);
@@ -1147,7 +1155,7 @@ test("round up my supplies, on: vials you count never hold it back, and the ones
   // no vials at all: what your bank makes but for the vials comes first, as if you bought them as you go
   assert.deepEqual(evSteps(fb({ kwuarm: 605, limpwurt_root: 518 })), [[SS, 518, false, { vial_water: 518 }], [SS, 87, true, { limpwurt_root: 87, vial_water: 87 }]]);
   // one ingredient short, not counting the vials
-  assert.deepEqual(evSteps(fb({ irit_leaf: 200 })), [['hb_3dose2antipoison', 200, true, { unicorn_horn: 200, vial_water: 200 }]]);
+  assert.deepEqual(evSteps(fb({ kwuarm: 200 })), [['hb_weapon_poison', 200, true, { blue_dragon_scale: 200, vial_water: 200 }]]);
   // the one you picked
   assert.deepEqual(evSteps(fb({ lantadyme: 100, blue_dragon_scale: 40, vial_water: 60 }, { fillId: 'hb_3dose1antidragon' })),
     [['hb_3dose1antidragon', 100, false, { blue_dragon_scale: 60, vial_water: 40 }]]);
@@ -1339,16 +1347,18 @@ test('round up my supplies: 2,000 molten glass round up to 2,000 unpowered orbs 
 // The rows are LostHQ's Mining calculator, checked against the server's mining
 // table when the data is built, plus limestone, which only the server has.
 const mi = indexMethods(METHODS.filter(m => m.skill === 'mining'));
+const miRocks = mi.train.filter(m => m.group === 'Rocks');      // (v2.7 added a second group: the ore for a bar)
 
 test("mining: LostHQ's 13 rocks with their level and XP an ore, and limestone, which only the server has (v2.6)", () => {
-  assert.deepEqual(mi.train.map(m => [m.name, m.level, m.xp / 10]), [
+  assert.deepEqual(miRocks.map(m => [m.name, m.level, m.xp / 10]), [
     ['Clay', 1, 5], ['Rune essence', 1, 5], ['Copper ore', 1, 17.5], ['Tin ore', 1, 17.5], ['Blurite ore', 10, 17.5], ['Limestone', 10, 26.5],
     ['Iron ore', 15, 35], ['Silver ore', 20, 40], ['Coal', 30, 50], ['Gold ore', 40, 65], ['Gem rock', 40, 65],
     ['Mithril ore', 55, 80], ['Adamantite ore', 70, 95], ['Runite ore', 85, 125],
   ]);
   assert.ok(mi.train.every(gathers), 'mining takes nothing in');
   assert.equal(BANK_GROUPS.mining, undefined, 'so it has no bank tab');
-  assert.ok(mi.train.every(m => m.group === 'Rocks' && !m.tools));
+  assert.ok(mi.train.every(m => !m.tools));
+  assert.deepEqual([...new Set(mi.train.map(m => m.group))], ['Rocks', 'Bars']);
   assert.match(mi.byId.get('mi_limestone').note, /Not on LostHQ's calculator/);
   // a gem rock gives one gem, by the server's chances out of 128
   const gem = mi.byId.get('mi_gemrock');
@@ -1357,12 +1367,13 @@ test("mining: LostHQ's 13 rocks with their level and XP an ore, and limestone, w
   assert.equal(Object.values(gem.out).reduce((a, b) => a + b, 0), 1, 'one gem a rock');
   assert.equal(gem.icon, 'uncut_red_topaz', 'shown as the calculator shows it');
   assert.equal(gem.note, 'In Shilo Village. One gem a rock, by chance (out of 128): opal 60, jade 30, red topaz 15, sapphire 9, emerald 5, ruby 5, diamond 4.');
-  for (const m of mi.train) if (m !== gem) assert.deepEqual(Object.values(m.out), [1], m.id);
+  for (const m of miRocks) if (m !== gem) assert.deepEqual(Object.values(m.out), [1], m.id);
 });
 
 test('mining: ores to mine and what they are worth, with no bank involved (v2.6)', () => {
   const toGo = xp10ForLevel(70) - xp10ForLevel(60);
-  const plan = planGoal(mi, { bank: { coal: 5000, mithril_ore: 300 }, currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(70), priceOf: k => ({ mithril_ore: 200 })[k] ?? null });
+  // (fillGroup, as the app passes it: with nothing picked a plan mines a rock, not a bar's worth of several)
+  const plan = planGoal(mi, { bank: { coal: 5000, mithril_ore: 300 }, currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(70), fillGroup: 'Rocks', priceOf: k => ({ mithril_ore: 200 })[k] ?? null });
   assert.equal(plan.fromBank.steps.length, 0, 'ore in the bank gives no Mining XP');
   assert.equal(plan.fill.id, 'mi_mithril_ore', 'the most XP an ore at 60');
   assert.deepEqual(plan.fill.segments, [{ id: 'mi_mithril_ore', runs: Math.ceil(toGo / 800), xp10: Math.ceil(toGo / 800) * 800, made: { mithril_ore: Math.ceil(toGo / 800) } }]);
@@ -1655,4 +1666,444 @@ test('smithing: goldsmith gauntlets, and Superheat Item for the bars: its runes,
   assert.deepEqual(castsIn(classic, [['sm_gold_bar', 300]]), { xp10: 300 * 530, level: 43, by: { sm_gold_bar: 300 } });
   assert.deepEqual(gold.fill.buy, { gold_ore: gold.fill.segments[0].runs, naturerune: gold.fill.segments[0].runs, firerune: gold.fill.segments[0].runs * 4 });
   assert.equal(gold.fill.segments[0].runs, Math.ceil(gold.remaining / 562));
+});
+
+// ── v2.7 ───────────────────────────────────────────────────────────────────
+const lines = fb => fb.steps.map(s => [s.id, s.runs]);
+
+test('herblore: super attacks get the irits before superantipoisons, prayer potions the snape grass before fishing potions (v2.7)', () => {
+  const SA = 'hb_3dose2attack', SAP = 'hb_3dose2antipoison', PP = 'hb_3doseprayerrestore', FP = 'hb_3dosefisherspotion';
+  assert.deepEqual(ix.byId.get(SAP).after, [SA]);
+  assert.deepEqual(ix.byId.get(FP).after, [PP]);
+  assert.deepEqual(METHODS.filter(m => m.after).map(m => m.id), [SAP, FP], 'the only two');
+  const at = { currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(99), unlimited: VIALS, minor: VIALS };
+  const fb = (bank, more = {}) => planGoal(ix, { ...at, bank, ...more }).fromBank;
+
+  // 1,000 irits, eyes of newt for 400 of them: those first, though a superantipoison is more XP
+  const irits = { irit_leaf: 1000, eye_of_newt: 400, unicorn_horn_dust: 1000 };
+  assert.deepEqual(lines(fb(irits)), [[SA, 400], [SAP, 600]]);
+  assert.equal(fb(irits).xp10, 400 * 1000 + 600 * 1063);
+  assert.equal(row(planGoal(ix, { ...at, bank: irits }), SAP).have, 1000, 'on its own it could take them all, as its row says');
+  // with nothing to make super attacks of, or with them unticked, superantipoisons take the irits as before
+  assert.deepEqual(lines(fb({ irit_leaf: 1000, unicorn_horn_dust: 1000 })), [[SAP, 1000]]);
+  assert.deepEqual(lines(fb(irits, { excluded: new Set([SA]) })), [[SAP, 1000]]);
+  // the one you picked to train with still goes first: that's your call
+  assert.deepEqual(lines(fb(irits, { fillId: SAP })), [[SAP, 1000]]);
+  assert.deepEqual(lines(fb(irits, { fillId: SA })), [[SA, 400], [SAP, 600]]);
+  // below level 48 only super attacks can be made anyway; a level on, the rest become superantipoisons
+  assert.deepEqual(lines(fb(irits, { currentXp10: xp10ForLevel(45) })), [[SA, 400], [SAP, 600]]);
+  assert.deepEqual(lines(fb({ irit_leaf: 100, eye_of_newt: 40, unicorn_horn_dust: 100 }, { currentXp10: xp10ForLevel(45) })), [[SA, 40]], '4,000 XP is not level 48');
+
+  // ranarrs and avantoes after the same snape grass
+  const snape = { ranarr_weed: 254, avantoe: 994, snape_grass: 800 };
+  assert.deepEqual(lines(fb(snape)), [[PP, 254], [FP, 546]]);
+  assert.deepEqual(lines(fb(snape, { fillId: FP })), [[FP, 800]]);
+  assert.deepEqual(lines(fb({ avantoe: 994, snape_grass: 800 })), [[FP, 800]]);
+
+  // rounding up: spare irits become super attacks (eyes of newt to collect), spare snape grass prayer potions
+  assert.deepEqual(evSteps(fb({ irit_leaf: 200 }, { roundUp: true })), [[SA, 200, true, { eye_of_newt: 200 }]]);
+  assert.deepEqual(evSteps(fb({ snape_grass: 300 }, { roundUp: true })), [[PP, 300, true, { ranarr_weed: 300 }]]);
+  assert.deepEqual(evSteps(fb(irits, { roundUp: true })), [[SA, 400, false, null], [SAP, 600, false, null], [SAP, 400, true, { irit_leaf: 400 }]]);
+  // every other pair is still best XP first: kwuarm goes to weapon poison before super strength
+  assert.deepEqual(lines(fb({ kwuarm: 100, limpwurt_root: 100, dragon_scale_dust: 60 })), [['hb_weapon_poison', 60], ['hb_3dose2strength', 40]]);
+});
+
+test('the bank plan in an order of your own: the top line gets the bank first, then down the list (v2.7)', () => {
+  const SA = 'hb_3dose2attack', SAP = 'hb_3dose2antipoison', PP = 'hb_3doseprayerrestore', FP = 'hb_3dosefisherspotion';
+  const WP = 'hb_weapon_poison', SS = 'hb_3dose2strength', SD = 'hb_3dose2defense';
+  const at = { currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(99), unlimited: VIALS, minor: VIALS };
+  const plan = (bank, more = {}) => planGoal(ix, { ...at, bank, ...more });
+  const fb = (bank, more) => plan(bank, more).fromBank;
+  const irits = { irit_leaf: 1000, eye_of_newt: 400, unicorn_horn_dust: 1000 };
+  // your order beats the usual one, either way round
+  assert.deepEqual(lines(fb(irits, { order: [SAP, SA] })), [[SAP, 1000]]);
+  assert.deepEqual(lines(fb(irits, { order: [SA, SAP] })), [[SA, 400], [SAP, 600]]);
+  // and it beats the one you picked to train with, when that one has a place in it
+  assert.deepEqual(lines(fb(irits, { order: [SA, SAP], fillId: SAP })), [[SA, 400], [SAP, 600]]);
+  // an empty order is no order
+  assert.deepEqual(fb(irits, { order: [] }), fb(irits));
+  assert.deepEqual(fb(irits, { order: ['hb_no_such_potion'] }), fb(irits));
+
+  const bank = { ...irits, ranarr_weed: 254, avantoe: 994, snape_grass: 800, kwuarm: 605, limpwurt_root: 518, dragon_scale_dust: 300, cadantine: 472, white_berries: 200 };
+  // as it is: best XP first, level by level
+  assert.deepEqual(lines(fb(bank)), [[WP, 300], [SS, 305], [SA, 400], [SAP, 600], [PP, 254], [FP, 153], [SD, 200], [FP, 393]]);
+  // prayer potions, then super strength (so the kwuarm goes there, not to weapon poison); the rest as usual, after them
+  const mine = fb(bank, { order: [PP, SS] });
+  assert.deepEqual(lines(mine).slice(0, 2), [[PP, 254], [SS, 518]]);
+  assert.deepEqual(lines(mine).slice(2, 4), [[WP, 87], [FP, 546]], 'weapon poison gets the 87 kwuarm left; with the ranarrs gone, fishing potions the snape grass');
+  assert.equal(mine.leftover.have('kwuarm'), 0);
+  // what a line makes isn't what its row could make on its own: the table still says that
+  assert.equal(row(plan(bank, { order: [PP, SS] }), WP).have, 300);
+  assert.equal(row(plan(bank, { order: [PP, SS] }), WP).fromPlan, 87);
+  // the one you picked, when it has no place in your order, comes after the ones that do
+  assert.deepEqual(lines(fb(bank, { order: [PP], fillId: SD })).slice(0, 2), [[PP, 254], [WP, 300]], 'then best XP as usual, until super defence at level 66');
+  // unticked lines stay out, wherever your order has them
+  assert.deepEqual(lines(fb(bank, { order: [PP, SS], excluded: new Set([PP]) }))[0], [SS, 518]);
+
+  // a line that needs a level you don't have yet: the ones below it only go as far as that level
+  const bows = { bank: { yew_logs: 5000, bow_string: 5000, rune_dart_tip: 1000, feather: 1000 }, currentXp10: xp10ForLevel(80), targetXp10: xp10ForLevel(99), fillGroup: 'Bows' };
+  assert.deepEqual(lines(planGoal(fl, bows).fromBank), [['fl_cs_yew_longbow', 5000], ['fl_dart_rune_dart', 1000]]);
+  const first = planGoal(fl, { ...bows, order: ['fl_dart_rune_dart'] }).fromBank;
+  const toLevel81 = Math.ceil((xp10ForLevel(81) - xp10ForLevel(80)) / fl.byId.get('fl_cs_yew_longbow').xp);
+  assert.deepEqual(lines(first), [['fl_cs_yew_longbow', toLevel81], ['fl_dart_rune_dart', 1000], ['fl_cs_yew_longbow', 5000 - toLevel81]]);
+  assert.equal(first.xp10, planGoal(fl, bows).fromBank.xp10, 'the same things made, in another order');
+
+  // rounding up keeps to it too: the lines the bank makes, in your order, then what rounding up adds, in your order
+  const up = plan(bank, { order: [PP, SS], roundUp: true });
+  assert.deepEqual(up.fromBank.steps.filter(s => !s.rounded), mine.steps, 'the bank part is the plan as it is, in your order');
+  assert.deepEqual(up.bankNow, mine);
+  assert.ok(up.fromBank.steps.some(s => s.rounded), 'and something was rounded up');
+  const usual = fb(bank, { roundUp: true }).steps.filter(s => s.rounded).map(s => s.id);
+  const fishFirst = fb(bank, { order: [FP], roundUp: true }).steps.filter(s => s.rounded).map(s => s.id);
+  assert.deepEqual(usual, [SD, SS, FP, SAP], 'rounded up best XP first, as usual');
+  assert.equal(fishFirst[0], FP, 'in your order, fishing potions are rounded up first');
+});
+
+test('mining: by the bar, the ore a bar takes mined together: a steel bar is 1 iron ore and 2 coal (v2.7)', () => {
+  const bars = mi.train.filter(m => m.group === 'Bars');
+  assert.deepEqual(bars.map(m => [m.name, m.level, m.xp / 10, m.out]), [
+    ['Bronze bar', 1, 35, { copper_ore: 1, tin_ore: 1 }],
+    ['Iron bar', 15, 70, { iron_ore: 2 }],
+    ['Iron bar (ring of forging)', 15, 35, { iron_ore: 1 }],
+    ['Silver bar', 20, 40, { silver_ore: 1 }],
+    ['Steel bar', 30, 135, { iron_ore: 1, coal: 2 }],
+    ['Gold bar', 40, 65, { gold_ore: 1 }],
+    ['Mithril bar', 55, 280, { mithril_ore: 1, coal: 4 }],
+    ['Adamantite bar', 70, 395, { adamantite_ore: 1, coal: 6 }],
+    ['Runite bar', 85, 525, { runite_ore: 1, coal: 8 }],
+  ]);
+  // each is the XP of its ores, at the level of the hardest one to mine; what the bar takes is Smithing's own recipe
+  const rock = k => mi.byId.get(`mi_${k}`);
+  const smelting = new Map(METHODS.filter(m => m.skill === 'smithing' && m.group === 'Smelting').map(m => [Object.keys(m.out)[0], m]));
+  for (const m of bars) {
+    const ores = Object.entries(m.out);
+    assert.equal(m.xp, ores.reduce((a, [k, n]) => a + n * rock(k).xp, 0), m.id);
+    assert.equal(m.level, Math.max(...ores.map(([k]) => rock(k).level)), m.id);
+    assert.ok(gathers(m) && m.unit === 'bar' && m.units === 'bars' && m.lead === 'Ore for' && m.as.length === 2 && ITEMS[m.icon], m.id);
+    const smelt = smelting.get(m.icon);
+    const recipe = m.id === 'mi_bar_iron_bar_ring' ? smelt.opt.ring.in : smelt.in;
+    assert.deepEqual(m.out, Object.fromEntries(Object.entries(recipe).filter(([k]) => ITEMS[k] && !ITEMS[k].charge)), `${m.id} is what Smithing smelts it from`);
+    assert.match(m.note, new RegExp(`Smelting it takes Smithing ${smelt.level}\\.$`));
+  }
+  assert.ok(!bars.some(m => m.icon === 'elemental_workshop_bar'), 'elemental ore is dropped, not mined');
+  assert.deepEqual(mi.byId.get('mi_bar_steel_bar').parts, [['iron ore', 350], ['2 coal', 1000]]);
+  assert.match(mi.byId.get('mi_bar_iron_bar').note, /Half the ore is lost in a furnace, so a bar takes 2 on average/);
+  assert.equal(mi.byId.get('mi_bar_silver_bar').parts, undefined, 'one ore: nothing to add up');
+
+  // a plan by the bar: how many bars' worth, and how much of each ore that is
+  const toGo = xp10ForLevel(70) - xp10ForLevel(60);
+  const n = Math.ceil(toGo / 1350);
+  const gp = { iron_ore: 100, coal: 150 };
+  const plan = planGoal(mi, { currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(70), fillGroup: 'Rocks', fillId: 'mi_bar_steel_bar', priceOf: k => gp[k] ?? null });
+  assert.deepEqual(plan.fill.segments, [{ id: 'mi_bar_steel_bar', runs: n, xp10: n * 1350, made: { iron_ore: n, coal: 2 * n } }]);
+  assert.deepEqual(plan.fill.buy, {});
+  assert.equal(row(plan, 'mi_bar_steel_bar').needed, n);
+  assert.deepEqual([row(plan, 'mi_bar_steel_bar').econ.value, row(plan, 'mi_bar_steel_bar').econ.net], [100 + 2 * 150, 400], 'worth its ores');
+  // nothing picked, a plan still mines a rock: a bar's row is several ores at once, so its XP isn't a rate
+  assert.equal(planGoal(mi, { currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(70), fillGroup: 'Rocks' }).fill.id, 'mi_mithril_ore');
+  // a bar you can't mine for yet: the best bar at each level on the way
+  const low = planGoal(mi, { currentXp10: xp10ForLevel(25), targetXp10: xp10ForLevel(60), fillGroup: 'Rocks', fillId: 'mi_bar_mithril_bar' });
+  assert.deepEqual(low.fill.segments.map(s => [s.id, s.toLevel]), [['mi_bar_iron_bar', 30], ['mi_bar_steel_bar', 55], ['mi_bar_mithril_bar', undefined]]);
+  // in a mix: 100 steel bars' worth and 50 rune bars' worth
+  const mix = planMix(mi, { mi_bar_steel_bar: 100, mi_bar_runite_bar: 50 }, { startXp10: xp10ForLevel(90) });
+  assert.deepEqual(mix.made, { iron_ore: 100, coal: 200 + 400, runite_ore: 50 });
+  assert.equal(mix.xp10, 100 * 1350 + 50 * 5250);
+});
+
+// ── Fishing (v2.7) ────────────────────────────────────────────────────────
+// The rows are LostHQ's Fishing calculator, checked against the server's
+// scripts when the data is built.
+const fi = indexMethods(METHODS.filter(m => m.skill === 'fishing'));
+
+test("fishing: LostHQ's 18 fish, with the gear each takes and a bait or a feather for a rod (v2.7)", () => {
+  assert.deepEqual(fi.train.map(m => [m.name, m.level, m.xp / 10, m.tools[0], Object.keys(m.in)[0] || null]), [
+    ['Raw shrimps', 1, 10, 'net', null], ['Raw karambwanji', 5, 5, 'net', null], ['Raw sardine', 5, 20, 'fishing_rod', 'fishing_bait'],
+    ['Raw herring', 10, 30, 'fishing_rod', 'fishing_bait'], ['Raw anchovies', 15, 40, 'net', null], ['Raw mackerel', 16, 20, 'big_net', null],
+    ['Raw trout', 20, 50, 'fly_fishing_rod', 'feather'], ['Raw cod', 23, 45, 'big_net', null], ['Raw pike', 25, 60, 'fishing_rod', 'fishing_bait'],
+    ['Slimey eel', 28, 65, 'fishing_rod', 'fishing_bait'], ['Raw salmon', 30, 70, 'fly_fishing_rod', 'feather'], ['Raw tuna', 35, 80, 'harpoon', null],
+    ['Raw lobster', 40, 90, 'lobster_pot', null], ['Raw bass', 46, 100, 'big_net', null], ['Raw swordfish', 50, 100, 'harpoon', null],
+    ['Raw lava eel', 53, 60, 'oily_fishing_rod', 'fishing_bait'], ['Raw karambwan', 65, 105, 'tbwt_karambwan_vessel', null], ['Raw shark', 76, 110, 'harpoon', null],
+  ]);
+  assert.equal(fi.methods.length, 18, 'rows only: nothing is made on the way');
+  assert.ok(fi.train.every(m => m.group === 'Fish' && m.tools.length === 1 && Object.values(m.out).length === 1 && Object.values(m.in).every(n => n === 1)));
+  assert.equal(BANK_GROUPS.fishing, undefined, 'no bank tab: the gear is named, never counted');
+  assert.ok(METHODS.filter(m => m.skill === 'fishing').flatMap(m => m.tools).every(k => ITEMS[k]));
+  assert.equal(ITEMS.tbwt_karambwan_vessel.name, 'Karambwan vessel (empty)');
+  // set aside: a big net's fish come with others, and four wait for a quest or a swamp
+  assert.deepEqual(fi.train.filter(m => m.aside).map(m => m.id), ['fi_tbwt_raw_karambwanji', 'fi_raw_mackerel', 'fi_raw_cod', 'fi_mort_slimey_eel', 'fi_raw_bass', 'fi_raw_lava_eel', 'fi_tbwt_raw_karambwan']);
+  assert.match(fi.byId.get('fi_raw_bass').note, /^A big net brings up several things at once: mackerel, cod \(from level 23\), bass \(from level 46\), and now and then leather boots, seaweed, leather gloves, oyster or casket\. Only the bass is counted here\.$/);
+  assert.match(fi.byId.get('fi_tbwt_raw_karambwan').note, /Every try takes the raw karambwanji in your vessel, caught or not/);
+});
+
+test('fishing: fish to catch, the bait or feathers that takes, and what a plan picks at each level (v2.7)', () => {
+  // (useBank: false, as the app passes it for a skill with no bank tab: feathers in a bank aren't a way to train)
+  const at = (level, more = {}) => planGoal(fi, { currentXp10: xp10ForLevel(level), targetXp10: xp10ForLevel(level + 5), useBank: false, ...more });
+  // nothing picked: the most XP a catch at your level, quest fish and the big net's aside
+  const picks = [];
+  for (let l = 1; l <= 94; l++) { const id = at(l).fill.id; if (picks[picks.length - 1]?.[1] !== id) picks.push([l, id]); }
+  assert.deepEqual(picks, [[1, 'fi_raw_shrimp'], [5, 'fi_raw_sardine'], [10, 'fi_raw_herring'], [15, 'fi_raw_anchovies'], [20, 'fi_raw_trout'], [25, 'fi_raw_pike'],
+    [30, 'fi_raw_salmon'], [35, 'fi_raw_tuna'], [40, 'fi_raw_lobster'], [50, 'fi_raw_swordfish'], [76, 'fi_raw_shark']]);
+  // sharks from 81 to 90: a harpoon, and nothing to buy
+  const toGo = xp10ForLevel(90) - xp10ForLevel(81);
+  const sharks = planGoal(fi, { bank: { feather: 5000, raw_shark: 300 }, useBank: false, currentXp10: xp10ForLevel(81), targetXp10: xp10ForLevel(90) });
+  assert.equal(sharks.fromBank.steps.length, 0, 'fish in the bank give no Fishing XP');
+  assert.deepEqual(sharks.fill.segments, [{ id: 'fi_raw_shark', runs: Math.ceil(toGo / 1100), xp10: Math.ceil(toGo / 1100) * 1100, made: { raw_shark: Math.ceil(toGo / 1100) } }]);
+  assert.deepEqual(sharks.fill.buy, {});
+  // fly fishing: a feather a fish, listed to buy; a trout is worth what it sells for less its feather
+  const gp = { raw_trout: 50, feather: 3, raw_salmon: 120 };
+  const trout = at(20, { fillId: 'fi_raw_trout', priceOf: k => gp[k] ?? null });
+  const n = Math.ceil((xp10ForLevel(25) - xp10ForLevel(20)) / 500);
+  assert.deepEqual(trout.fill.buy, { feather: n });
+  assert.equal(trout.fill.cost, 3 * n);
+  assert.deepEqual([row(trout, 'fi_raw_trout').econ.cost, row(trout, 'fi_raw_trout').econ.value, row(trout, 'fi_raw_trout').econ.net], [3, 50, 47]);
+  assert.deepEqual(row(trout, 'fi_raw_shrimp').econ.inputs, {});
+  // a fish you can't catch yet: the best everyday one at each level on the way
+  const low = planGoal(fi, { currentXp10: 0, targetXp10: xp10ForLevel(32), fillId: 'fi_raw_salmon', useBank: false });
+  assert.deepEqual(low.fill.segments.map(s => [s.id, s.toLevel]), [['fi_raw_shrimp', 5], ['fi_raw_sardine', 10], ['fi_raw_herring', 15], ['fi_raw_anchovies', 20], ['fi_raw_trout', 25], ['fi_raw_pike', 30], ['fi_raw_salmon', undefined]]);
+  const used = id => low.fill.segments.filter(s => s.id === id).reduce((a, s) => a + s.runs, 0);
+  assert.deepEqual(low.fill.buy, { fishing_bait: used('fi_raw_sardine') + used('fi_raw_herring') + used('fi_raw_pike'), feather: used('fi_raw_trout') + used('fi_raw_salmon') });
+  // one you pick is yours, quest fish or not
+  assert.equal(at(70, { fillId: 'fi_tbwt_raw_karambwan' }).fill.id, 'fi_tbwt_raw_karambwan');
+});
+
+// ── Cooking (v2.7) ────────────────────────────────────────────────────────
+// The rows are LostHQ's Cooking calculator, checked against the server's
+// cooking table and scripts when the data is built.
+const ckAll = METHODS.filter(m => m.skill === 'cooking');
+const ck = indexMethods(ckAll);                                // on a range, burnt food counted
+const cook = (...opts) => indexMethods(ckAll, { opts });       // with these choices in use
+const ckPlain = cook('ignore');                                // burnt food left out, like the calculator
+
+test("cooking: LostHQ's five tabs, row for row; the server's XP where they differ (v2.7)", () => {
+  const rows = group => ckAll.filter(m => m.kind === 'xp' && m.group === group).map(m => [m.name, m.level, xpEach(ckPlain, ckPlain.byId.get(m.id)) / 10]);
+  assert.deepEqual(rows('Fish'), [
+    ['Karambwanji', 1, 10], ['Shrimps', 1, 30], ['Anchovies', 1, 30], ['Sardine', 1, 40], ['Cooked karambwan (poorly)', 1, 80], ['Cooked karambwan', 1, 190],
+    ['Herring', 5, 50], ['Mackerel', 10, 60], ['Trout', 15, 70], ['Cod', 18, 75], ['Pike', 20, 80], ['Salmon', 25, 90], ['Cooked slimey eel', 28, 95],
+    ['Tuna', 30, 100], ['Lobster', 40, 120], ['Bass', 43, 130], ['Swordfish', 45, 140], ['Lava eel', 53, 140], ['Shark', 80, 210], ['Sea turtle', 82, 211.3],
+    ['Manta ray', 91, 216.3],                 // (LostHQ: 216.2)
+  ]);
+  assert.deepEqual(rows('Meat'), [
+    ['Cooked meat', 1, 30], ['Cooked meat (rat meat)', 1, 30], ['Cooked meat (bear meat)', 1, 30], ['Cooked chicken', 1, 30], ['Cooked rabbit', 1, 30], ['Ugthanki meat', 1, 40],
+    ['Thin snail meat', 12, 70], ['Lean snail meat', 17, 80], ['Fat snail meat', 22, 95],
+    ['Cooked chompy', 30, 14],                // (LostHQ: 100)
+    ['Wrapped oomlie', 50, 10],               // (the server's own: not on the calculator)
+    ['Cooked oomlie wrap', 50, 30],
+  ]);
+  // a topped pizza is the calculator's whole job: the baking (143) and the topping
+  assert.deepEqual(rows('Pies & pizza'), [
+    ['Redberry pie', 10, 78], ['Meat pie', 20, 110], ['Apple pie', 30, 130], ['Plain pizza', 35, 143], ['Meat pizza', 45, 169], ['Anchovy pizza', 55, 182],
+    ['Pineapple pizza', 65, 188],             // (LostHQ: 195)
+  ]);
+  assert.deepEqual(rows('Gnome'), [['Half baked bowl', 1, 3], ['Half baked crunchy', 1, 3], ['Half baked batta', 1, 3], ['Drunk dragon', 1, 60]]);
+  assert.deepEqual(rows('Other'), [
+    ['Swamp paste', 1, 2], ['Bread', 1, 40], ['Stew', 25, 117], ["Marinated j' bones", 30, 100], ["Marinated j' bones (burnt bones)", 30, 100],
+    ['Jug of wine', 35, 110],                 // (LostHQ: 200)
+    ['Cake', 40, 180], ['Chocolate cake', 50, 210], ['Pitta bread', 58, 40], ['Curry', 60, 280],
+  ]);
+  assert.deepEqual([...new Set(ck.train.map(m => m.group))], ['Fish', 'Meat', 'Pies & pizza', 'Gnome', 'Other']);
+  // the topping and the chocolate are rows of their own XP; the bake before them is planned through
+  assert.deepEqual(['ck_meat_pizza', 'ck_anchovie_pizza', 'ck_pineapple_pizza', 'ck_chocolate_cake'].map(id => ck.byId.get(id).xp), [260, 390, 450, 300]);
+  assert.deepEqual(ckAll.filter(m => m.through).map(m => m.id), ['ck_plain_pizza', 'ck_cake']);
+  assert.deepEqual(ckAll.filter(m => m.feeds).map(m => m.id), ['ck_anchovies', 'ck_cooked_meat', 'ck_cooked_meat_raw_rat_meat', 'ck_cooked_meat_raw_bear_meat', 'ck_wrapped_oomlie', 'ck_plain_pizza', 'ck_cake']);
+  assert.match(ck.byId.get('ck_wrapped_oomlie').note, /Not on LostHQ's calculator/);
+  // every item is known, and each bank item is in one group only
+  for (const m of ckAll) for (const k of [...Object.keys(m.in), ...Object.keys(m.out), ...(m.tools || [])]) assert.ok(ITEMS[k], `${m.id}: ${k}`);
+  const banked = BANK_GROUPS.cooking.flatMap(g => g.items);
+  assert.equal(new Set(banked).size, banked.length);
+  assert.deepEqual(BANK_GROUPS.cooking.map(g => g.name), ['Raw fish', 'Raw meat', 'Pies and bread', 'Pizza and cake', 'Stew, wine and the rest', 'Cooked: fish', 'Cooked: meat', 'Cooked: pies and pizza', 'Cooked: the rest']);
+  assert.deepEqual([ITEMS.tbwt_poorly_cooked_karambwan.name, ITEMS.tbwt_cooked_karambwan.name], ['Cooked karambwan (poorly)', 'Cooked karambwan']);
+});
+
+test('cooking: what a pie, a pizza, a cake, a stew and a wine are made of is planned through (v2.7)', () => {
+  const from = (id, n, more = {}) => expandFrom(ckPlain, id, n, more);
+  function expandFrom(ix, id, n, { bank = {} } = {}) {
+    const plan = planMix(ix, { [id]: n }, { startXp10: xp10ForLevel(99) });
+    return [plan.buy, plan.steps[0].sub || {}];
+  }
+  // a redberry pie: flour and water make the dough, the dough goes in a dish, redberries fill it
+  assert.deepEqual(from('ck_redberry_pie', 10), [{ pot_flour: 10, bucket_water: 10, piedish: 10, redberries: 10 },
+    { ck_uncooked_redberry_pie: 10, ck_pie_shell: 10, ck_pastry_dough: 10 }]);
+  assert.deepEqual(from('ck_meat_pie', 4)[0], { pot_flour: 4, bucket_water: 4, piedish: 4, cooked_meat: 4 }, 'cooked meat is bought, as the calculator has it');
+  assert.deepEqual(from('ck_apple_pie', 4)[0], { pot_flour: 4, bucket_water: 4, piedish: 4, cooking_apple: 4 });
+  assert.deepEqual(from('ck_bread', 7), [{ pot_flour: 7, bucket_water: 7 }, { ck_bread_dough: 7 }]);
+  assert.deepEqual(from('ck_pitta_bread', 7)[0], { pot_flour: 7, bucket_water: 7 });
+  // a pizza: a base, a tomato, cheese; the topping goes on once it's baked, and the baking counts
+  assert.deepEqual(from('ck_plain_pizza', 5), [{ pot_flour: 5, bucket_water: 5, tomato: 5, cheese: 5 }, { ck_uncooked_pizza: 5, ck_incomplete_pizza: 5, ck_pizza_base: 5 }]);
+  assert.deepEqual(from('ck_meat_pizza', 5), [{ pot_flour: 5, bucket_water: 5, tomato: 5, cheese: 5, cooked_meat: 5 },
+    { ck_plain_pizza: 5, ck_uncooked_pizza: 5, ck_incomplete_pizza: 5, ck_pizza_base: 5 }]);
+  assert.equal(planMix(ckPlain, { ck_meat_pizza: 5 }, { startXp10: xp10ForLevel(99) }).xp10, 5 * 1690);
+  assert.deepEqual(from('ck_pineapple_pizza', 2)[0], { pot_flour: 2, bucket_water: 2, tomato: 2, cheese: 2, pineapple_ring: 2 });
+  // a cake (its tin comes back), and chocolate on top
+  assert.deepEqual(from('ck_cake', 3), [{ pot_flour: 3, egg: 3, bucket_milk: 3 }, { ck_uncooked_cake: 3 }]);
+  assert.deepEqual(ck.byId.get('ck_cake').tools, ['cake_tin']);
+  assert.deepEqual(from('ck_chocolate_cake', 3)[0], { pot_flour: 3, egg: 3, bucket_milk: 3, chocolate_bar: 3 });
+  // stew, curry, wine, swamp paste, a gnome bowl
+  assert.deepEqual(from('ck_stew', 6)[0], { bowl_water: 6, potato: 6, cooked_meat: 6 });
+  assert.deepEqual(from('ck_curry', 6)[0], { bowl_water: 6, potato: 6, cooked_meat: 6, spicespot: 6 });
+  assert.deepEqual(from('ck_jug_wine', 6)[0], { grapes: 6, jug_water: 6 });
+  assert.deepEqual(from('ck_swamppaste', 6)[0], { swamp_tar: 6, pot_flour: 6 });
+  assert.deepEqual(from('ck_half_baked_bowl', 6)[0], { gianne_dough: 6 });
+  assert.deepEqual(ck.byId.get('ck_raw_gnomebowl').tools, ['gnomebowl_mould']);
+  // a fish is one raw thing
+  assert.deepEqual(from('ck_shark', 6), [{ raw_shark: 6 }, {}]);
+
+  // from a bank: what's part-made counts, and a raw thing that goes into another is cooked on the way, its XP counted
+  const bank = { uncooked_pizza: 20, pizza_base: 5, tomato: 5, cheese: 5, raw_beef: 30, piedish: 12, pot_flour: 12, bucket_water: 12 };
+  const fb = planGoal(ckPlain, { bank, currentXp10: xp10ForLevel(70), targetXp10: xp10ForLevel(80) }).fromBank;
+  assert.deepEqual(fb.steps.map(s => [s.id, s.runs, s.sub]), [
+    ['ck_plain_pizza', 25, { ck_incomplete_pizza: 5, ck_uncooked_pizza: 5 }],
+    ['ck_meat_pie', 12, { ck_pastry_dough: 12, ck_pie_shell: 12, ck_cooked_meat: 12, ck_uncooked_meat_pie: 12 }],
+    ['ck_cooked_meat', 18, {}],
+    ['ck_meat_pizza', 18, {}],
+  ]);
+  assert.equal(fb.xp10, 25 * 1430 + 12 * (1100 + 300) + 18 * 300 + 18 * 260);
+  assert.deepEqual(fb.leftover.toObject(), { plain_pizza: 7, meat_pie: 12, meat_pizza: 18 });
+});
+
+test('cooking: food burns by the server\'s own chances: by level, on a range or a fire, with cooking gauntlets (v2.7)', () => {
+  // the roll the server makes: so many tries in 256 work at a level
+  assert.equal(WHOLE, 256);
+  assert.equal(chanceUnits([38, 332], 40), 22 + 132 + 1);         // a lobster at 40: floor(38*59/98) + floor(332*39/98) + 1
+  assert.equal(chanceUnits([38, 332], 73), 254);
+  assert.equal(chanceUnits([38, 332], 74), 256);
+  assert.equal(chanceUnits([500, 500], 1), 256, 'never more than every time');
+  assert.equal(chanceUnits([1, 232], 120), chanceUnits([1, 232], 99), 'a level above 99 counts as 99, as on the server');
+  // the levels food stops burning at: the ones players know
+  const stops = (ix, id) => { const m = ix.byId.get(id); return m.tries ? sureLevel(ix.byId.get(m.tries).roll, m.level) : m.level; };
+  assert.deepEqual(['ck_shrimp', 'ck_sardine', 'ck_herring', 'ck_trout', 'ck_pike', 'ck_salmon', 'ck_tuna', 'ck_lobster', 'ck_bass', 'ck_swordfish', 'ck_shark'].map(id => stops(ck, id)),
+    [34, 38, 41, 49, 54, 58, 63, 74, 80, 81, null], 'on a range; a shark never stops');
+  assert.deepEqual(['ck_lobster', 'ck_swordfish', 'ck_shark'].map(id => stops(cook('gauntlets'), id)), [64, 81, 94]);
+  assert.deepEqual(['ck_swordfish', 'ck_shark', 'ck_cod'].map(id => stops(cook('fire'), id)), [86, null, 51]);
+  assert.equal(stops(ck, 'ck_cod'), 49);
+  assert.equal(stops(cook('lumbridge'), 'ck_shrimp'), 31);
+  // which chance applies: gauntlets before the Lumbridge range, before a fire or a range's own
+  const roll = (ix, id) => ix.byId.get(ix.byId.get(id).tries)?.roll;
+  assert.deepEqual(roll(ck, 'ck_shark'), [1, 232]);
+  assert.deepEqual(roll(cook('fire'), 'ck_shark'), [1, 202]);
+  assert.deepEqual(roll(cook('gauntlets'), 'ck_shark'), [15, 270]);
+  assert.deepEqual(roll(cook('gauntlets', 'fire'), 'ck_shark'), [15, 270]);
+  assert.deepEqual(roll(cook('lumbridge'), 'ck_shrimp'), [138, 532]);
+  assert.deepEqual(roll(cook('lumbridge'), 'ck_shark'), [1, 232], 'Lumbridge\'s range is a range like any other for a shark');
+  assert.deepEqual(roll(cook('fire'), 'ck_redberry_pie'), [98, 452], 'a pie needs a range whatever you pick');
+  assert.equal(roll(cook('gauntlets', 'fire', 'ignore'), 'ck_shark'), undefined, 'left out: nothing burns');
+  assert.equal(cook('ignore').byLevel, false);
+  assert.equal(ck.byLevel, true);
+  // what can't burn has no try: a lava eel, pitta bread, an oomlie in its leaf, swamp paste, the topping of a pizza
+  for (const id of ['ck_lava_eel', 'ck_pitta_bread', 'ck_cooked_oomlie', 'ck_swamppaste', 'ck_meat_pizza', 'ck_drunk_dragon']) assert.equal(ck.byId.get(id).tries, undefined, id);
+  assert.deepEqual(ckAll.filter(chanceOf).length, 42);
+  // the choices a goal has, and the order they apply in: gauntlets, then where you cook, then leaving it out
+  assert.deepEqual(CHOICES.cooking.map(c => [c.id, c.options?.map(o => o.id) ?? null]), [['heat', ['range', 'lumbridge', 'fire']], ['gauntlets', null], ['burnt', ['count', 'ignore']]]);
+  assert.deepEqual(choicesInUse({ skill: 'cooking', opts: { heat: 'fire', gauntlets: true, burnt: 'ignore' } }), ['gauntlets', 'fire', 'ignore']);
+  assert.deepEqual(choicesInUse({ skill: 'cooking', opts: { heat: 'range', burnt: 'count' } }), [], 'the first of each list is how it starts');
+  assert.match(CHOICES.cooking[1].tip, /Lobsters stop burning at level 64 instead of 74; sharks stop burning at level 94 \(without, they never stop burning\)/);
+});
+
+test('cooking: a plan counts what burns, a level at a time: less XP from a bank, more raw food to collect (v2.7)', () => {
+  // the plain sum to check against: what R raw things come to, level by level
+  const expected = (chance, xpEachOne, R, x0) => {
+    let xp = x0, left = R, done = 0;
+    while (left > 0) {
+      const L = levelForXp10(xp), p = chanceUnits(chance, L) / WHOLE;
+      const n = Math.min(left, L >= 99 ? left : Math.max(1, Math.ceil((xp10ForLevel(L + 1) - xp) / (p * xpEachOne))));
+      done += n * p; xp += n * p * xpEachOne; left -= n;
+    }
+    return done;
+  };
+  const at80 = { currentXp10: xp10ForLevel(80), targetXp10: xp10ForLevel(99), fillGroup: 'Fish' };
+  const sharks = (ix, more = {}) => planGoal(ix, { ...at80, bank: { raw_shark: 2000 }, ...more });
+  // 2,000 raw sharks at level 80 on a range: about 73 in 100 cook at first, a few more by the end
+  const range = sharks(ck);
+  // (every one of them goes on the range: the last raw shark too, though on average it's less than one more cooked)
+  assert.deepEqual(range.fromBank.steps.map(s => [s.id, s.runs, s.sub]), [['ck_shark', 1473, { 'ck_shark~try': 2000 }]]);
+  assert.ok(Math.abs(1473 - expected([1, 232], 2100, 2000, xp10ForLevel(80))) < 2);
+  assert.equal(range.fromBank.xp10, 1473 * 2100);
+  assert.deepEqual(range.fromBank.used, { raw_shark: 2000 }, 'none stays behind raw');
+  assert.equal(range.fromBank.leftover.have('raw_shark'), 0);
+  assert.equal(row(range, 'ck_shark').have, Math.floor((2000 * chanceUnits([1, 232], 80)) / WHOLE), 'its row: at your level now');
+  // with cooking gauntlets more of them cook; on a fire fewer; left out, all of them, like the calculator
+  assert.equal(sharks(cook('gauntlets')).fromBank.steps[0].runs, 1728);
+  assert.equal(sharks(cook('fire')).fromBank.steps[0].runs, 1276);
+  assert.deepEqual(sharks(ckPlain).fromBank.steps.map(s => [s.id, s.runs, s.sub]), [['ck_shark', 2000, {}]]);
+  // from level 94 with gauntlets none burn: the same plan as with burning left out
+  const top = { ...at80, bank: { raw_shark: 2000 }, currentXp10: xp10ForLevel(94) };
+  assert.equal(planGoal(cook('gauntlets'), top).fromBank.steps[0].runs, 2000);
+  assert.deepEqual(planGoal(cook('gauntlets'), top).fill.buy, planGoal(ckPlain, top).fill.buy);
+
+  // (400 raw lobsters with gauntlets from 112,045 XP: 399 of them make the 340th lobster, and the 400th is cooked all the same)
+  const gloved = planGoal(cook('gauntlets'), { bank: { raw_lobster: 400 }, currentXp10: 1120450, targetXp10: xp10ForLevel(60), fillGroup: 'Fish' });
+  assert.deepEqual(gloved.fromBank.steps.map(s => [s.id, s.runs, s.sub]), [['ck_lobster', 340, { 'ck_lobster~try': 400 }]]);
+  assert.ok(Math.abs(340 - expected([55, 368], 1200, 400, 1120450)) < 2);
+  assert.equal(gloved.fill.segments[0].sub['ck_lobster~try'], gloved.fill.buy.raw_lobster, 'so the rest of the goal cooks what it buys, no more');
+  // what's made for a pie on the way is finished the same: 40 pies' worth of everything is 40 pies in the oven
+  const meatPies = planGoal(ck, { bank: { raw_beef: 40, pot_flour: 40, bucket_water: 40, piedish: 40 }, currentXp10: 1120450, targetXp10: xp10ForLevel(60), fillGroup: 'Fish' }).fromBank;
+  assert.deepEqual(meatPies.steps.map(s => [s.id, s.sub['ck_meat_pie~try'], s.sub.ck_uncooked_meat_pie]), [['ck_meat_pie', 40, 40]]);
+  assert.ok(meatPies.steps[0].runs < 40 && meatPies.steps[0].runs >= 36, `${meatPies.steps[0].runs} of the 40 come out`);
+  assert.deepEqual(['raw_beef', 'pot_flour', 'bucket_water', 'piedish'].map(k => meatPies.leftover.have(k)), [0, 0, 0, 0]);
+
+  // the rest of the goal: the same number cooked as the calculator says, and the raw sharks that takes
+  const rest = range.fill;
+  const cooked = rest.segments[0].runs;
+  assert.equal(cooked, Math.ceil(range.remaining / 2100));
+  assert.equal(rest.segments[0].sub['ck_shark~try'], rest.buy.raw_shark, 'every one bought is cooked');
+  assert.ok(rest.buy.raw_shark > cooked * 1.1 && rest.buy.raw_shark < cooked * (WHOLE / chanceUnits([1, 232], 81)), 'more than are cooked; fewer than if you stayed level 81');
+  assert.equal(row(range, 'ck_shark').toMake, cooked);
+  assert.deepEqual(row(range, 'ck_shark').collect, rest.buy);
+  assert.equal(row(range, 'ck_shark').needed, row(sharks(ckPlain), 'ck_shark').needed, 'to goal is in sharks cooked');
+  // a shark costs the raw ones it takes at your level: 256 in 188 at level 80
+  const e = methodEconomics(ck, ck.byId.get('ck_shark'), k => ({ raw_shark: 1000, shark: 1200 })[k] ?? null, { level: 80 });
+  assert.ok(Math.abs(e.inputs.raw_shark - WHOLE / 188) < 1e-6 && e.net < 0, `${e.inputs.raw_shark} raw sharks a shark`);
+  assert.ok(Math.abs(e.cost - (1000 * WHOLE) / 188) < 0.01 && Math.abs(e.net - (1200 - (1000 * WHOLE) / 188)) < 0.01, 'costed by that share exactly, not by a whole try more');
+  assert.deepEqual(methodEconomics(ckPlain, ckPlain.byId.get('ck_shark'), k => ({ raw_shark: 1000, shark: 1200 })[k] ?? null, { level: 80 }).inputs, { raw_shark: 1 });
+
+  // lobsters from 40: they stop burning at 74, so the further you go the fewer burn
+  const lob = planGoal(ck, { bank: { raw_lobster: 5000 }, currentXp10: xp10ForLevel(40), targetXp10: xp10ForLevel(99), fillGroup: 'Fish' });
+  assert.equal(lob.fromBank.steps.length, 1, 'one line, though it was made a level at a time');
+  assert.ok(Math.abs(lob.fromBank.steps[0].runs - expected([38, 332], 1200, 5000, xp10ForLevel(40))) < 2);
+  assert.equal(lob.fromBank.steps[0].sub['ck_lobster~try'], 5000);
+  // something else first can save sharks: 500 lobsters take you up a level before the sharks go on
+  const both = planGoal(ck, { ...at80, bank: { raw_shark: 2000, raw_lobster: 500 } }).fromBank;
+  assert.deepEqual(both.steps.map(s => s.id), ['ck_lobster', 'ck_shark']);
+  assert.ok(both.steps[1].runs > 1473);
+
+  // a pie can burn too: the dough, the dish and the berries of the ones that do are counted
+  const pies = planMix(ck, { ck_redberry_pie: 100 }, { startXp10: xp10ForLevel(10) });
+  const tries = pies.steps[0].sub['ck_redberry_pie~try'];
+  assert.ok(tries > 100, `${tries} tries for 100 pies`);
+  assert.deepEqual(pies.buy, { pot_flour: tries, bucket_water: tries, piedish: tries, redberries: tries });
+  assert.equal(pies.xp10, 100 * 780, 'XP is for the ones that come out');
+  // a topped pizza: the bake can burn, the topping can't
+  const pizza = planMix(ck, { ck_meat_pizza: 100 }, { startXp10: xp10ForLevel(45) });
+  assert.equal(pizza.buy.cooked_meat, 100);
+  assert.ok(pizza.buy.tomato > 100 && pizza.buy.tomato === pizza.steps[0].sub['ck_plain_pizza~try']);
+  assert.equal(pizza.xp10, 100 * 1690);
+});
+
+test('cooking: nothing picked, a plan finishes with an everyday fish; quest food is yours to pick (v2.7)', () => {
+  const at = (level, more = {}) => planGoal(ck, { currentXp10: xp10ForLevel(level), targetXp10: xp10ForLevel(level) + 1000, fillGroup: 'Fish', ...more });
+  const picks = [];
+  for (let l = 1; l <= 99; l++) { const id = at(l).fill.id; if (picks[picks.length - 1]?.[1] !== id) picks.push([l, id]); }
+  assert.deepEqual(picks, [[1, 'ck_sardine'], [5, 'ck_herring'], [10, 'ck_mackerel'], [15, 'ck_trout'], [18, 'ck_cod'], [20, 'ck_pike'], [25, 'ck_salmon'], [30, 'ck_tuna'],
+    [40, 'ck_lobster'], [43, 'ck_bass'], [45, 'ck_swordfish'], [80, 'ck_shark']]);
+  assert.deepEqual(ck.train.filter(m => m.aside).map(m => m.id), ['ck_tbwt_cooked_karambwanji', 'ck_tbwt_poorly_cooked_karambwan', 'ck_tbwt_cooked_karambwan', 'ck_mort_slimey_eel_cooked', 'ck_lava_eel', 'ck_seaturtle', 'ck_mantaray']);
+  assert.equal(at(90, { fillId: 'ck_tbwt_cooked_karambwan' }).fill.id, 'ck_tbwt_cooked_karambwan');
+  // and what your bank holds is cooked whatever it is: a karambwan, thoroughly (190 XP) before poorly (80)
+  assert.deepEqual(at(90, { bank: { tbwt_raw_karambwan: 50 } }).fromBank.steps.map(s => s.id), ['ck_tbwt_cooked_karambwan']);
+  // a curry is the most XP there is; the app's fillGroup keeps a plan to fish all the same
+  assert.equal(planGoal(ck, { currentXp10: xp10ForLevel(70), targetXp10: xp10ForLevel(71) }).fill.id, 'ck_curry');
+});
+
+test('the icon sheets are named with a stamp of their own contents, so positions and picture go together (v2.7)', () => {
+  const stamp = file => createHash('sha1').update(readFileSync(new URL(`./${file}`, import.meta.url))).digest('hex').slice(0, 10);
+  assert.equal(ICON_SHEET, `items.png?v=${stamp('items.png')}`);
+  assert.equal(BANK_ICON_SHEET, `bankicons.png?v=${stamp('bankicons.png')}`);
+});
+
+test('crafting: an amulet of glory with no charges left is an item of its own (v2.7)', () => {
+  assert.equal(ITEMS.amulet_of_glory.name, 'Amulet of glory (uncharged)');
+  assert.equal(ITEMS.amulet_of_glory.id, 1704);
+  const group = BANK_GROUPS.crafting.find(g => g.name === 'Made: enchanted jewellery').items;
+  assert.deepEqual(group.slice(-2), ['amulet_of_glory', 'amulet_of_glory_4'], 'beside the charged one');
+  assert.ok(!METHODS.some(m => m.in.amulet_of_glory || m.out.amulet_of_glory), 'banked and priced, not made: the row makes the charged one');
+  // it's worth its own price in a bank
+  assert.deepEqual(bankValue({ amulet_of_glory: 7, amulet_of_glory_4: 19 }, k => ({ amulet_of_glory: 100_000, amulet_of_glory_4: 110_000 })[k] ?? null), { total: 7 * 100_000 + 19 * 110_000, missing: [] });
 });
