@@ -14,6 +14,12 @@
 //            used, but never put on a shopping list
 // Any method with xp > 0 can be trained with. A method with no "in" at all is
 // gathering (Woodcutting): the bank has nothing to give it.
+// feeds: an xp method whose product goes into another one (Crafting: a cut gem
+// for a ring, molten glass for a vial). When a plan needs that product it stands
+// in for a source: made on the way from what's in the bank, with its XP counted,
+// and never put on a shopping list. Unticking it stops that too.
+// pays: inputs that are a fee (the tanner's coins). They're never taken from the
+// bank and never hold a plan back; they're always a cost, at 1 gp each.
 
 import { XP_TABLE, MAX_LEVEL } from './skills.js';
 
@@ -44,6 +50,14 @@ export function goalTargetXp10(goal, { rankXp10 = null } = {}) {
 export const rankForTop = (pct, total) => Math.max(1, Math.floor((total * pct) / 100));
 
 // ── Stock (a bank you can take from) ──────────────────────────────────────
+// Amounts are whole numbers, except thread: a reel lasts five items, so an item
+// takes 0.2 of one. These keep such sums exact; whole numbers pass through as
+// they are.
+const EPS = 1e-9;
+const tidy = n => (Number.isInteger(n) ? n : Math.round(n * 1e6) / 1e6);
+const amount = (runs, q) => (Number.isInteger(q) ? runs * q : tidy(runs * q));
+const fits = (n, q) => (Number.isInteger(q) ? Math.floor(n / q) : Math.floor(n / q + EPS));
+
 export class Stock {
   constructor(items = {}) {
     this.q = new Map();
@@ -52,10 +66,10 @@ export class Stock {
   have(item) { return this.q.get(item) || 0; }
   take(item, n) {
     const t = Math.min(this.have(item), n);
-    if (t > 0) this.q.set(item, this.have(item) - t);
+    if (t > 0) this.q.set(item, tidy(this.have(item) - t));
     return t;
   }
-  add(item, n) { if (n > 0) this.q.set(item, this.have(item) + n); }
+  add(item, n) { if (n > 0) this.q.set(item, tidy(this.have(item) + n)); }
   clone() { const s = new Stock(); s.q = new Map(this.q); return s; }
   toObject() { return Object.fromEntries([...this.q].filter(([, v]) => v > 0)); }
 }
@@ -92,26 +106,36 @@ export function madeOver(m, runs, startXp10) {
 // Gathering takes nothing in (chopping a tree), so it never comes out of a bank.
 export const gathers = m => Object.keys(m.in).length === 0;
 
-export function indexMethods(methods) {
+// at: a place whose prices to use where a step has a choice (the Canifis tanner).
+export function indexMethods(methods, { at = null } = {}) {
+  if (at) methods = methods.map(m => (m.at?.[at] ? { ...m, in: { ...m.in, ...m.at[at] } } : m));
   const byId = new Map(methods.map(m => [m.id, m]));
-  const producers = new Map();        // item -> prep/source methods that make it
+  const producers = new Map();        // item -> prep/source methods that make it, and xp ones that feed
   for (const m of methods) {
-    if (m.kind === 'xp') continue;
+    if (m.kind === 'xp' && !m.feeds) continue;
     for (const item of Object.keys(m.out)) {
       if (!producers.has(item)) producers.set(item, []);
       producers.get(item).push(m);
     }
   }
   const train = methods.filter(m => m.xp > 0);
-  return { methods, byId, producers, train };
+  const fees = new Set(methods.flatMap(m => m.pays || []));
+  return { methods, byId, producers, train, feeds: methods.some(m => m.feeds), fees };
 }
+// A fee is worth what it is: a coin is 1 gp.
+const priced = (ix, priceOf) => (ix.fees.size ? item => (ix.fees.has(item) ? 1 : priceOf(item)) : priceOf);
+const feesOnly = (ix, items) => Object.fromEntries(Object.entries(items).filter(([item]) => ix.fees.has(item)));
 
-// ctx: { level, kinds: Set of producer kinds allowed, unlimited: Set of items }
-const allowed = (p, ctx) => ctx.kinds.has(p.kind) && p.level <= ctx.level;
+// ctx: { level, kinds: Set of producer kinds allowed, unlimited: Set of items,
+//        excluded: Set of method ids you've unticked }
+// A feeding method counts as a source, unless it's unticked.
+const producerKind = p => (p.feeds ? 'source' : p.kind);
+const unticked = (p, ctx) => !!p.feeds && !!ctx.excluded && ctx.excluded.has(p.id);
+const allowed = (p, ctx) => ctx.kinds.has(producerKind(p)) && p.level <= ctx.level && !unticked(p, ctx);
 
 // How many of `item` the stock can provide, making more with allowed producers.
 function avail(ix, item, stock, ctx, depth = 0) {
-  if (ctx.unlimited.has(item)) return INF;
+  if (ctx.unlimited.has(item) || ix.fees.has(item)) return INF;
   let n = stock.have(item);
   if (depth > 6) return n;
   for (const p of ix.producers.get(item) || []) {
@@ -125,10 +149,32 @@ function avail(ix, item, stock, ctx, depth = 0) {
 export function maxRuns(ix, m, stock, ctx, depth = 0) {
   let runs = INF;
   for (const [item, q] of Object.entries(m.in)) {
-    runs = Math.min(runs, Math.floor(avail(ix, item, stock, ctx, depth) / q));
+    runs = Math.min(runs, fits(avail(ix, item, stock, ctx, depth), q));
     if (runs === 0) return 0;
   }
   return runs;
+}
+
+// Rounding up: how many of m its most plentiful ingredient would make, if the
+// others were collected to match. What's made on the way from the bank counts
+// rounded up too (sources, and methods that feed): 9 key teeth and 4 loops are
+// 9 crystal keys' worth. Prep steps count as they are.
+export function mostRuns(ix, m, stock, ctx, depth = 0) {
+  let top = 0;
+  for (const [item, q] of Object.entries(m.in)) {
+    const n = fits(availMost(ix, item, stock, ctx, depth), q);
+    if (Number.isFinite(n) && n > top) top = n;
+  }
+  return top;
+}
+function availMost(ix, item, stock, ctx, depth = 0) {
+  if (ctx.unlimited.has(item) || ix.fees.has(item)) return INF;
+  let n = stock.have(item);
+  if (depth > 6) return n;
+  for (const p of ix.producers.get(item) || []) {
+    if (allowed(p, ctx)) n += (producerKind(p) === 'source' ? mostRuns : maxRuns)(ix, p, stock, ctx, depth + 1) * p.out[item];
+  }
+  return n;
 }
 
 // Does m `runs` times, taking inputs from the stock and making what's missing
@@ -137,16 +183,18 @@ export function maxRuns(ix, m, stock, ctx, depth = 0) {
 function perform(ix, m, runs, stock, ctx, log, depth = 0) {
   let xp = 0;
   for (const [item, q] of Object.entries(m.in)) {
-    let missing = runs * q - stock.take(item, runs * q);
+    const want = amount(runs, q);
+    if (ix.fees.has(item)) { log.assumed[item] = (log.assumed[item] || 0) + want; continue; }     // paid, not taken from the bank
+    let missing = tidy(want - stock.take(item, want));
     for (const p of ix.producers.get(item) || []) {
-      if (missing <= 0 || depth > 6) break;
+      if (missing <= EPS || depth > 6) break;
       if (!allowed(p, ctx)) continue;
       const r = Math.min(Math.ceil(missing / p.out[item]), maxRuns(ix, p, stock, ctx, depth + 1));
       if (r <= 0) continue;
       xp += perform(ix, p, r, stock, ctx, log, depth + 1);
-      missing -= stock.take(item, missing);
+      missing = tidy(missing - stock.take(item, missing));
     }
-    if (missing > 0) {
+    if (missing > EPS) {
       if (!ctx.unlimited.has(item)) throw new Error(`perform: short of ${item}`);
       log.assumed[item] = (log.assumed[item] || 0) + missing;
     }
@@ -157,7 +205,10 @@ function perform(ix, m, runs, stock, ctx, log, depth = 0) {
 }
 
 // What doing m `runs` times needs beyond the stock, planned down to things you
-// can buy or gather. Prep steps are expanded; sources only use what's there.
+// can buy or gather. Prep steps are expanded; sources (and methods that feed)
+// only use what's there. With ctx.most they're rounded up instead: made as many
+// times as their most plentiful ingredient allows, the rest of what they take
+// bought (5 loops for the 9 teeth). Fees are always bought.
 // Mutates stock. Returns { buy: {item: n}, steps: {id: runs}, xp }.
 export function expand(ix, m, runs, stock, ctx) {
   const out = { buy: {}, steps: {}, xp: 0 };
@@ -165,21 +216,23 @@ export function expand(ix, m, runs, stock, ctx) {
     out.steps[method.id] = (out.steps[method.id] || 0) + r;
     out.xp += r * method.xp;
     for (const [item, q] of Object.entries(method.in)) {
-      let missing = r * q - stock.take(item, r * q);
+      const want = amount(r, q);
+      if (ix.fees.has(item)) { out.buy[item] = tidy((out.buy[item] || 0) + want); continue; }
+      let missing = tidy(want - stock.take(item, want));
       const makers = ix.producers.get(item) || [];
       for (const p of makers) {
-        if (missing <= 0 || depth > 6 || p.kind !== 'source' || p.level > ctx.level) continue;
-        const done = Math.min(Math.ceil(missing / p.out[item]), maxRuns(ix, p, stock, { ...ctx, kinds: BANK_KINDS }, depth + 1));
+        if (missing <= EPS || depth > 6 || producerKind(p) !== 'source' || p.level > ctx.level || unticked(p, ctx)) continue;
+        const done = Math.min(Math.ceil(missing / p.out[item]), (ctx.most ? mostRuns : maxRuns)(ix, p, stock, { ...ctx, kinds: BANK_KINDS }, depth + 1));
         if (done <= 0) continue;
         go(p, done, depth + 1);
-        missing -= stock.take(item, missing);
+        missing = tidy(missing - stock.take(item, missing));
       }
       const prep = depth <= 6 && makers.find(p => p.kind === 'prep');
-      if (missing > 0 && prep) {
+      if (missing > EPS && prep) {
         go(prep, Math.ceil(missing / prep.out[item]), depth + 1);
-        missing -= stock.take(item, missing);
+        missing = tidy(missing - stock.take(item, missing));
       }
-      if (missing > 0) out.buy[item] = (out.buy[item] || 0) + missing;
+      if (missing > EPS) out.buy[item] = tidy((out.buy[item] || 0) + missing);
     }
     for (const [item, q] of Object.entries(outAt(method, ctx.level))) stock.add(item, r * q);
   };
@@ -199,74 +252,141 @@ export function planBank(ix, opts) {
   // Views redraw as prices arrive; the bank plan doesn't depend on prices, so
   // the last few are kept. (Callers only read the result.)
   const key = JSON.stringify([opts.bank || {}, opts.startXp10, opts.targetXp10 ?? null,
-    [...(opts.excluded || [])].sort(), [...(opts.unlimited || [])].sort(), opts.prefer || null]);
+    [...(opts.excluded || [])].sort(), [...(opts.unlimited || [])].sort(), opts.prefer || null, opts.roundUp || null]);
   let memo = BANK_MEMO.get(ix);
   if (!memo) BANK_MEMO.set(ix, memo = new Map());
   if (memo.has(key)) return memo.get(key);
 
-  let best = bankRun(ix, opts);
-  if (!opts.prefer) {
+  let best = bankRun(ix, opts), led = opts.prefer || null;
+  if (!opts.prefer && !opts.roundUp) {
     const stock = new Stock(opts.bank || {});
-    const ctx = { level: MAX_LEVEL, kinds: BANK_KINDS, unlimited: opts.unlimited || new Set() };
     const excluded = opts.excluded || new Set();
+    const ctx = { level: MAX_LEVEL, kinds: BANK_KINDS, unlimited: opts.unlimited || new Set(), excluded };
     // Most XP per action first, so a tie keeps the plan that reads naturally.
     const leads = [...ix.train].sort((a, b) => b.xp - a.xp || a.level - b.level);
     for (const m of leads) {
       if (excluded.has(m.id) || gathers(m) || !maxRuns(ix, m, stock, ctx)) continue;
       const run = bankRun(ix, { ...opts, prefer: m.id });
-      if (run.xp10 > best.xp10) best = run;
+      if (run.xp10 > best.xp10) { best = run; led = m.id; }
     }
   }
+  LED.set(best, led);
   memo.set(key, best);
   if (memo.size > 40) memo.delete(memo.keys().next().value);
   return best;
 }
 const BANK_MEMO = new WeakMap();
+const LED = new WeakMap();                    // a bank plan -> the method that went first in it, if one did
 
 // One way through the bank: the pick first whenever it can be made, otherwise
 // best XP per action. Stops to re-think whenever a better method unlocks.
-function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new Set(), unlimited = new Set(), prefer = null }) {
+//
+// roundUp (Round up my supplies): { first: the method you picked to train with,
+// if you did, also: [method ids] }. Rounding a method up means making it as many
+// times as its most plentiful ingredient allows, and collecting whatever else
+// that takes (it's listed). The one you picked is rounded up from the start: it
+// goes first whenever it can, and now it can. The rest of the bank is used as
+// usual; then what that leaves is rounded up: first with the methods the plan
+// made (and those in also), then with anything else that's no more than one
+// ingredient short, best XP first. After that, the rest as usual. Steps after
+// the bank's own are marked rounded.
+function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new Set(), unlimited = new Set(), prefer = null, roundUp = null }) {
   const stock = new Stock(bank);
   const log = { steps: {}, assumed: {} };
   const steps = [];                           // [{ id, runs, xp10, sub: {id: runs}, made: {item: n} }] in order
   let xp = startXp10;
   let goalReached = null;                     // { step index, runs into that step }
-  const usable = ix.train.filter(m => !excluded.has(m.id) && !gathers(m));
-  const pick = usable.find(m => m.id === prefer) || null;
+  const all = ix.train.filter(m => !excluded.has(m.id) && !gathers(m));
+  // Rounding up, in stages: 0 the bank as usual, 1 rounding up what that made,
+  // 2 rounding up what else is an ingredient short, 3 as usual again.
+  let stage = 0, pool = null;                 // pool: the methods being rounded up in stages 1 and 2
+  const first = (roundUp && all.find(m => m.id === roundUp.first)) || null;
+  const rounding = m => stage === 1 || stage === 2 || m === first;
+  const collected = {};
+  const most = (m, c) => mostRuns(ix, m, stock, c);
+  const can = (m, c) => (rounding(m) ? most(m, c) : maxRuns(ix, m, stock, c));
+  const nextStage = () => {
+    stage++;
+    const mine = new Set([...(roundUp.also || []), ...steps.map(s => s.id)]);
+    if (stage === 1) pool = all.filter(m => mine.has(m.id));
+    if (stage === 2) {
+      // Whatever level it takes: it only gets made once you're there.
+      const any = { level: MAX_LEVEL, kinds: BANK_KINDS, unlimited, excluded };
+      const short = m => Object.entries(m.in).filter(([item, q]) => fits(availMost(ix, item, stock, any), q) === 0).length;
+      pool = all.filter(m => !mine.has(m.id) && short(m) <= 1 && most(m, any) > 0);
+    }
+  };
+  // Makes m n times; rounding up, what's short for that is collected first.
+  // Returns [XP, how many were made].
+  const make = (m, n, stk, c, lg, got) => {
+    if (rounding(m)) {
+      const short = without(expand(ix, m, n, stk.clone(), { level: c.level, unlimited, excluded, most: true }).buy, [...unlimited, ...ix.fees]);
+      for (const [item, k] of Object.entries(short)) { stk.add(item, k); if (got) got[item] = tidy((got[item] || 0) + k); }
+      n = Math.min(n, maxRuns(ix, m, stk, c));      // (a step on the way that needs a higher level: none in the data)
+      if (n <= 0) return [0, 0];
+    }
+    return [perform(ix, m, n, stk, c, lg), n];
+  };
 
   for (let guard = 0; guard < 400; guard++) {
     const level = levelForXp10(xp);
-    const ctx = { level, kinds: BANK_KINDS, unlimited };
+    const ctx = { level, kinds: BANK_KINDS, unlimited, excluded };
+    const usable = stage === 1 || stage === 2 ? pool : all;
+    const pick = usable.find(m => m.id === prefer) || null;
     let best = null, bestRuns = 0;
     if (pick && pick.xp > 0 && pick.level <= level) {
-      const r = maxRuns(ix, pick, stock, ctx);
+      const r = can(pick, ctx);
       if (r > 0) { best = pick; bestRuns = r; }
     }
     if (!best) {
       for (const m of usable) {
         if (m.level > level) continue;
         if (best && m.xp < best.xp) continue;
-        const r = maxRuns(ix, m, stock, ctx);
+        const r = can(m, ctx);
         if (r > 0 && (!best || m.xp > best.xp || (m.xp === best.xp && m.level < best.level))) { best = m; bestRuns = r; }
       }
     }
-    if (!best) break;
+    if (!best) {
+      if (!roundUp || stage === 3) break;
+      nextStage();
+      continue;
+    }
 
     // A better method (or the one you picked) that unlocks later and could be made
     // from this bank: only go as far as its level, then look again.
     let runs = bestRuns;
     if (best !== pick) {
       const better = usable.filter(m => m.level > level && (m.xp > best.xp || m === pick) &&
-        maxRuns(ix, m, stock, { level: m.level, kinds: BANK_KINDS, unlimited }) > 0);
+        can(m, { level: m.level, kinds: BANK_KINDS, unlimited, excluded }) > 0);
       if (better.length) {
         const unlock = Math.min(...better.map(m => m.level));
-        runs = Math.max(1, Math.min(runs, Math.ceil((xp10ForLevel(unlock) - xp) / best.xp)));
+        const toUnlock = xp10ForLevel(unlock) - xp;
+        runs = Math.max(1, Math.min(runs, Math.ceil(toUnlock / best.xp)));
+        // What's made on the way (gems cut for the rings) gives XP too, so it
+        // can take fewer: the fewest that get there.
+        if (ix.feeds && runs > 1) {
+          const xpOf = n => make(best, n, stock.clone(), ctx, { steps: {}, assumed: {} }, null)[0];
+          if (xpOf(runs) > runs * best.xp) {
+            let lo = 1, hi = runs;
+            while (lo < hi) {
+              const mid = (lo + hi) >> 1;
+              if (xpOf(mid) >= toUnlock) hi = mid; else lo = mid + 1;
+            }
+            runs = lo;
+          }
+        }
       }
     }
 
+    const before = { ...log.steps }, paidBefore = feesOnly(ix, log.assumed);
+    const got = {};                             // collected for this step (rounding up)
+    const [gained, did] = make(best, runs, stock, ctx, log, got);
+    for (const [item, n] of Object.entries(got)) collected[item] = tidy((collected[item] || 0) + n);
+    const paid = {};                            // fees this step paid (the tanner's)
+    for (const item of ix.fees) { const d = (log.assumed[item] || 0) - (paidBefore[item] || 0); if (d > 0) paid[item] = d; }
+    if (!did) { usable.splice(usable.indexOf(best), 1); continue; }
+    runs = did;
     const made = madeOver(best, runs, xp);
-    const before = { ...log.steps };
-    const gained = perform(ix, best, runs, stock, ctx, log);
     const sub = {};
     for (const [id, n] of Object.entries(log.steps)) {
       const d = n - (before[id] || 0);
@@ -277,13 +397,16 @@ function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new S
       goalReached = { index: steps.length, runs: Math.max(1, Math.ceil((targetXp10 - xp) / per)) };
     }
     const last = steps[steps.length - 1];
-    if (last && last.id === best.id) {
+    if (last && last.id === best.id && !last.rounded === !stage) {
       last.runs += runs; last.xp10 += gained;
       for (const [id, n] of Object.entries(sub)) last.sub[id] = (last.sub[id] || 0) + n;
       for (const [item, n] of Object.entries(made)) last.made[item] = (last.made[item] || 0) + n;
+      for (const [item, n] of Object.entries(got)) (last.collect ||= {})[item] = tidy((last.collect[item] || 0) + n);
+      for (const [item, n] of Object.entries(paid)) (last.paid ||= {})[item] = (last.paid[item] || 0) + n;
       if (goalReached && goalReached.index === steps.length) { goalReached.index = steps.length - 1; goalReached.runs += last.runs - runs; }
     } else {
-      steps.push({ id: best.id, runs, xp10: gained, sub, made });
+      steps.push({ id: best.id, runs, xp10: gained, sub, made, ...(stage ? { rounded: true } : {}),
+        ...(Object.keys(got).length ? { collect: got } : {}), ...(Object.keys(paid).length ? { paid } : {}) });
     }
     xp += gained;
   }
@@ -295,9 +418,13 @@ function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new S
     const d = Math.floor(n) - stock.have(item);
     if (d > 0) used[item] = d;
   }
+  // What it used that wasn't in the bank: things you buy as you go (assumed), and fees paid.
+  const paid = feesOnly(ix, log.assumed);
   return {
-    steps, used, assumed: log.assumed, leftover: stock,
+    steps, used, assumed: without(log.assumed, ix.fees), leftover: stock,
     xp10: xp - startXp10, endXp10: xp, endLevel: levelForXp10(xp), goalReached,
+    ...(Object.keys(paid).length ? { paid } : {}),
+    ...(roundUp ? { collect: collected } : {}),
   };
 }
 
@@ -332,6 +459,7 @@ const times = (out, n) => Object.fromEntries(Object.entries(out).map(([item, q])
 // items), what comes out, the net (worth less cost: negative is a loss), and gp
 // per XP (negative = you make money).
 export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited = new Set() } = {}) {
+  priceOf = priced(ix, priceOf);
   const need = without(expand(ix, m, 1, new Stock(), { level, unlimited }).buy, unlimited);
   const cost = valueOf(need, priceOf);
   const value = valueOf(outAt(m, level), priceOf);
@@ -350,6 +478,7 @@ export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited =
 // made from scratch, lowest level first so the XP on the way counts. Each
 // step says if it needs a level you won't have by then.
 export function planMix(ix, mix, { startXp10, targetXp10 = null, unlimited = new Set(), priceOf = () => null } = {}) {
+  priceOf = priced(ix, priceOf);
   const picks = Object.entries(mix || {})
     .map(([id, n]) => [ix.byId.get(id), Math.floor(Number(n))])
     .filter(([m, n]) => m && m.xp > 0 && n > 0)
@@ -366,6 +495,17 @@ export function planMix(ix, mix, { startXp10, targetXp10 = null, unlimited = new
     xp += runs * m.xp;
     return step;
   });
+  // What one row of your mix makes for another (sapphires you cut, then set in
+  // rings) is used, not bought as well. Each step still shows its own, from scratch.
+  for (const step of steps) {
+    if (!ix.byId.get(step.id).feeds) continue;
+    for (const item of Object.keys(step.made)) {
+      const n = Math.min(buy[item] || 0, made[item] || 0);
+      if (n <= 0) continue;
+      if ((buy[item] -= n) <= 0) delete buy[item];
+      if ((made[item] -= n) <= 0) delete made[item];
+    }
+  }
   return {
     steps, buy, made, gain: gainOf(made, buy, priceOf),
     xp10: xp - startXp10, endXp10: xp, endLevel: levelForXp10(xp),
@@ -379,19 +519,52 @@ export function planMix(ix, mix, { startXp10, targetXp10 = null, unlimited = new
 //         never hold a plan back, and are left out of what to collect and costs),
 //         useBank, fillId (method to finish with), fillGroup (the group to pick
 //         from when nothing is chosen, e.g. bows for Fletching), priceOf,
-//         mix (with the bank left out: how many of each you plan to make) }
+//         mix (with the bank left out: how many of each you plan to make),
+//         roundUp (Round up my supplies: after the bank plan, what it leaves
+//         in your bank is used up too, with what's missing for that collected) }
 export function planGoal(ix, opts) {
   const {
     bank = {}, currentXp10, targetXp10, excluded = new Set(), unlimited = new Set(),
-    useBank = true, fillId = null, fillGroup = null, priceOf = () => null, mix = null,
+    useBank = true, fillId = null, fillGroup = null, mix = null, roundUp = false,
   } = opts;
+  const priceOf = priced(ix, opts.priceOf || (() => null));
   const level = levelForXp10(currentXp10);
   const toGo = Math.max(0, targetXp10 - currentXp10);
 
+  // The method a plan trains with once the bank is used up: the one you picked;
+  // not chosen yet, it carries on with what the bank was mostly making, else the
+  // best XP you can get at that level.
+  const choices = ix.train.filter(m => !excluded.has(m.id));
+  const methodFor = (fb, lvl) => {
+    const mainFromBank = fb.steps
+      .filter(s => ix.byId.get(s.id).kind === 'xp' && !excluded.has(s.id))
+      .sort((a, b) => b.xp10 - a.xp10)[0];
+    // With a usual way to train (bows for Fletching), the bank's method only
+    // carries on if it's one of those: leftover logs cut into bows (u) don't
+    // make cutting the plan for the rest of the goal.
+    const inGroup = g => choices.filter(m => m.group === g);
+    const main = mainFromBank && ix.byId.get(mainFromBank.id);
+    return (fillId && !excluded.has(fillId) && ix.byId.get(fillId))
+      || (main && (!fillGroup || main.group === fillGroup) && main)
+      || (fillGroup && bestAt(inGroup(fillGroup), lvl))
+      || main
+      || bestAt(choices, lvl) || choices[0];
+  };
+
   // Your bank, or with it left out, nothing at all: the plan starts from scratch.
-  const fromBank = useBank
+  const bankNow = useBank
     ? planBank(ix, { bank, startXp10: currentXp10, targetXp10, excluded, unlimited, prefer: fillId })
     : { steps: [], used: {}, assumed: {}, leftover: new Stock(), xp10: 0, endXp10: currentXp10, endLevel: level, goalReached: null };
+  // Round up my supplies: the same plan, then what it leaves in your bank rounded
+  // up (the steps marked rounded). What that takes beyond the bank is collected
+  // (fromBank.collect). The one you picked to train with is rounded up from the
+  // start; not picked, the one the plan carries on with joins in at the end even
+  // if your bank can't make any of it yet.
+  const lead = useBank && roundUp ? methodFor(bankNow, bankNow.endLevel) || null : null;
+  const fromBank = useBank && roundUp
+    ? planBank(ix, { bank, startXp10: currentXp10, targetXp10, excluded, unlimited, prefer: LED.get(bankNow) || null,
+      roundUp: { first: lead && lead.id === fillId ? fillId : null, also: lead ? [lead.id] : [] } })
+    : bankNow;
   // Without the bank, a mix you plan yourself goes first.
   const fromMix = !useBank && mix && Object.values(mix).some(n => n > 0)
     ? planMix(ix, mix, { startXp10: currentXp10, targetXp10, unlimited, priceOf }) : null;
@@ -402,22 +575,8 @@ export function planGoal(ix, opts) {
   const remaining = Math.max(0, targetXp10 - afterXp);
   let fill = null;
   if (remaining > 0) {
-    const choices = ix.train.filter(m => !excluded.has(m.id));
-    // Not chosen yet: carry on with what the bank was mostly making, else the
-    // best XP you can get at that level.
-    const mainFromBank = fromBank.steps
-      .filter(s => ix.byId.get(s.id).kind === 'xp' && !excluded.has(s.id))
-      .sort((a, b) => b.xp10 - a.xp10)[0];
-    // With a usual way to train (bows for Fletching), the bank's method only
-    // carries on if it's one of those: leftover logs cut into bows (u) don't
-    // make cutting the plan for the rest of the goal.
-    const inGroup = g => choices.filter(m => m.group === g);
-    const main = mainFromBank && ix.byId.get(mainFromBank.id);
-    let method = (fillId && !excluded.has(fillId) && ix.byId.get(fillId))
-      || (main && (!fillGroup || main.group === fillGroup) && main)
-      || (fillGroup && bestAt(inGroup(fillGroup), afterLevel))
-      || main
-      || bestAt(choices, afterLevel) || choices[0];
+    // (rounded up, it's the same method as without)
+    const method = lead || methodFor(fromBank, afterLevel);
     if (method) {
       const stock = fromBank.leftover.clone();
       const segments = [];
@@ -447,7 +606,7 @@ export function planGoal(ix, opts) {
       }
       const all = {}, steps = {};
       for (const s of segments) {
-        const e = expand(ix, ix.byId.get(s.id), s.runs, stock, { level: MAX_LEVEL, unlimited });
+        const e = expand(ix, ix.byId.get(s.id), s.runs, stock, { level: MAX_LEVEL, unlimited, excluded });
         for (const [k, n] of Object.entries(e.buy)) all[k] = (all[k] || 0) + n;
         for (const [k, n] of Object.entries(e.steps)) steps[k] = (steps[k] || 0) + n;
       }
@@ -464,53 +623,63 @@ export function planGoal(ix, opts) {
   const bankStock = new Stock(bank);
   const after = useBank ? fromBank.leftover : new Stock();
   // What the bank plan makes of each method, as From your bank shows it: the
-  // gross before any evening out.
-  const bankMade = new Map(), bankRuns = new Map();
+  // gross before any rounding up.
+  const bankMade = new Map(), bankRuns = new Map(), bankCollect = new Map();     // (bankCollect: collected for it, and fees paid)
   if (useBank) {
     for (const st of fromBank.steps) {
       const acc = bankMade.get(st.id) || {};
       for (const [item, n] of Object.entries(st.made || {})) acc[item] = (acc[item] || 0) + n;
       bankMade.set(st.id, acc);
       bankRuns.set(st.id, (bankRuns.get(st.id) || 0) + st.runs);
+      // what was collected for it (rounding up) and paid in fees, which come off what it's worth
+      for (const taken of [st.collect, st.paid]) {
+        if (!taken) continue;
+        const got = bankCollect.get(st.id) || {};
+        for (const [item, n] of Object.entries(taken)) got[item] = tidy((got[item] || 0) + n);
+        bankCollect.set(st.id, got);
+      }
     }
   }
   const table = ix.train.map(m => {
     const needed = toGo > 0 ? Math.ceil(toGo / m.xp) : 0;
     const lvl = Math.max(level, m.level);
-    const ctx = { level: lvl, kinds: BANK_KINDS, unlimited };
+    const ctx = { level: lvl, kinds: BANK_KINDS, unlimited, excluded };
     const have = useBank && !gathers(m) ? maxRuns(ix, m, bankStock, ctx) : 0;
     // Still needed: after everything the bank (or your mix) makes; with neither, all of them.
     const still = !useBank && !fromMix ? needed : remaining > 0 ? Math.ceil(remaining / m.xp) : 0;
-    const collect = without(expand(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited }).buy, unlimited);
+    const collect = without(expand(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited, excluded }).buy, unlimited);
     // Balance: the most you could make if every ingredient matched your most
     // plentiful one, and what that would take. (In actions: a log of arrows
     // takes 15 feathers.)
     let balance = null;
+    // (fees paid on the way to those: the tanner's)
+    const paidFor = n => (ix.fees.size && n > 0 && Number.isFinite(n)
+      ? feesOnly(ix, expand(ix, m, n, bankStock.clone(), { level: MAX_LEVEL, unlimited, excluded, most: true }).buy) : {});
     if (useBank && !gathers(m)) {
-      const limits = Object.entries(m.in).map(([item, q]) => Math.floor(avail(ix, item, bankStock, ctx) / q)).filter(Number.isFinite);
-      const most = limits.length ? Math.max(...limits) : 0;
+      const most = mostRuns(ix, m, bankStock, ctx);
       if (most > have) {
-        const extra = without(expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited }).buy, unlimited);
-        if (Object.keys(extra).length) balance = { runs: most, collect: extra };
+        const extra = without(expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited, excluded, most: true }).buy, [...unlimited, ...ix.fees]);
+        const paid = paidFor(most);
+        if (Object.keys(extra).length) balance = { runs: most, collect: extra, ...(Object.keys(paid).length ? { paid } : {}) };
       }
     }
     // Totals, counting what's in your bank as already yours: what the bank
-    // makes of it once evened out, less what evening out takes (Net after even
-    // out); and what the rest of the goal makes, less what's still to collect
-    // (Net after buying supplies).
+    // makes of it once rounded up, less what rounding up takes (Net after
+    // rounding up my supplies); and what the rest of the goal makes, less what's
+    // still to collect (Net after buying supplies).
     const made = n => times(outAt(m, lvl), n);
     const gains = {
       even: !useBank || gathers(m) ? null
-        : balance ? gainOf(made(balance.runs), balance.collect, priceOf)
-        : have > 0 && Number.isFinite(have) ? gainOf(made(have), {}, priceOf) : null,
+        : balance ? gainOf(made(balance.runs), { ...balance.collect, ...balance.paid }, priceOf)
+        : have > 0 && Number.isFinite(have) ? gainOf(made(have), paidFor(have), priceOf) : null,
       collect: useBank && still > 0 ? gainOf(made(still), collect, priceOf) : null,
     };
     // The total net toward the goal: what the bank plan makes of it, before
-    // evening out (Gross from banked supplies), plus the net after buying the
-    // supplies still needed. (Net after even out would count what evening out
+    // rounding up (Gross from banked supplies), plus the net after buying the
+    // supplies still needed. (Net after rounding up would count what rounding up
     // takes twice: the supplies left in the bank go to the ones still needed
     // as well.)
-    gains.before = bankMade.has(m.id) ? gainOf(bankMade.get(m.id), {}, priceOf) : null;
+    gains.before = bankMade.has(m.id) ? gainOf(bankMade.get(m.id), bankCollect.get(m.id) || {}, priceOf) : null;
     gains.net = gains.before || gains.collect ? {
       total: (gains.before?.total || 0) + (gains.collect?.total || 0),
       missing: [...(gains.before?.missing || []), ...(gains.collect?.missing || [])],
@@ -524,7 +693,11 @@ export function planGoal(ix, opts) {
     };
   });
 
-  return { level, toGo, fromBank, fromMix, afterXp10: afterXp, afterLevel, remaining, fill, table };
+  return {
+    level, toGo, fromBank, fromMix, afterXp10: afterXp, afterLevel, remaining, fill, table,
+    // rounded up: what the bank makes as it is, to set beside it
+    ...(useBank && roundUp ? { bankNow } : {}),
+  };
 }
 
 // Highest XP per action among methods you can do at `level`.

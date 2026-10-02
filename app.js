@@ -13,7 +13,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.4.7';
+const VERSION = '2.5.0';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -394,10 +394,12 @@ function tileHtml(skill, stat, bounds) {
   let tail = '';
   if (skill.id !== 0) {
     const pr = levelProgress(stat.level, stat.xp);
+    // With a goal in this skill, the bar is how far along the goal is (the yellow line under it names it).
+    const goalBar = planner.tileGoalBar(state.lookup.profile, skill);
     tail = pr.maxed
-      ? `<div class="next maxed">Maxed</div><div class="pbar maxed"><div style="width:100%"></div></div>`
+      ? `<div class="next maxed">Maxed</div>${goalBar || '<div class="pbar maxed"><div style="width:100%"></div></div>'}`
       : `<div class="next">Next: ${fmt(pr.remaining)} XP</div>
-         <div class="pbar" title="${fmt(pr.remaining)} XP to level ${pr.nextLevel} (${pr.pct.toFixed(1)}%)"><div style="width:${pr.pct.toFixed(1)}%"></div></div>`;
+         ${goalBar || `<div class="pbar" title="${fmt(pr.remaining)} XP to level ${pr.nextLevel} (${pr.pct.toFixed(1)}%)"><div style="width:${pr.pct.toFixed(1)}%"></div></div>`}`;
   }
   return `<div class="tile${skill.id === 0 ? ' overall' : ''}" data-id="${skill.id}" title="${esc(skill.name)}">
     ${iconImg(skill)}
@@ -787,9 +789,20 @@ function renderGains() {
     ${historyFoot(snaps)}`;
 }
 
+// The snapshots themselves can be listed, and deleted one at a time (newest first).
 function historyFoot(snaps) {
+  const open = state.gains.showSnaps;
+  const rows = !open ? '' : `<div class="snap-list">${[...snaps].reverse().map((s, i) => {
+    const o = s.stats[0];
+    const tag = i === 0 ? 'latest' : i === snaps.length - 1 ? 'first' : '';
+    return `<div class="snap-row"><span>${esc(when(s.t))}</span>
+      <span class="c-faint">${o ? `Total level ${fmt(o.level)} · ${fmt(o.xp)} XP` : ''}${tag ? ` · ${tag}` : ''}</span>
+      <span class="grow"></span>
+      <button type="button" class="linkish" data-action="gains-delete-one" data-t="${s.t}" title="Delete this snapshot">Delete</button></div>`;
+  }).join('')}</div>`;
   return `<div class="pc-foot">${snaps.length} snapshot${snaps.length === 1 ? '' : 's'} stored for ${esc(state.gains.player)} in this browser ·
-    <button type="button" class="linkish" data-action="gains-delete">Delete this history</button></div>`;
+    <button type="button" class="linkish" data-action="gains-snaps" aria-expanded="${!!open}">${open ? 'Hide snapshots' : 'Show snapshots'}</button> ·
+    <button type="button" class="linkish" data-action="gains-delete">Delete this history</button></div>${rows}`;
 }
 
 async function updateGains({ force = true } = {}) {
@@ -1128,6 +1141,19 @@ function wire() {
           act.textContent = 'Click again to delete';
         }
         break;
+      case 'gains-snaps':
+        state.gains.showSnaps = !state.gains.showSnaps;
+        renderGains();
+        break;
+      case 'gains-delete-one': {
+        if (!act.dataset.armed) { act.dataset.armed = '1'; act.textContent = 'Click again to delete'; break; }
+        const t = Number(act.dataset.t);
+        const left = snapshots.removeAt(state.gains.player, t);
+        if (state.gains.since === 't:' + t) state.gains.since = 'prev';       // it was the one compared with
+        if (!left) state.gains.player = null;                                  // the last one: nothing left of this history
+        savePrefs(); renderGains();
+        break;
+      }
     }
   });
 

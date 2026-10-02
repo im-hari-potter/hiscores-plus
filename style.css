@@ -237,6 +237,10 @@ form.inline { display: inline-flex; gap: 4px; }
 .pc-combat { margin-left: auto; font-size: 15px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
 .pc-combat b { color: #fff; font-size: 18px; font-weight: normal; }
 .pc-sub { margin-top: 4px; font-size: 14px; display: flex; flex-wrap: wrap; gap: 2px 12px; }
+/* Gains: the stored snapshots, one to a line, each with its own Delete */
+.snap-list { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; font-family: var(--small); font-size: 13px; max-height: 320px; overflow-y: auto; }
+.snap-row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; padding: 2px 8px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--line); border-radius: 3px; }
+.snap-row .grow { flex: 1; }
 .pc-foot { margin-top: 6px; font-family: var(--small); font-size: 13px; color: var(--faint); display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
 .linkish { background: none; border: none; padding: 0; color: var(--top); font: inherit; text-shadow: inherit; cursor: pointer; text-decoration: underline; }
 
@@ -541,7 +545,7 @@ table.plan-t .per { font-family: var(--small); font-size: 12px; color: var(--fai
 .bank-grid.movable .bank-cell .input { cursor: text; user-select: text; -webkit-user-select: text; }
 table.plan-t td.even .it-chip:last-child { margin-right: 0; }
 table.grid th.wrap { white-space: normal; line-height: 1.15; min-width: 88px; }
-/* Even out and Net after even out go together: a dark line on each side */
+/* Round up my supplies and Net after rounding up my supplies go together: a dark line on each side */
 table.plan-t .sep-l { border-left: 1px solid #000; }
 table.plan-t .sep-r { border-right: 1px solid #000; }
 table.plan-t .mix-in { width: 84px; }
@@ -570,6 +574,8 @@ a.mk { color: inherit; text-decoration: none; cursor: pointer; }
 a.mk:hover, a.mk:focus-visible { color: #fff; text-decoration: underline; }
 a.it-chip.mk:hover b { text-decoration: underline; }
 
+/* a tile with a goal: its bar is the goal's (gold, like the line under it) */
+.tile .pbar.goal-bar { height: 5px; margin-top: 5px; }
 .tile .goal-line { margin-top: 3px; font-family: var(--small); font-size: 12px; color: var(--gold-hi); white-space: normal; }
 
 /* ── Status bar ─────────────────────────────────────────────────────────── */

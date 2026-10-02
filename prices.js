@@ -54,6 +54,7 @@ export class Prices extends EventTarget {
   // { gp, src, n, last, at } for an item, or null. src: 'you' | 'sales' | 'offers' | 'dose' | 'alch'
   // ('alch' with untraded: the market was checked and nobody trades it).
   info(slug) {
+    if (ITEMS[slug]?.gp != null) return { gp: ITEMS[slug].gp, src: 'fixed' };       // a coin is 1 gp
     const use = this.sourceOf(slug);
     if (use === 'mine' && this.overrides[slug] != null) return { gp: this.overrides[slug], src: 'you' };
     if (use === 'alch') {
@@ -132,7 +133,7 @@ export class Prices extends EventTarget {
   want(slugs, { force = false, all = false } = {}) {
     let added = 0;
     for (const slug of new Set(slugs)) {
-      if (!ITEMS[slug] || ITEMS[slug].untradeable) continue;
+      if (!ITEMS[slug] || ITEMS[slug].untradeable || ITEMS[slug].gp != null) continue;
       if (!force && !all && this.sourceOf(slug) !== 'market') continue;
       if (!force && this.isFresh(slug)) continue;
       if (this.queue.includes(slug)) continue;

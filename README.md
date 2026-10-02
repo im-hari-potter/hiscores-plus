@@ -20,10 +20,13 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 - **Lookup** shows every skill's level, XP, rank, XP to the next level, and **Top %**. Top % is your rank
   divided by the number of players ranked in that skill.
   - Sort the tiles by level, XP, rank or Top %, or drag them into your own layout.
-  - Tiles show your goals once you set some.
+  - Tiles show your goals once you set some: the goal in yellow, and the tile's bar becomes your
+    progress toward it (since you set it) in place of the bar to the next level.
 - **Combat** shows only the combat skills and your combat level, worked out with the game's own formula.
 - **Compare** puts up to 5 players side by side and highlights the leader of each skill.
 - **Gains** shows XP, levels and ranks gained since last time, a day, a week or a month ago.
+  - **Show snapshots** lists the ones stored for that player. Delete any one of them (click twice), or
+    the whole history.
 - **Leaderboard** shows any skill's hiscores, 21 at a time, with Top % next to every rank.
 
 ### Planner
@@ -31,7 +34,7 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 The planner works out what it takes to reach a goal, from your XP on the hiscores, what's in your bank
 and the prices you set. Any skill can have a goal. A skill with its full planner (marked with a dot
 when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woodcutting**,
-**Firemaking** and **Fletching**, with the other skills to follow.
+**Firemaking**, **Fletching** and **Crafting**, with the other skills to follow.
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
@@ -42,7 +45,9 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
 
 - Every number comes from the game itself (Lost City's server content): the level each way to train
   needs, the XP it gives, and what it takes and makes. The maths is done in tenths of XP, like the
-  game does.
+  game does. Crafting's rows are those of
+  [LostHQ's Crafting calculator](https://2004.losthq.rs/?p=calculators&calc=crafting), each one
+  checked against the server; where the two differ, the server's number is used.
 - How many you need = the XP still to go ÷ the XP each one gives, rounded up.
 - **Gross** is what something is worth, with nothing taken off. **Net** takes off what you pay for its
   supplies, so it can be negative: a loss.
@@ -62,6 +67,46 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
   - Firemaking burns the logs in your bank, best first.
   - Fletching has every way to train: bows cut and strung (or only cut, or only strung), arrows from
     logs or step by step, darts, and bolts. The table shows one of those at a time.
+  - Crafting has every row of LostHQ's calculator, in its four tabs: **Needle & thread**,
+    **Jewellery**, **Pottery & glass** and **Spinning**. The table shows one tab at a time.
+    - What one row makes can go into another. With uncut sapphires, gold bars and wool in your bank,
+      the plan cuts the sapphires and spins the wool on the way to the amulets, and counts that XP
+      too. It does the same with sand and soda ash for glass, and with leather for studded armour.
+      Untick a row (cutting sapphires, say) and the plan leaves those alone.
+    - What's still to buy is listed the way the calculator lists it: cut gems for jewellery, molten
+      glass for vials and orbs, a leather body for a studded one.
+    - Hides are tanned before they're worked, and **the tanner's fee is counted**: it's in the
+      supplies (as coins) and in every cost and net. Pick the tanner on the goal:
+      - **Al Kharid** (the default): leather 1 gp, hard leather 3 gp, dragonhide 20 gp a hide.
+      - **Canifis**: 2 gp, 5 gp and 45 gp.
+      - Dragonhide: the plan uses the dragon leather in your bank first and tans your hides on the
+        way. What to collect is the hide, as on the calculator.
+      - Cowhide in your bank is tanned into leather or hard leather on the way. What to collect is
+        leather, as on the calculator.
+      - Under From your bank the fee is its own line (**Tanner**), taken off for the Net. In the table
+        it comes off in Total net, so Gross from banked supplies stays a gross.
+    - **Key halves and crystal keys** count as the uncut dragonstone the crystal chest always gives:
+      a tooth and a loop join into a key, and a key opens the chest. With 9 teeth and 4 loops your
+      bank makes 4 for now, and Round up my supplies says 5 more loops make it 9. The chest's other
+      loot is luck, and isn't counted. From scratch a row still takes the uncut stone.
+    - A whole job is one row: an amulet made and strung, a pot shaped and fired. Hover over the row
+      for the XP of each step.
+    - A reel of thread lasts five items (see Vials of water and thread below).
+    - Two kinds of row are added for what they sell as. Their Crafting XP is the calculator's.
+      - **Dragonhide sets**: vambraces, chaps and body, which the market trades together as one
+        item. A green set is 372 XP and six hides. A set isn't an item in the game, so it has a price
+        (on the Prices tab) but no place in your bank.
+      - **Enchanted jewellery**: a ring of recoil, a games necklace(8), a ring of dueling(8), an
+        amulet of glory(4) and the rest, each right under the piece it's made from. The runes of
+        the enchant spell are in its supplies and its cost: a cosmic rune and the elemental ones
+        (counted even where a staff would save them). Enchanting gives Magic XP, not Crafting XP,
+        so the row's XP is the plain piece's; hover over the row for the Magic level it takes. An
+        amulet of glory is then charged at the Fountain of Heroes, which costs nothing.
+      - The bank plan makes the plain piece (the XP is the same) unless you pick the enchanted one
+        under **Train with** and have the runes in your bank.
+    - Where the calculator and Lost City's server differ, the server is followed: a sapphire
+      necklace is level 20 (the calculator says 22). Opal, jade and red topaz can smash when you cut
+      them; like the calculator, plans count every cut as a success.
 - Click an item a plan says to collect, buy or bring to open its page on the market.
 
 #### Check your prices first
@@ -93,6 +138,9 @@ the table's **Plan to make** column (1,000 prayer potions, then 2,000 super atta
   total for both together, and the table shows **Still needed to goal** after your mix.
 - The mix is kept with the goal. With **Use my bank** on, your actual bank is used instead, and the mix
   waits until you turn it off again. Skills that never use the bank (Woodcutting) can always have one.
+- In Crafting, what one row of your mix makes for another is used: cut 100 sapphires and make 100
+  sapphire rings, and the list to buy has the uncut sapphires and the gold bars, not cut sapphires as
+  well.
 
 #### The table of every option
 
@@ -105,21 +153,52 @@ the table's **Plan to make** column (1,000 prayer potions, then 2,000 super atta
 | **To goal** | not shown | How many to reach the goal, on their own |
 | **Plan to make** | not shown | How many you'll make in your mix (see above) |
 | **From bank** | How many your bank makes of it now | not shown |
-| **Gross from banked supplies** | What your bank plan makes of it (its part of From your bank) is worth, before any evening out. Your banked supplies are yours already | not shown |
-| **Even out** | What to collect so nothing in your bank is left over: your most plentiful ingredient decides | not shown |
-| **Net after even out** | What your bank makes of it once evened out is worth, less what evening out takes to collect. Your banked supplies are yours already. Shown with Even out | not shown |
+| **Gross from banked supplies** | What your bank plan makes of it (its part of From your bank) is worth, before any rounding up. Your banked supplies are yours already | not shown |
+| **Round up my supplies** | What to collect so nothing in your bank is left over: your most plentiful ingredient decides | not shown |
+| **Net after rounding up my supplies** | What your bank makes of it once your supplies are rounded up is worth, less what rounding up takes to collect. Your banked supplies are yours already. Shown with Round up my supplies | not shown |
 | **Still needed to goal** | How many more to reach your goal, after everything your bank makes | After your mix, once you've planned one |
 | **Supplies needed** | What those take, beyond what's left in your bank | not shown |
 | **Net after buying supplies** | What the ones still needed are worth, less what their supplies cost | not shown |
-| **Total net gp toward goal** | Gross from banked supplies + net after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy. Net after even out isn't part of it, since evening out would count those supplies twice | not shown |
+| **Total net gp toward goal** | Gross from banked supplies + net after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy. Net after rounding up my supplies isn't part of it, since rounding up would count those supplies twice | not shown |
 
 Sort the table by level, XP each, cheapest XP, or (with your bank in use) **Total net**, most gp toward
 your goal first.
 
 For example, Herblore 74 → 78 with Super attack: with the bank off, **4,328** to the goal. With it on,
 **2,305** still needed after everything the bank makes, and the supplies those need. And with
-605 kwuarm and 518 limpwurt root in the bank, Super strength's **Even out** says collect 87 limpwurt
-root, and your bank covers 605 instead of 518.
+605 kwuarm and 518 limpwurt root in the bank, Super strength's **Round up my supplies** says collect 87
+limpwurt root, and your bank covers 605 instead of 518.
+
+Each group's name (Potions, Bows, Jewellery) sits right above the names in it.
+
+#### Round up my supplies
+
+**Round up my supplies** (the tick box right after Use my bank) switches the plan between two views of
+your bank. It's one or the other: the table below already shows both side by side.
+
+- **Off**: your bank as it is. 605 kwuarm and 518 limpwurt root make 518 Super strength.
+- **On**: your supplies rounded up, so nothing in your bank is left over. The same bank makes 605, and
+  the 87 limpwurt root it takes are listed to collect.
+  - **From your bank, supplies rounded up** shows the XP and level your bank holds then. Each line is
+    what your bank makes of it in all, with what to collect for it.
+  - What's rounded up: first what your bank already makes, then anything else that's one ingredient
+    short: irit with no eye of newt, bows cut but not strung, dart tips without feathers, sand without
+    soda ash. Where two could use the same thing, the one with more XP gets it, so **untick a row to
+    leave it out**. Two or more ingredients short, it stays out.
+  - If you **picked** what to train with, that one is rounded up before anything else: it's made as
+    many times as its most plentiful ingredient allows.
+  - **To round up your supplies, collect** lists it all, and the money line takes its cost off: Gross,
+    Rounding up your supplies, Net.
+  - Everything after it (Then, Still needed to goal, Supplies needed) comes after the rounded-up bank.
+    In the table, Gross from banked supplies becomes **Net from bank, supplies rounded up**: what the
+    plan makes of each then, less what was collected for it, and that's the bank part of Total net.
+    From bank, Round up my supplies and Net after rounding up my supplies stay as they are: each row
+    on its own, from your bank as it is.
+- With nothing to collect, both views are the same. Skills with one ingredient to an item (Firemaking,
+  Runecraft) have nothing to round up, so they don't show the tick box.
+
+For example, with 605 kwuarm, 518 limpwurt root, 1,000 ranarr and 700 snape grass: +126,000 XP as it is,
+and **+163,125 XP** with your supplies rounded up, for 87 limpwurt root and 300 snape grass.
 
 #### Untick what you won't make
 
@@ -128,11 +207,14 @@ by default, so **turn off anything you don't plan to make**: a potion you'd rath
 supplies you're saving. Otherwise the plan spends your supplies on it, and From your bank, Still needed to
 goal and the gp totals count XP you won't get. Unticked options also leave the Train with list.
 
-#### Vials of water
+#### Vials of water and thread
 
 **I'll buy vials of water as I go** is on by default for Herblore: vials never hold a plan back, and
 they're left out of the supplies needed and of every cost and net. Turn it off to plan around the
 vials in your bank and count them like any other supply.
+
+Crafting has the same for thread, **I'll buy thread as I go**. Turn it off and thread is counted: a
+reel for every five items, so 100 leather bodies take 20.
 
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
   its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
@@ -151,7 +233,15 @@ vials in your bank and count them like any other supply.
       say how many. Screenshots that overlap don't count twice.
     - Amounts of 100K and up are rounded on screen (`150K`). If the amount you entered fits, it's kept;
       otherwise the low end is used.
-    - Lantadyme looks exactly like an unid herb in this version, so it's read as one.
+    - Lantadyme looks exactly like an unid herb in this version, so it's read as one. Soda ash looks
+      exactly like ashes, so it's read as ashes: type the amount under Soda ash if that's what it is.
+    - Some things look exactly like another item, and the review names the twin next to each of
+      those, so untick (or type in yourself) the ones that aren't what they say.
+      - Enchanted jewellery is the plain piece with a spell on it. It's read as the enchanted one (a
+        ring of dueling(8), not an emerald ring), since that's what a bank mostly holds. Whatever
+        charges are left, it counts as a full one.
+      - A jug of wine looks like wine of Zamorak, and a plain staff or a Dramen staff like a
+        battlestaff.
     - Items cut off at the top or bottom edge of the bank are skipped, so let screenshots overlap.
     - Where each item sits is kept too, for All. If you've dragged items around since, you can choose
       to put them back in your bank's order.
@@ -201,6 +291,8 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
   `node build-data.mjs <Content checkout> <LostHQ 2004 checkout>` (needs `sharp`).
   - Content is [LostCityRS/Content](https://github.com/LostCityRS/Content), branch 274.
   - The LostHQ checkout is [LostHQ/2004](https://github.com/LostHQ/2004).
+  - Crafting's rows are read from LostHQ's `js/calculators/crafting.js` and checked against Content
+    one by one. The build stops at any difference it hasn't been told about.
 - Planner files:
   - `planner.js` holds the maths, all in tenths of XP like the game.
   - `planner-ui.js` builds the Goals, Bank and Prices views.
@@ -215,7 +307,8 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
 - Hiscores come from the Lost City hiscores API.
 - Levels and XP for the planner, and the bank layout and font the screenshot reader uses, come from
   Lost City's server content and client (MIT).
-- Item names and icons come from [LostHQ](https://2004.losthq.rs) (GPL-3.0).
+- Item names and icons, and the rows of the Crafting calculator, come from
+  [LostHQ](https://2004.losthq.rs) (GPL-3.0).
 - Prices come from [markets.lostcity.rs](https://markets.lostcity.rs). How they're read follows
   LostKit's own price check.
 - Skill icons and RuneScape fonts come from [LostKit](https://github.com/LostHQ/LostKit-Electron)

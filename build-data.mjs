@@ -6,8 +6,9 @@
 //   - Lost City's server content, LostCityRS/Content, branch 274 (MIT). Levels and
 //     XP come straight from the configs the game server runs, so the numbers are the
 //     game's own. XP is kept in tenths, the way the server stores it.
-//   - LostHQ/2004 (GPL-3.0): item_data.json for names, ids and shop values, and
-//     item_spritesheet.png for the 32x32 item icons.
+//   - LostHQ/2004 (GPL-3.0): item_data.json for names, ids and shop values,
+//     item_spritesheet.png for the 32x32 item icons, and for Crafting the rows of
+//     its calculator (js/calculators/crafting.js), checked against the server.
 // The output is committed, so the site itself never needs either checkout.
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -61,6 +62,10 @@ const need = name => {
 const methods = [];
 const nameOverride = {};     // debugname -> clearer display name
 const bankGroups = {};
+const saleGroups = {};       // things the market sells as one item that aren't a bank item (armour sets)
+const places = {};           // skill -> a choice of place that changes what a step takes (which tanner)
+const fixedPrices = {};      // item -> gp it's always worth (coins)
+const virtualItems = {};     // those items: slug -> { id, name, cost, iconOf, parts }
 const unidHerbs = {};        // the one entry every unidentified herb is counted under
 
 async function herblore() {
@@ -215,6 +220,11 @@ function fromScript(text, re, what) {
   const m = text.match(re);
   if (!m) throw new Error(`can't find ${what} in the script`);
   return Number(m[1]);
+}
+function fromScriptText(text, re, what) {
+  const m = text.match(re);
+  if (!m) throw new Error(`can't find ${what} in the script`);
+  return m[1];
 }
 
 // ── Woodcutting ────────────────────────────────────────────────────────────
@@ -410,6 +420,357 @@ async function fletching() {
 
 await fletching();
 
+// ── Crafting ───────────────────────────────────────────────────────────────
+// The rows are LostHQ's Crafting calculator (js/calculators/crafting.js): its
+// four tabs, in its order, with the level, XP and ingredients it lists. Every
+// row is checked against the server's own configs, which also say what the
+// calculator leaves out: the tool a row needs, how the XP of a whole job splits
+// (shaping and firing a pot, making and stringing an amulet), and that
+// dragonhide is worked as dragon leather, tanned from the hide the calculator
+// lists. A difference the check doesn't know about stops the build.
+//
+// Two kinds of row are added for what they sell as (their Crafting XP is the
+// calculator's, row for row):
+//   - enchanted jewellery (a ring of dueling, an amulet of glory): the row it's
+//     made from, plus the runes of the server's enchant spell. Enchanting gives
+//     Magic XP, not Crafting XP.
+//   - dragonhide sets: vambraces, chaps and body, which markets.lostcity.rs
+//     trades as one item (its ItemSetsSeeder; not an item in the game).
+const craftingNotes = [];
+async function crafting() {
+  const dir = p => scripts('skill_crafting/' + p);
+  const name = k => nameOverride[k] || ITEM.get(need(k)).name;
+  const x10 = xp => Math.round(xp * 10);
+  const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+
+  // The calculator's table: { tab: { item: { xp, level, ingredients } } }
+  const src = await readFile(join(LOSTHQ, 'js/calculators/crafting.js'), 'utf8');
+  const end = src.indexOf('function runCalc');
+  if (end < 0) throw new Error("crafting.js: can't find where the table ends");
+  const calc = new Function(`${src.slice(0, end)}\nreturn craftingXP;`)();
+  const TABS = { needle_thread: 'Needle & thread', jewellery: 'Jewellery', pottery_glass: 'Pottery & glass', spinning: 'Spinning' };
+  for (const tab of Object.keys(calc)) if (!TABS[tab]) throw new Error(`crafting.js has a tab this script doesn't know: ${tab}`);
+
+  // Where the server and the calculator differ, the server's number is used (it's
+  // what the game does) and the difference is printed. One this script hasn't
+  // seen before stops it, so it gets looked at.
+  const KNOWN = { sapphire_necklace: { level: 20 } };
+  const server = {};           // key -> { level, xp }: the server's, where it differs
+  const check = (key, what, calcValue, serverValue) => {
+    if (calcValue === serverValue) return;
+    if (KNOWN[key]?.[what] !== serverValue) throw new Error(`crafting ${key}: the calculator says ${what} ${calcValue}, the server ${serverValue}`);
+    (server[key] ||= {})[what] = serverValue;
+    craftingNotes.push(`${ITEM.get(key).name}: ${what} ${serverValue} (the server, used) vs ${calcValue} (LostHQ's calculator)`);
+  };
+
+  // ── The server's side ──
+  const byProduct = (blocks, pick) => new Map([...blocks.values()].filter(b => b.params.product).map(b => [b.params.product, pick(b.params, b)]));
+  // Leather and dragon leather (needle and thread; a reel of thread lasts five items)
+  const leather = new Map(), colours = new Map();
+  for (const row of (await readConfig(dir('configs/leather/leather.dbrow'))).values()) {
+    const d = fields(row);
+    if (d.product) leather.set(d.product[0], { level: Number(d.levelrequired[0]), xp: Number(d.productexp[0]), from: d.leather[0], count: Number(d.leather[1]) });
+    else if (d.color) colours.set(d.leather[0], { colour: d.color[0].toLowerCase(), items: d.interface_items });
+  }
+  const leatherScript = await readFile(dir('scripts/leather/leather.rs2'), 'utf8');
+  const threadUses = fromScript(leatherScript, /if \(%thread_used > (\d+)\)/, 'how long a reel of thread lasts') + 1;
+  // Hides are tanned at a tanner, for a fee per hide: cowhide into leather or hard
+  // leather, dragonhide into dragon leather. Two tanners, each with its prices:
+  // Al Kharid's, and the dearer one in Canifis (the server's werewolftanner).
+  const tanner = await readFile(scripts('areas/area_alkharid/scripts/tanner.rs2'), 'utf8');
+  const hideOf = new Map([...tanner.matchAll(/@tan_dragonhide\((\w+), (\w+), 1\)/g)].map(m => [m[2], m[1]]));
+  const cowhide = need(fromScriptText(tanner, /~tan_leather\((\w+), leather, \$cost/, 'the hide tanned into leather'));
+  if (fromScriptText(tanner, /~tan_leather\((\w+), hard_leather, \$cost/, 'the hide tanned into hard leather') !== cowhide) throw new Error('crafting: hard leather is tanned from another hide');
+  const fees = Object.fromEntries((await readFile(scripts('areas/area_alkharid/configs/tanner.constant'), 'utf8'))
+    .split(/\r?\n/).map(l => l.match(/^\^(\w+)_cost\s*=\s*(\d+)/)).filter(Boolean).map(m => [m[1], Number(m[2])]));
+  const TANNERS = [['al_kharid', 'Al Kharid', 'tanner'], ['canifis', 'Canifis', 'werewolftanner']].map(([id, place, npc]) => {
+    const fee = kind => fees[`${npc}_${kind}`] ?? (() => { throw new Error(`crafting: no ${kind} fee for the ${place} tanner`); })();
+    return { id, name: place, leather: fee('soft_leather'), hard_leather: fee('hard_leather'), dragonhide: fee('dragonhide') };
+  });
+  if (!/npc_type = werewolftanner/.test(tanner)) throw new Error("crafting: can't see which tanner charges the dearer fees");
+  const coins = need('coins');
+  // What a tanning step pays: Al Kharid's fee in its "in", the other tanners' in "at".
+  const feeIn = kind => ({ in: { [coins]: TANNERS[0][kind] }, at: Object.fromEntries(TANNERS.slice(1).map(t => [t.id, { [coins]: t[kind] }])) });
+  const studded = byProduct(await readConfig(dir('configs/studded/studded.struct')), p => ({ level: Number(p.levelrequired), xp: Number(p.productexp), from: p.ingredient }));
+  // Gems, cut with a chisel
+  const gems = new Map([...(await readConfig(dir('configs/gem/gem.dbrow'))).values()].map(fields)
+    .map(d => [d.cut_gem[0], { uncut: d.uncut_gem[0], level: Number(d.level[0]), xp: Number(d.experience[0]), canSmash: !!d.success_rate }]));
+  // Gold and silver, cast in a mould at a furnace; amulets and symbols are then strung
+  const jewel = byProduct(await readConfig(dir('configs/jewellery/jewellery.struct')), p => ({
+    level: Number(p.levelrequired), xp: Number(p.productexp), gem: p.gem || null, strung: p.strung || null, mould: p.mould || null }));
+  const stringXp = fromScript(await readFile(dir('scripts/jewellery/stringing.rs2'), 'utf8'), /stat_advance\(crafting, (\d+)\)/, 'the XP for stringing an amulet');
+  const strungFrom = new Map([...jewel].filter(([, j]) => j.strung).map(([unstrung, j]) => [j.strung, { unstrung, ...j }]));
+  const mouldFor = (key, j) => need(j.mould || (/_ring$/.test(key) ? 'ring_mould' : /_necklace$/.test(key) ? 'necklace_mould' : /amulet$/.test(key) ? 'amulet_mould' : (() => { throw new Error(`no mould for ${key}`); })()));
+  // Pottery: shaped on a wheel (processexp), then fired in an oven (productexp)
+  const potStructs = await readConfig(dir('configs/pottery/pottery.struct'));
+  const unfired = new Map(), fired = new Map();
+  for (const b of (await readConfig(dir('configs/pottery/pottery.obj'))).values()) {
+    const st = potStructs.get(b.params.crafting_pottery_struct);
+    if (!st?.params.product) continue;
+    const p = { level: Number(st.params.levelrequire), shape: Number(st.params.processexp), fire: Number(st.params.productexp) };
+    unfired.set(b.name, p);
+    fired.set(st.params.product, p);
+  }
+  // Glass: sand and soda ash melted at a furnace, then blown with a pipe
+  const glass = byProduct(await readConfig(dir('configs/glass/glass.struct')), p => ({ level: Number(p.levelrequire ?? 1), xp: Number(p.productexp) }));
+  const glassScript = await readFile(dir('scripts/glass/glass.rs2'), 'utf8');
+  const smelt = glassScript.slice(glassScript.indexOf('[label,smelt_glass]')).split(/\n\[/)[0];
+  const moltenXp = fromScript(smelt, /inv_add\(inv, molten_glass, 1\);[\s\S]*?stat_advance\(crafting, (\d+)\)/, 'the XP for molten glass');
+  const moltenIn = Object.fromEntries([...smelt.matchAll(/inv_del\(inv, (\w+), 1\)/g)].map(m => [m[1], 1]));
+  const staves = byProduct(await readConfig(dir('configs/battlestaves/battlestaves.struct')), p => ({ level: Number(p.levelrequire), xp: Number(p.productexp), orb: p.ingredient }));
+  const spun = byProduct(await readConfig(dir('configs/spinning/spinning.struct')), p => ({ level: Number(p.levelrequire ?? 1), xp: Number(p.productexp), from: p.ingredient }));
+
+  // Names: dragonhide items of every colour share a name in-game, and so do an
+  // amulet and its unstrung self, so the colour and (u) are added.
+  for (const [leatherItem, { colour, items }] of colours) {
+    const hide = hideOf.get(leatherItem);
+    if (!hide) throw new Error(`no hide is tanned into ${leatherItem}`);
+    for (const k of [hide, leatherItem, ...items]) nameOverride[need(k)] = `${ITEM.get(k).name} (${colour})`;
+  }
+  for (const [strung, j] of strungFrom) {
+    if (ITEM.get(need(strung)).name === ITEM.get(need(j.unstrung)).name) nameOverride[j.unstrung] = `${ITEM.get(j.unstrung).name} (u)`;
+  }
+
+  // ── The calculator's rows ──
+  const needle = need('needle'), thread = need('thread'), wool = need('ball_of_wool');
+  const made = { 'Needle & thread': [], Jewellery: [], 'Pottery & glass': [], Spinning: [] };
+  const add = (tab, key, row, m) => {
+    for (const k of [key, ...Object.keys(m.in)]) need(k);
+    made[TABS[tab]].push(key);
+    methods.push({ id: `cr_${key}`, skill: 'crafting', group: TABS[tab], kind: 'xp', ...(m.tools ? { tools: m.tools } : {}),
+      name: m.name || name(key), level: server[key]?.level ?? row.level, xp: server[key]?.xp ?? x10(row.xp), in: m.in, out: { [key]: 1 }, ...(m.parts ? { parts: m.parts } : {}) });
+  };
+  const expect = (key, row, ingredients) => {
+    if (!same(row.ingredients, ingredients)) throw new Error(`crafting ${key}: the calculator lists ${JSON.stringify(row.ingredients)}, the server takes ${JSON.stringify(ingredients)}`);
+  };
+
+  for (const [key, row] of Object.entries(calc.needle_thread)) {
+    if (leather.has(key)) {
+      const s = leather.get(key);
+      check(key, 'level', row.level, s.level);
+      check(key, 'xp', x10(row.xp), s.xp);
+      // the calculator lists the hide; the server works the leather tanned from it
+      expect(key, row, { [hideOf.get(s.from) || s.from]: s.count, [thread]: 1 / threadUses });
+      add('needle_thread', key, row, { tools: [needle], in: { [s.from]: s.count, [thread]: 1 / threadUses } });
+    } else if (studded.has(key)) {
+      const s = studded.get(key);
+      check(key, 'level', row.level, s.level);
+      check(key, 'xp', x10(row.xp), s.xp);
+      expect(key, row, { [s.from]: 1, studs: 1 });
+      add('needle_thread', key, row, { in: { [s.from]: 1, studs: 1 } });
+    } else throw new Error(`crafting: the server has no ${key}`);
+  }
+
+  for (const [key, row] of Object.entries(calc.jewellery)) {
+    if (gems.has(key)) {
+      const g = gems.get(key);
+      check(key, 'level', row.level, g.level);
+      check(key, 'xp', x10(row.xp), g.xp);
+      expect(key, row, { [g.uncut]: 1 });
+      add('jewellery', key, row, { tools: [need('chisel')], name: `${name(key)} (cut)`, in: { [g.uncut]: 1 } });
+    } else if (jewel.has(key)) {
+      const j = jewel.get(key);
+      check(key, 'level', row.level, j.level);
+      check(key, 'xp', x10(row.xp), j.xp);
+      const bar = Object.keys(row.ingredients).find(k => /_bar$/.test(k));
+      expect(key, row, { [bar]: 1, ...(j.gem ? { [j.gem]: 1 } : {}) });
+      add('jewellery', key, row, { tools: [mouldFor(key, j)], in: { [bar]: 1, ...(j.gem ? { [j.gem]: 1 } : {}) } });
+    } else if (strungFrom.has(key)) {
+      // the whole job: made, then strung with a ball of wool
+      const j = strungFrom.get(key);
+      check(key, 'level', row.level, j.level);
+      check(key, 'xp', x10(row.xp), j.xp + stringXp);
+      const bar = Object.keys(row.ingredients).find(k => /_bar$/.test(k));
+      const ins = { [bar]: 1, ...(j.gem ? { [j.gem]: 1 } : {}), [wool]: 1 };
+      expect(key, row, ins);
+      add('jewellery', key, row, { tools: [mouldFor(j.unstrung, j)], name: `${name(key)} (make & string)`, in: ins, parts: [['make', j.xp], ['string', stringXp]] });
+    } else throw new Error(`crafting: the server has no ${key}`);
+  }
+
+  for (const [key, row] of Object.entries(calc.pottery_glass)) {
+    if (unfired.has(key)) {
+      const p = unfired.get(key);
+      check(key, 'level', row.level, p.level);
+      check(key, 'xp', x10(row.xp), p.shape);
+      expect(key, row, { softclay: 1 });
+      add('pottery_glass', key, row, { in: { softclay: 1 } });
+    } else if (fired.has(key)) {
+      // the whole job: shaped on the wheel, then fired
+      const p = fired.get(key);
+      check(key, 'level', row.level, p.level);
+      check(key, 'xp', x10(row.xp), p.shape + p.fire);
+      expect(key, row, { softclay: 1 });
+      add('pottery_glass', key, row, { name: `${name(key)} (shape & fire)`, in: { softclay: 1 }, parts: [['shape', p.shape], ['fire', p.fire]] });
+    } else if (glass.has(key)) {
+      const g = glass.get(key);
+      check(key, 'level', row.level, g.level);
+      check(key, 'xp', x10(row.xp), g.xp);
+      expect(key, row, { molten_glass: 1 });
+      add('pottery_glass', key, row, { tools: [need('glassblowingpipe')], in: { molten_glass: 1 } });
+    } else if (key === 'molten_glass') {
+      check(key, 'level', row.level, 1);
+      check(key, 'xp', x10(row.xp), moltenXp);
+      expect(key, row, moltenIn);
+      add('pottery_glass', key, row, { in: moltenIn });
+    } else if (staves.has(key)) {
+      const s = staves.get(key);
+      check(key, 'level', row.level, s.level);
+      check(key, 'xp', x10(row.xp), s.xp);
+      expect(key, row, { [s.orb]: 1, battlestaff: 1 });
+      add('pottery_glass', key, row, { in: { [s.orb]: 1, battlestaff: 1 } });
+    } else throw new Error(`crafting: the server has no ${key}`);
+  }
+
+  for (const [key, row] of Object.entries(calc.spinning)) {
+    const s = spun.get(key);
+    if (!s) throw new Error(`crafting: the server has no ${key}`);
+    check(key, 'level', row.level, s.level);
+    check(key, 'xp', x10(row.xp), s.xp);
+    expect(key, row, { [s.from]: 1 });
+    add('spinning', key, row, { in: { [s.from]: 1 } });
+  }
+
+  // ── Rows for what's sold ──
+  const after = (baseId, m) => methods.splice(methods.findIndex(x => x.id === baseId) + 1, 0, m);
+  const rowOf = key => methods.find(m => m.id === `cr_${key}`) || (() => { throw new Error(`crafting: no row makes ${key}`); })();
+
+  // Dragonhide sets. The slug and name are the market's (set_green_dhide,
+  // "Green d'hide set"); the pieces are the game's own, colour by colour.
+  const sets = [];
+  for (const [leatherItem, { colour, items }] of colours) {
+    const pieces = items.map(rowOf).sort((a, b) => a.level - b.level);       // vambraces, chaps, body
+    const slug = `set_${colour}_dhide`;
+    virtualItems[slug] = {
+      id: 1_000_001 + sets.length, name: `${colour[0].toUpperCase()}${colour.slice(1)} d'hide set`,
+      cost: pieces.reduce((a, m) => a + ITEM.get(Object.keys(m.out)[0]).cost, 0),
+      iconOf: Object.keys(pieces[pieces.length - 1].out)[0], parts: pieces.map(m => Object.keys(m.out)[0]),
+    };
+    const short = m => ITEM.get(Object.keys(m.out)[0]).name.replace(/^Dragon(hide)? /, '');
+    sets.push(slug);
+    after(pieces[pieces.length - 1].id, {
+      id: `cr_${slug}`, skill: 'crafting', group: TABS.needle_thread, kind: 'xp', tools: [needle],
+      name: `${virtualItems[slug].name} (${short(pieces[0])}, ${short(pieces[1])} & ${short(pieces[2])})`,
+      level: Math.max(...pieces.map(m => m.level)), xp: pieces.reduce((a, m) => a + m.xp, 0),
+      in: { [leatherItem]: pieces.reduce((a, m) => a + m.in[leatherItem], 0), [thread]: pieces.length / threadUses },
+      out: { [slug]: 1 }, parts: pieces.map(m => [short(m), m.xp]),
+      note: 'The three pieces, which the market trades together as one set.',
+    });
+  }
+
+  // Enchanted jewellery: the server's enchant spells say what becomes what, and
+  // the runes one cast takes. An amulet of glory is then charged at the Fountain
+  // of Heroes (no cost), which is how it's traded.
+  const spells = await readConfig(scripts('skill_magic/configs/magic_spells.dbrow'));
+  const fountain = await readFile(scripts('areas/areas_heroes_guild/scripts/fountain_of_heroes.rs2'), 'utf8');
+  const charged = new Map();
+  for (const m of fountain.matchAll(/if \(([^)]*)\) \{[\s\S]*?inv_setslot\(inv, \$slot, (\w+), 1\)/g)) {
+    for (const from of m[1].matchAll(/last_useitem = (\w+)/g)) charged.set(from[1], m[2]);
+  }
+  const enchanted = [];
+  for (const row of spells.values()) {
+    const lvl = row.name.match(/^magic_spell_enchant_level(\d)$/);
+    if (!lvl) continue;
+    const d = fields(row);
+    const runes = {};
+    for (let i = 0; i + 1 < d.runesrequired.length; i += 2) if (d.runesrequired[i] !== 'null') runes[need(d.runesrequired[i])] = Number(d.runesrequired[i + 1]);
+    for (const [, from, to] of row.data.filter(([k]) => k === 'convertobj')) {
+      const base = rowOf(from);
+      const final = need(charged.get(to) || to);
+      enchanted.push(final);
+      after(base.id, {
+        id: `cr_ench_${final}`, skill: 'crafting', group: base.group, kind: 'xp', ...(base.tools ? { tools: base.tools } : {}),
+        name: `${ITEM.get(final).name} (${base.parts ? 'make, string & enchant' : 'make & enchant'})`,
+        level: base.level, xp: base.xp, in: { ...base.in, ...runes }, out: { [final]: 1 }, ...(base.parts ? { parts: base.parts } : {}),
+        note: `Enchanted with Lvl-${lvl[1]} Enchant (Magic ${d.levelrequired[0]}), which gives Magic XP, not Crafting XP.${charged.has(to) ? ' Then charged at the Fountain of Heroes.' : ''}`,
+      });
+    }
+  }
+  if (enchanted.length !== 11) throw new Error(`crafting: expected 11 enchanted items, found ${enchanted.length}`);
+
+  // A row whose product another row uses (a cut sapphire, molten glass, a ball
+  // of wool, a leather body for studding) feeds it: with those in your bank the
+  // plan makes them on the way, and their XP counts.
+  const mine = methods.filter(m => m.skill === 'crafting');
+  const inputs = new Set(mine.flatMap(m => Object.keys(m.in)));
+  for (const m of mine) if (Object.keys(m.out).some(k => inputs.has(k))) m.feeds = 1;
+
+  // Tanning: no XP, so it's a step on the way, like an unfinished potion, and the
+  // tanner's fee is part of it (pays: coins never come out of your bank and never
+  // hold a plan back; they're a cost). Dragonhide is planned through, since the
+  // calculator lists the hide. Leather it lists as leather, so cowhide is only
+  // tanned when it's in your bank (a source).
+  const leathers = [...colours.keys()].filter(k => inputs.has(k));
+  for (const leatherItem of leathers) {
+    const hide = hideOf.get(leatherItem);
+    const fee = feeIn('dragonhide');
+    methods.push({ id: `cr_tan_${hide}`, skill: 'crafting', group: 'Tanning', kind: 'prep',
+      name: `Tan ${nameOverride[hide][0].toLowerCase()}${nameOverride[hide].slice(1)}`, level: 1, xp: 0,
+      in: { [hide]: 1, ...fee.in }, out: { [leatherItem]: 1 }, pays: [coins], at: fee.at });
+  }
+  for (const kind of ['leather', 'hard_leather']) {
+    const fee = feeIn(kind);
+    methods.push({ id: `cr_tan_${kind}`, skill: 'crafting', group: 'Tanning', kind: 'source',
+      name: `Tan cowhide (${ITEM.get(need(kind)).name.toLowerCase()})`, level: 1, xp: 0,
+      in: { [cowhide]: 1, ...fee.in }, out: { [kind]: 1 }, pays: [coins], at: fee.at });
+  }
+
+  // Crystal keys: the two halves join into a key, and the crystal chest in
+  // Taverley always has an uncut dragonstone in it (the rest of its loot is
+  // luck, and isn't counted). No XP, and only used from your bank: sources.
+  const keyScript = await readFile(scripts('areas/area_taverly/scripts/crystal_key.rs2'), 'utf8');
+  const joining = keyScript.slice(keyScript.indexOf('[label,join_keys]'));
+  const halves = [...joining.matchAll(/inv_del\(inv, (\w+), 1\)/g)].map(m => need(m[1]));
+  const key = need(fromScriptText(joining, /inv_add\(inv, (\w+), 1\)/, 'what the key halves make'));
+  if (halves.length !== 2) throw new Error(`crafting: expected two key halves, found ${halves.length}`);
+  const chest = await readFile(scripts('areas/area_taverly/scripts/crystal_chest.rs2'), 'utf8');
+  const reward = chest.slice(chest.indexOf('[label,crystal_chest_reward]'));
+  const always = fromScriptText(reward.split('def_int $random')[0], /inv_add\(inv, (\w+), 1\)/, 'what the crystal chest always gives');
+  if (!new RegExp(`inv_del\\(inv, ${key}, 1\\)`).test(chest)) throw new Error("crafting: the crystal chest doesn't take the key");
+  if (!inputs.has(always)) throw new Error(`crafting: nothing is made from the chest's ${always}`);
+  // (both halves are "Half of a key" in-game; tooth and loop are what players call them, and the later game too)
+  nameOverride[halves[0]] = `${ITEM.get(halves[0]).name} (tooth)`;
+  nameOverride[halves[1]] = `${ITEM.get(halves[1]).name} (loop)`;
+  methods.push({ id: 'cr_join_keys', skill: 'crafting', group: 'Crystal keys', kind: 'source', name: 'Join key halves', level: 1, xp: 0,
+    in: Object.fromEntries(halves.map(k => [k, 1])), out: { [key]: 1 } });
+  methods.push({ id: 'cr_crystal_chest', skill: 'crafting', group: 'Crystal keys', kind: 'source', name: 'Open the crystal chest', level: 1, xp: 0,
+    in: { [key]: 1 }, out: { [always]: 1 }, note: "The chest's other loot is luck, and isn't counted." });
+
+  // The Bank tab: what goes in, by kind, then what comes out, tab by tab.
+  const cutGems = Object.keys(calc.jewellery).filter(k => gems.has(k));
+  const supplies = [
+    { name: 'Leather and thread', items: [cowhide, 'leather', 'hard_leather', thread, 'studs'] },
+    { name: 'Dragonhide', items: leathers.flatMap(k => [hideOf.get(k), k]) },
+    { name: 'Gems', items: [...cutGems.map(k => gems.get(k).uncut), ...cutGems] },
+    { name: 'Crystal keys', items: [...halves, key] },
+    { name: 'Bars, wool and flax', items: ['gold_bar', 'silver_bar', 'wool', wool, 'flax'] },
+    { name: 'Clay, sand and glass', items: ['softclay', ...Object.keys(moltenIn), 'molten_glass'] },
+    { name: 'Orbs and battlestaves', items: ['battlestaff', ...Object.keys(calc.pottery_glass).filter(k => staves.has(k)).map(k => staves.get(k).orb)] },
+    { name: 'Runes for enchanting', items: [...new Set(mine.filter(m => m.id.startsWith('cr_ench_')).flatMap(m => Object.keys(m.in)).filter(k => /rune$/.test(k)))].sort((a, b) => (b === 'cosmicrune') - (a === 'cosmicrune')) },
+  ];
+  const listed = new Set(supplies.flatMap(g => g.items));
+  for (const k of inputs) if (!listed.has(k) && !mine.some(m => m.out[k])) throw new Error(`crafting: ${k} goes in but isn't in a bank group`);
+  const rest = tab => made[tab].filter(k => !listed.has(k));
+  bankGroups.crafting = [
+    ...supplies,
+    { name: 'Made: leather', items: rest('Needle & thread') },
+    { name: 'Made: jewellery', items: rest('Jewellery') },
+    { name: 'Made: enchanted jewellery', items: enchanted },
+    { name: 'Made: pottery, glass and staves', items: [...rest('Pottery & glass'), ...rest('Spinning')] },
+  ];
+  // Priced, but not a bank item: the market's sets.
+  saleGroups.crafting = [{ name: 'Dragonhide sets', items: sets }];
+  // Where there's a choice of place: the tanner, which sets the fee.
+  places.crafting = {
+    label: 'Tanner',
+    options: TANNERS.map(t => ({ id: t.id, name: t.name, short: `${t.dragonhide} gp a dragonhide`, note: `leather ${t.leather} gp, hard leather ${t.hard_leather} gp, dragonhide ${t.dragonhide} gp a hide` })),
+  };
+  fixedPrices[coins] = 1;
+  // Gems that can smash when cut (the calculator counts every cut as a success).
+  craftingNotes.push(`can smash when cut (not counted, like the calculator): ${cutGems.filter(k => gems.get(k).canSmash).map(k => ITEM.get(k).name).join(', ')}`);
+}
+
+await crafting();
+
 // ── Catalog of every item the data mentions ───────────────────────────────
 const used = new Set();
 for (const m of methods) {
@@ -425,7 +786,7 @@ for (const k of [...used]) {
   if (m && ITEM.has('4dose' + m[1])) used.add('4dose' + m[1]);
 }
 
-const names = [...used].map(need).sort((a, b) => ITEM.get(a).id - ITEM.get(b).id);
+const names = [...used].filter(k => !virtualItems[k]).map(need).sort((a, b) => ITEM.get(a).id - ITEM.get(b).id);
 
 // ── Icon atlas ─────────────────────────────────────────────────────────────
 const PER_ROW = 16, SIZE = 32;
@@ -455,24 +816,39 @@ names.forEach((name, n) => {
     cost: i.cost ?? 0,
     ...(i.members ? { members: 1 } : {}),
     ...(i.tradeable === true ? {} : { untradeable: 1 }),
+    ...(fixedPrices[name] != null ? { gp: fixedPrices[name] } : {}),
     icon: n,
   };
 });
+// The market's sets: no icon of their own, so they borrow their biggest piece's.
+for (const [slug, v] of Object.entries(virtualItems)) {
+  items[slug] = { id: v.id, name: v.name, cost: v.cost, members: 1, icon: items[v.iconOf].icon, set: v.parts };
+}
 
 const out = `// Generated by build-data.mjs. Do not edit by hand; change the script and re-run it.
 // Levels and XP come from Lost City's server content (LostCityRS/Content, rev 274, MIT);
 // XP is in tenths, like the server keeps it. Item names, ids and shop values are from
-// LostHQ's item database (GPL-3.0). RuneScape is (c) Jagex Ltd.
+// LostHQ's item database (GPL-3.0). Crafting's rows are LostHQ's Crafting calculator
+// (GPL-3.0), checked against the server. RuneScape is (c) Jagex Ltd.
 //
 // A method turns "in" items into "out" items (no "in" at all: gathering, like
 // Woodcutting). unit/units, when set, is what one action uses (one essence, one
 // log). multiple: makes floor(level / multiple) + 1 of each output per action
 // (runes per essence as Runecraft levels up). parts: the XP of each step of a
-// whole job (cut, then string). tools: needed, never used up. kind:
+// whole job (cut, then string). tools: needed, never used up. An amount in "in"
+// is a whole number, except thread: a reel lasts five items (0.2 each). kind:
 //   xp     - an action you train with (it gives XP)
-//   prep   - a step you do on the way (unfinished potions, grinding): planned through
+//   prep   - a step you do on the way (unfinished potions, grinding, tanning):
+//            planned through
 //   source - turns something you already have into an input (filling vials):
 //            used when it's in your bank, never put on a shopping list
+// feeds: an xp method whose product another one uses (a cut gem for a ring):
+// a plan makes it on the way from what's in your bank, like a source, and its
+// XP counts. note: a line for the row's tooltip (what else it takes).
+// pays: inputs that are a fee (the tanner's coins): never taken from a bank,
+// never holding a plan back, always a cost. at: what the step takes instead at
+// another place (the Canifis tanner's fee); PLACES names the choice.
+// An item with gp is always worth that (a coin is 1 gp): no market price.
 
 export const GAME_REVISION = 274;
 export const ICON_SIZE = ${SIZE};
@@ -490,9 +866,19 @@ export const UNID_HERBS = ${JSON.stringify(unidHerbs)};
 
 // What the Bank tab lists for each skill, in groups.
 export const BANK_GROUPS = ${JSON.stringify(bankGroups, null, 2)};
+
+// What the Prices tab lists besides: things the market trades as one item that
+// aren't an item in the game, so never in a bank (a set of dragonhide armour;
+// its ITEMS entry has set: the pieces).
+export const SALE_GROUPS = ${JSON.stringify(saleGroups, null, 2)};
+
+// Where a skill has a choice of place that changes what a step takes: the
+// tanner (the first is the default; a method's "at" has the others' amounts).
+export const PLACES = ${JSON.stringify(places, null, 2)};
 `;
 await writeFile('gamedata.js', out);
 console.log(`gamedata.js: ${methods.length} methods, ${names.length} items; items.png ${PER_ROW * SIZE}x${rows * SIZE}`);
+for (const note of craftingNotes) console.log(`  crafting: ${note}`);
 
 // ── Bank screenshots ───────────────────────────────────────────────────────
 // What bankread.js needs to read a bank from a screenshot, loaded only when one
@@ -552,7 +938,7 @@ async function bankScreenshots() {
   const objFiles = (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.obj'));
   for (const f of objFiles) {
     for (const block of (await readConfig(scripts(f))).values()) {
-      if (!items[block.name]) continue;
+      if (!items[block.name] || fixedPrices[block.name] != null) continue;      // (coins aren't read: they're a fee here, not a bank item)
       for (const [k, v] of Object.entries(block.props)) if (/^count\d+$/.test(k)) variants.set(need(v.split(',')[0]), block.name);
     }
   }
@@ -579,10 +965,16 @@ async function bankScreenshots() {
   // pixel for pixel another one already in the set adds nothing and is left out;
   // when it's one of ours it's noted under also, since a screenshot can't tell
   // them apart (lantadyme has no colour of its own in this version, so it looks
-  // like any unid herb).
+  // like any unid herb). When it's something the planner doesn't use that you
+  // could well have in a bank (an amulet of glory is a dragonstone amulet with
+  // a spell on it; a jug of wine looks like wine of Zamorak), its name is noted
+  // under like, so the review can say the two look the same.
   const unidKey = outlineOf(iconPixels(ITEM.get(unidHerbs.item).id));
   const entries = [];
   const seen = new Map();                    // pixels -> entry
+  // Twins worth naming: tradeable ones, and the Dramen staff (a quest reward
+  // most banks hold). Not other quest and minigame pieces, which would only add noise.
+  const KEEPSAKES = new Set(['dramen_staff']);
   const add = (slug, extra = {}) => {
     const px = iconPixels(ITEM.get(slug).id);
     const key = px.toString('base64');
@@ -590,13 +982,25 @@ async function bankScreenshots() {
     if (seen.has(key)) {
       const kept = seen.get(key);
       if (items[slug] && slug !== kept.slug && !kept.also?.includes(slug)) (kept.also ||= []).push(slug);
+      else if (!items[slug] && items[kept.slug] && !kept.of && kept.slug !== unidHerbs.item && !slug.startsWith('cert_')
+        && (ITEM.get(slug).tradeable === true || KEEPSAKES.has(slug))) {
+        // "Ring of dueling(7)" … "(1)" are one name; beside the (8) they're the same ring, part used
+        const bare = n => n.replace(/\s*\(\d+\)$/, '');
+        const ours = items[kept.slug].name;
+        const twin = bare(ITEM.get(slug).name) === bare(ours) ? `${bare(ours)} (fewer charges)` : bare(ITEM.get(slug).name);
+        if (twin !== ours && !kept.like?.includes(twin)) (kept.like ||= []).push(twin);
+      }
       return;
     }
     const e = { slug, ...extra };
     seen.set(key, e);
     entries.push({ e, px });
   };
-  for (const name of names) add(name);
+  // Enchanted jewellery looks exactly like the plain piece it's made from. In a
+  // bank it's far more often the enchanted one (a ring of dueling, not an emerald
+  // ring), so that's what such an icon is read as; the plain one is noted under also.
+  const enchantedFirst = methods.filter(m => m.id.startsWith('cr_ench_')).map(m => Object.keys(m.out)[0]);
+  for (const name of [...enchantedFirst, ...names]) if (fixedPrices[name] == null) add(name);
   for (const [v, base] of variants) add(v, { of: base });
   const ours = new Set(entries.map(x => x.e.slug));
   for (const { px } of [...entries]) {
@@ -631,6 +1035,8 @@ export const STACK_FONT = ${JSON.stringify(font)};
 // bankicons.png, ${PER_ROW} per row, in this order. slug: a planner item, or with
 // of: an icon of that item (a bigger stack of arrows, any unid herb), or with
 // other: an item the planner doesn't use that looks like one it does.
+// also: other planner items with the very same icon; like: names of items the
+// planner doesn't use that have it too (an amulet of glory, a jug of wine).
 export const BANK_ICONS_PER_ROW = ${PER_ROW};
 export const BANK_ICONS = [
 ${entries.map(({ e }) => '  ' + JSON.stringify(e)).join(',\n')},

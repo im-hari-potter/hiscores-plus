@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareIcons, readBank, mergeReads, parseStack, findBank } from './bankread.js';
 import { BANK_ICONS, BANK_ICONS_PER_ROW, BANK_LAYOUT, STACK_FONT } from './bankread-data.js';
-import { ITEMS } from './gamedata.js';
+import { ITEMS, BANK_GROUPS } from './gamedata.js';
 import { fakeBank, atlas, crop } from './bankfake.mjs';
 
 const icons = prepareIcons(atlas, BANK_ICONS, BANK_ICONS_PER_ROW);
@@ -104,5 +104,44 @@ test('a different brightness setting bends colours, and is allowed for', () => {
 
 test('every planner item but lantadyme has an icon to be read by', () => {
   const read = new Set(BANK_ICONS.flatMap(e => [e.of || e.slug, ...(e.also || [])]));
-  assert.deepEqual(Object.keys(ITEMS).filter(k => !read.has(k)), []);
+  // (the market's armour sets aren't items in the game, so never in a bank; coins are a fee here, not a bank item)
+  assert.deepEqual(Object.keys(ITEMS).filter(k => !read.has(k) && !ITEMS[k].set && ITEMS[k].gp == null), []);
+  assert.ok(!BANK_ICONS.some(e => (e.of || e.slug) === 'coins' && !e.other), 'a stack of coins is not read as a planner item');
+});
+
+test('an item that looks exactly like another says so (v2.5)', () => {
+  const entry = slug => BANK_ICONS.find(e => e.slug === slug);
+  // enchanted jewellery is the plain piece with a spell on it: read as the enchanted one (likelier in a bank), the plain one noted
+  assert.deepEqual(entry('amulet_of_glory_4'), { slug: 'amulet_of_glory_4', also: ['strung_dragonstone_amulet'], like: ['Amulet of glory (fewer charges)'] });
+  assert.deepEqual(entry('ring_of_dueling_8'), { slug: 'ring_of_dueling_8', also: ['emerald_ring'], like: ['Ring of dueling (fewer charges)'] });
+  assert.deepEqual(entry('necklace_of_minigames_8'), { slug: 'necklace_of_minigames_8', also: ['sapphire_necklace'], like: ['Games necklace (fewer charges)'] });
+  assert.deepEqual(entry('ring_of_recoil'), { slug: 'ring_of_recoil', also: ['sapphire_ring'] });
+  assert.equal(entry('strung_dragonstone_amulet'), undefined);
+  // things the planner doesn't use that you could well have in a bank are named
+  assert.deepEqual(entry('battlestaff').like, ['Dramen staff', 'Staff']);
+  assert.deepEqual(entry('air_battlestaff').like, ['Staff of air', 'Mystic air staff']);
+  assert.deepEqual(entry('wine_of_zamorak').like, ['Half full wine jug', 'Jug of bad wine', 'Jug of wine', 'Unfermented wine']);
+  assert.equal(entry('lawrune').like, undefined, 'not quest and minigame pieces (a board game\'s law rune)');
+  assert.equal(entry('unidentified_guam').like, undefined, 'unid herbs have their own note');
+  const m = mergeReads([read(fakeBank({ items: [{ slot: 0, icon: 'amulet_of_glory_4', count: 3 }, { slot: 1, icon: 'ashes', count: 40 }, { slot: 2, icon: 'gold_bar', count: 500 }] }))]);
+  assert.deepEqual([item(m, 'amulet_of_glory_4').also, item(m, 'amulet_of_glory_4').like], [['strung_dragonstone_amulet'], ['Amulet of glory (fewer charges)']]);
+  assert.deepEqual(item(m, 'ashes').also, ['soda_ash'], 'soda ash looks just like ashes');
+  assert.equal(item(m, 'gold_bar').like, undefined);
+});
+
+test('crafting: every bank item is read as itself, lookalikes told apart by colour, at any brightness (v2.5)', () => {
+  // dragonhide in four colours, eight gems cut and uncut, rings, necklaces and amulets: the same shapes, different colours
+  const kept = new Map(BANK_ICONS.flatMap(e => (e.also || []).map(a => [a, e.slug])));
+  const all = [...new Set(BANK_GROUPS.crafting.flatMap(g => g.items))];
+  assert.ok(all.length > 100);
+  for (const brightness of [1, 1.25]) {
+    for (let i = 0; i < all.length; i += 48) {
+      const batch = all.slice(i, i + 48);
+      const s = bySlot(read(fakeBank({ items: batch.map((slug, k) => ({ slot: k, icon: kept.get(slug) || slug, count: 100 + k })), brightness })));
+      batch.forEach((slug, k) => {
+        assert.equal(s[k]?.entry?.slug, kept.get(slug) || slug, `${slug} at brightness ${brightness}`);
+        assert.equal(s[k].count, 100 + k);
+      });
+    }
+  }
 });

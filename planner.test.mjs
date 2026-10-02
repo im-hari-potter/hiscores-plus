@@ -1,7 +1,7 @@
 // Run with:  node --test
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { METHODS, ITEMS, BANK_GROUPS, UNID_HERBS } from './gamedata.js';
+import { METHODS, ITEMS, BANK_GROUPS, SALE_GROUPS, PLACES, UNID_HERBS } from './gamedata.js';
 import { mergeUnids } from './planner-ui.js';
 import {
   xp10ForLevel, levelForXp10, goalTargetXp10, rankForTop, indexMethods, planBank, planGoal,
@@ -72,7 +72,7 @@ test("Ostap's example: 74 to 78 Herblore with 1,000 ranarr and 700 snape grass",
   assert.deepEqual(plan.fill.buy, { ranarr_weed: 3948, snape_grass: 4248 });
 });
 
-test('even out: 605 kwuarm and 518 limpwurt want 87 more limpwurt (v2.4.2)', () => {
+test('round up my supplies: 605 kwuarm and 518 limpwurt want 87 more limpwurt (v2.4.2)', () => {
   const opts = bank => ({ bank, currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(78), unlimited: VIALS });
   let r = row(planGoal(ix, opts({ kwuarm: 605, limpwurt_root: 518, vial_water: 2230 })), 'hb_3dose2strength');
   assert.equal(r.have, 518);
@@ -82,7 +82,7 @@ test('even out: 605 kwuarm and 518 limpwurt want 87 more limpwurt (v2.4.2)', () 
   assert.deepEqual(r.balance, { runs: 518, collect: { kwuarm: 18 } });
   r = row(planGoal(ix, opts({ kwuarm: 505, kwuarmvial: 100, limpwurt_root: 518 })), 'hb_3dose2strength');
   assert.deepEqual(r.balance, { runs: 605, collect: { limpwurt_root: 87 } });
-  // nothing to even out once it pairs up, or with the bank left out
+  // nothing to round up once it pairs up, or with the bank left out
   assert.equal(row(planGoal(ix, opts({ kwuarm: 518, limpwurt_root: 518 })), 'hb_3dose2strength').balance, null);
   assert.equal(row(planGoal(ix, { ...opts({ kwuarm: 605, limpwurt_root: 518 }), useBank: false }), 'hb_3dose2strength').balance, null);
 });
@@ -133,7 +133,7 @@ test('"I\'ll buy vials of water as I go": on, vials are left out of what to coll
   assert.equal(rOff.econ.net, 680, 'and 20 for the vial');
 });
 
-test('totals per row: net after even out, and after collecting the rest (v2.4.4)', () => {
+test('totals per row: net after rounding up my supplies, and after collecting the rest (v2.4.4)', () => {
   const price = { kwuarm: 2000, limpwurt_root: 300, '3dose2strength': 3000, avantoe: 900, snape_grass: 50, '3dosefisherspotion': 1200 };
   const plan = planGoal(ix, {
     bank: { kwuarm: 605, limpwurt_root: 518, avantoe: 403, snape_grass: 403 },
@@ -149,9 +149,9 @@ test('totals per row: net after even out, and after collecting the rest (v2.4.4)
   const fish = row(plan, 'hb_3dosefisherspotion');
   assert.equal(fish.balance, null);
   assert.deepEqual(fish.gains.even, { total: 403 * 1200, value: 403 * 1200, cost: 0, missing: [] });
-  // the total net: what the bank plan makes of it before evening out (518, as
+  // the total net: what the bank plan makes of it before rounding up (518, as
   // From your bank shows), plus the net after buying supplies. Not the net
-  // after even out: the 87 kwuarm left over would count twice.
+  // after rounding up: the 87 kwuarm left over would count twice.
   assert.deepEqual(ss.gains.before, { total: 518 * 3000, value: 518 * 3000, cost: 0, missing: [] });
   assert.deepEqual([ss.fromPlan, fish.fromPlan, row(plan, 'hb_3dose1attack').fromPlan], [518, 403, 0], 'what the bank plan makes of each');
   assert.equal(ss.gains.net.total, 518 * 3000 + ss.gains.collect.total);
@@ -160,7 +160,7 @@ test('totals per row: net after even out, and after collecting the rest (v2.4.4)
   // nothing made from the bank: just the net after buying supplies
   assert.equal(row(plan, 'hb_3dose1attack').gains.before, null);
   assert.deepEqual(row(plan, 'hb_3dose1attack').gains.net.missing, row(plan, 'hb_3dose1attack').gains.collect.missing);
-  // nothing for it in the bank: nothing to even out, nothing to show for it
+  // nothing for it in the bank: nothing to round up, nothing to show for it
   assert.equal(row(plan, 'hb_3dose1attack').balance, null);
   assert.equal(row(plan, 'hb_3dose1attack').gains.even, null);
   assert.ok(row(plan, 'hb_3dose1attack').gains.collect.missing.length, 'no prices for attack potions here');
@@ -469,4 +469,546 @@ test('fletching: the balance tip counts 15 feathers and arrowtips to a log', () 
   const r = row(plan, 'fl_logs_iron_arrow');
   assert.equal(r.have, 200, '3,000 arrowtips is 200 logs\' worth');
   assert.deepEqual(r.balance, { runs: 400, collect: { logs: 100, iron_arrowheads: 3000 } }, 'the feathers would do 400 logs');
+});
+
+// ── Crafting ──────────────────────────────────────────────────────────────
+// The rows are LostHQ's Crafting calculator; the numbers below are the ones on
+// its page (levels, XP per item, ingredients), with XP in tenths. Where the
+// server differs, the server's number is the one used.
+const cr = indexMethods(METHODS.filter(m => m.skill === 'crafting'));
+const crCanifis = indexMethods(METHODS.filter(m => m.skill === 'crafting'), { at: 'canifis' });
+const THREAD = new Set(['thread']);
+const crSteps = res => res.steps.map(s => [s.id, s.runs, s.sub]);
+// (rounding up) [id, how many, made after the bank's own steps?, collected for it]
+const evSteps = res => res.steps.map(s => [s.id, s.runs, !!s.rounded, s.collect || null]);
+// Rows added for what they sell as: dragonhide sets and enchanted jewellery.
+const forSale = m => /^cr_(set|ench)_/.test(m.id);
+const calcRows = cr.train.filter(m => !forSale(m));
+
+test('crafting: every row of LostHQ\'s calculator, tab by tab, with its level, XP and ingredients (the server\'s where they differ)', () => {
+  const tabs = ['Needle & thread', 'Jewellery', 'Pottery & glass', 'Spinning'];
+  assert.deepEqual(tabs.map(g => calcRows.filter(m => m.group === g).length), [22, 35, 14, 2]);
+  assert.equal(calcRows.length, 73);
+  const r = id => { const m = cr.byId.get(id); return [m.level, m.xp, m.in]; };
+  assert.deepEqual(r('cr_leather_gloves'), [1, 138, { leather: 1, thread: 0.2 }]);
+  assert.deepEqual(r('cr_hardleather_body'), [28, 350, { hard_leather: 1, thread: 0.2 }]);
+  assert.deepEqual(r('cr_coif'), [38, 370, { leather: 1, thread: 0.2 }]);
+  assert.deepEqual(r('cr_studded_body'), [41, 400, { leather_armour: 1, studs: 1 }]);
+  assert.deepEqual(r('cr_studded_chaps'), [44, 420, { leather_chaps: 1, studs: 1 }]);
+  assert.deepEqual(r('cr_dragonhide_chaps'), [60, 1240, { dragon_leather: 2, thread: 0.2 }]);
+  assert.deepEqual(r('cr_black_dragonhide_body'), [84, 2580, { dragon_leather_black: 3, thread: 0.2 }]);
+  assert.deepEqual(r('cr_opal'), [1, 150, { uncut_opal: 1 }]);
+  assert.deepEqual(r('cr_gold_ring'), [5, 150, { gold_bar: 1 }]);
+  assert.deepEqual(r('cr_nostringstar'), [16, 500, { silver_bar: 1 }]);
+  assert.deepEqual(r('cr_stringstar'), [16, 540, { silver_bar: 1, ball_of_wool: 1 }]);
+  assert.deepEqual(r('cr_silver_sickle'), [18, 500, { silver_bar: 1 }]);
+  assert.deepEqual(r('cr_emerald'), [27, 675, { uncut_emerald: 1 }]);
+  assert.deepEqual(r('cr_sapphire_necklace'), [20, 550, { gold_bar: 1, sapphire: 1 }], 'level 20, as the server has it (the calculator says 22)');
+  assert.deepEqual(r('cr_dragonstone_necklace'), [72, 1050, { gold_bar: 1, dragonstone: 1 }]);
+  assert.deepEqual(r('cr_strung_dragonstone_amulet'), [80, 1540, { gold_bar: 1, dragonstone: 1, ball_of_wool: 1 }]);
+  assert.deepEqual(r('cr_pot_unfired'), [1, 63, { softclay: 1 }]);
+  assert.deepEqual(r('cr_pot_empty'), [1, 126, { softclay: 1 }]);
+  assert.deepEqual(r('cr_molten_glass'), [1, 200, { bucket_sand: 1, soda_ash: 1 }]);
+  assert.deepEqual(r('cr_vial_empty'), [33, 350, { molten_glass: 1 }]);
+  assert.deepEqual(r('cr_stafforb'), [46, 525, { molten_glass: 1 }]);
+  assert.deepEqual(r('cr_air_battlestaff'), [66, 1375, { air_orb: 1, battlestaff: 1 }]);
+  assert.deepEqual(r('cr_ball_of_wool'), [1, 25, { wool: 1 }]);
+  assert.deepEqual(r('cr_bow_string'), [10, 150, { flax: 1 }]);
+  // in the calculator's order, tab by tab
+  assert.deepEqual(calcRows.slice(0, 3).map(m => m.id), ['cr_leather_gloves', 'cr_leather_boots', 'cr_leather_cowl']);
+  assert.deepEqual(calcRows.filter(m => m.group === 'Jewellery').slice(0, 5).map(m => m.id), ['cr_opal', 'cr_gold_ring', 'cr_gold_necklace', 'cr_unstrung_gold_amulet', 'cr_strung_gold_amulet']);
+});
+
+test('crafting: whole jobs add up their steps, tools are named, and same-named items are told apart', () => {
+  for (const m of cr.train) if (m.parts) assert.equal(m.parts.reduce((a, [, x]) => a + x, 0), m.xp, m.id);
+  assert.deepEqual(cr.byId.get('cr_piedish').parts, [['shape', 150], ['fire', 100]]);
+  assert.deepEqual(cr.byId.get('cr_strung_gold_amulet').parts, [['make', 300], ['string', 40]], 'stringing is always 4 XP');
+  assert.equal(cr.byId.get('cr_strung_gold_amulet').name, 'Gold amulet (make & string)');
+  assert.equal(cr.byId.get('cr_pot_empty').name, 'Pot (shape & fire)');
+  assert.equal(cr.byId.get('cr_sapphire').name, 'Sapphire (cut)');
+  const tools = id => cr.byId.get(id).tools;
+  assert.deepEqual([tools('cr_coif'), tools('cr_ruby'), tools('cr_ruby_ring'), tools('cr_ruby_necklace'), tools('cr_unstrung_ruby_amulet'), tools('cr_strung_ruby_amulet')],
+    [['needle'], ['chisel'], ['ring_mould'], ['necklace_mould'], ['amulet_mould'], ['amulet_mould']]);
+  assert.deepEqual([tools('cr_nostringstar'), tools('cr_silver_sickle'), tools('cr_vial_empty'), tools('cr_studded_body')], [['holy_symbol_mould'], ['sickle_mould'], ['glassblowingpipe'], undefined]);
+  assert.equal(ITEMS.unstrung_gold_amulet.name, 'Gold amulet (u)');
+  assert.equal(ITEMS.strung_gold_amulet.name, 'Gold amulet');
+  assert.deepEqual(['dragonhide_blue', 'dragon_leather_blue', 'blue_dragonhide_body', 'blue_dragon_vambraces'].map(k => ITEMS[k].name),
+    ['Dragonhide (blue)', 'Dragon leather (blue)', 'Dragonhide body (blue)', 'Dragon vambraces (blue)']);
+  assert.equal(ITEMS.dragon_vambraces.name, 'Dragon vambraces (green)');
+  // every item a row takes or makes can be typed into the bank (but for the market's sets, which aren't items
+  // in the game, and coins, which are a fee and not a supply)
+  const banked = new Set(BANK_GROUPS.crafting.flatMap(g => g.items));
+  for (const m of cr.methods) for (const k of [...Object.keys(m.in), ...Object.keys(m.out)]) assert.ok(banked.has(k) || ITEMS[k].set || ITEMS[k].gp != null, k);
+});
+
+test('crafting: how many to a goal, and the materials, as the calculator works them out', () => {
+  // 0 XP to level 2 (83 XP): 7 leather gloves at 13.8, with 7 leather and 2 reels of thread (0.2 each, rounded up)
+  const plan = planGoal(cr, { bank: {}, currentXp10: 0, targetXp10: xp10ForLevel(2), useBank: false });
+  const gloves = row(plan, 'cr_leather_gloves');
+  assert.equal(gloves.needed, 7);
+  assert.deepEqual(gloves.collect, { leather: 7, thread: 1.4 }, 'shown as 2 reels: what to collect is whole ones');
+  // level 62 to 70: 124,029.6 XP short of 737,627
+  const hi = planGoal(cr, { bank: {}, currentXp10: xp10ForLevel(62), targetXp10: xp10ForLevel(70), useBank: false, unlimited: THREAD });
+  const toGo = xp10ForLevel(70) - xp10ForLevel(62);
+  assert.equal(row(hi, 'cr_fire_battlestaff').needed, Math.ceil(toGo / 1250));
+  assert.deepEqual(row(hi, 'cr_fire_battlestaff').collect, { fire_orb: Math.ceil(toGo / 1250), battlestaff: Math.ceil(toGo / 1250) });
+  // dragonhide: the calculator's ingredient is the hide (it's tanned on the way, 20 coins each in Al Kharid), 3 to a body;
+  // thread left out when you buy it as you go
+  assert.deepEqual(row(hi, 'cr_dragonhide_body').collect, { dragonhide_green: 3 * Math.ceil(toGo / 1860), coins: 60 * Math.ceil(toGo / 1860) });
+  assert.deepEqual(row(hi, 'cr_dragonhide_body').econ.inputs, { dragonhide_green: 3, coins: 60 });
+  // a ring from scratch takes the cut gem, as the calculator lists it
+  assert.deepEqual(row(hi, 'cr_sapphire_ring').econ.inputs, { gold_bar: 1, sapphire: 1 });
+  assert.deepEqual(row(hi, 'cr_stafforb').econ.inputs, { molten_glass: 1 });
+  assert.deepEqual(row(hi, 'cr_studded_body').econ.inputs, { leather_armour: 1, studs: 1 });
+});
+
+test('crafting: what one row makes feeds the next: gems are cut and wool is spun on the way, and their XP counts', () => {
+  const res = planBank(cr, { bank: { gold_bar: 500, uncut_sapphire: 300, wool: 200 }, startXp10: xp10ForLevel(30), unlimited: THREAD });
+  assert.deepEqual(crSteps(res), [
+    ['cr_strung_sapphire_amulet', 200, { cr_sapphire: 200, cr_ball_of_wool: 200 }],
+    ['cr_unstrung_sapphire_amulet', 100, { cr_sapphire: 100 }],
+    ['cr_unstrung_gold_amulet', 200, {}],
+  ]);
+  assert.equal(res.steps[0].xp10, 200 * (690 + 500 + 25), 'amulet 69 + cutting 50 + spinning 2.5');
+  assert.equal(res.xp10, 200 * 1215 + 100 * (650 + 500) + 200 * 300);
+  assert.deepEqual(res.steps[0].made, { strung_sapphire_amulet: 200 }, 'the cut sapphires went into the amulets');
+  assert.deepEqual(res.leftover.toObject(), { strung_sapphire_amulet: 200, unstrung_sapphire_amulet: 100, unstrung_gold_amulet: 200 });
+  // the table: each row on its own counts the uncut gems too, and Round up my supplies knows about them
+  const plan = planGoal(cr, { bank: { gold_bar: 500, uncut_sapphire: 300, wool: 200 }, currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(50), unlimited: THREAD });
+  assert.equal(row(plan, 'cr_sapphire').have, 300);
+  assert.equal(row(plan, 'cr_sapphire_ring').have, 300, '500 bars, 300 sapphires once cut');
+  assert.deepEqual(row(plan, 'cr_sapphire_ring').balance, { runs: 500, collect: { sapphire: 200 } });
+  assert.deepEqual(row(plan, 'cr_strung_sapphire_amulet').balance, { runs: 500, collect: { sapphire: 200, ball_of_wool: 300 } });
+  assert.equal(row(plan, 'cr_strung_sapphire_amulet').fromPlan, 200);
+  assert.equal(row(plan, 'cr_sapphire').fromPlan, 0, 'cut on the way: their worth is in the amulets');
+  // the rest of the goal is bought as the calculator lists it
+  assert.equal(plan.fill.id, 'cr_strung_sapphire_amulet');
+  const n = plan.fill.segments[0].runs;
+  assert.deepEqual(plan.fill.buy, { gold_bar: n, sapphire: n, ball_of_wool: n });
+});
+
+test('crafting: leather is made into bodies and chaps for the studs, molten glass for the orbs', () => {
+  const studs = planBank(cr, { bank: { leather: 100, studs: 30 }, startXp10: xp10ForLevel(45), unlimited: THREAD });
+  assert.deepEqual(crSteps(studs), [['cr_studded_chaps', 30, { cr_leather_chaps: 30 }], ['cr_coif', 70, {}]]);
+  assert.equal(studs.xp10, 30 * (420 + 270) + 70 * 370);
+  assert.deepEqual(studs.assumed, { thread: 20 }, '100 items, a reel for every five');
+  const glass = planGoal(cr, { bank: { bucket_sand: 200, soda_ash: 150 }, currentXp10: xp10ForLevel(46), targetXp10: xp10ForLevel(50), unlimited: THREAD });
+  assert.deepEqual(crSteps(glass.fromBank), [['cr_stafforb', 150, { cr_molten_glass: 150 }]]);
+  assert.equal(glass.fromBank.xp10, 150 * (525 + 200));
+  assert.deepEqual(glass.fromBank.leftover.toObject(), { bucket_sand: 50, stafforb: 150 });
+  assert.equal(row(glass, 'cr_vial_empty').have, 150);
+  assert.deepEqual(row(glass, 'cr_molten_glass').balance, { runs: 200, collect: { soda_ash: 50 } });
+  assert.deepEqual(row(glass, 'cr_stafforb').balance, { runs: 200, collect: { soda_ash: 50 } }, 'rounding up looks through the glass made on the way');
+  const still = row(glass, 'cr_molten_glass').toMake;
+  assert.deepEqual(row(glass, 'cr_molten_glass').collect, { bucket_sand: still - 50, soda_ash: still }, 'the sand left over is used first');
+  assert.deepEqual(row(glass, 'cr_stafforb').collect, { molten_glass: row(glass, 'cr_stafforb').toMake });
+});
+
+test('crafting: unticking a row stops it being made on the way too', () => {
+  const bank = { gold_bar: 500, uncut_sapphire: 300, wool: 200 };
+  const res = planBank(cr, { bank, startXp10: xp10ForLevel(30), unlimited: THREAD, excluded: new Set(['cr_sapphire']) });
+  assert.deepEqual(crSteps(res), [['cr_strung_gold_amulet', 200, { cr_ball_of_wool: 200 }], ['cr_unstrung_gold_amulet', 300, {}]]);
+  assert.equal(res.leftover.have('uncut_sapphire'), 300, 'the sapphires stay uncut');
+  const plan = planGoal(cr, { bank, currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(50), unlimited: THREAD, excluded: new Set(['cr_sapphire']) });
+  assert.equal(row(plan, 'cr_sapphire_ring').have, 0);
+  assert.deepEqual(row(plan, 'cr_sapphire_ring').balance, { runs: 500, collect: { sapphire: 500 } });
+});
+
+test('crafting: dragonhide is tanned on the way; dragon leather in the bank goes first', () => {
+  const bank = { dragonhide_green: 300, dragon_leather: 50 };
+  const res = planBank(cr, { bank, startXp10: xp10ForLevel(63), unlimited: THREAD });
+  assert.deepEqual(crSteps(res), [['cr_set_green_dhide', 58, { cr_tan_dragonhide_green: 298 }], ['cr_dragonhide_chaps', 1, { cr_tan_dragonhide_green: 2 }]]);
+  assert.equal(res.xp10, 58 * 3720 + 1240, 'tanning gives no XP');
+  // (vambraces, chaps and bodies all give the same XP a hide, so sets or bodies come to the same)
+  const bodies = planBank(cr, { bank, startXp10: xp10ForLevel(63), unlimited: THREAD, excluded: new Set(['cr_set_green_dhide']) });
+  assert.deepEqual(crSteps(bodies), [['cr_dragonhide_body', 116, { cr_tan_dragonhide_green: 298 }], ['cr_dragonhide_chaps', 1, { cr_tan_dragonhide_green: 2 }]]);
+  assert.equal(bodies.xp10, res.xp10);
+  assert.equal(cr.byId.get('cr_tan_dragonhide_green').kind, 'prep');
+  assert.ok(!cr.train.some(m => m.group === 'Tanning'), 'not a way to train');
+  const plan = planGoal(cr, { bank, currentXp10: xp10ForLevel(63), targetXp10: xp10ForLevel(70), unlimited: THREAD });
+  assert.equal(row(plan, 'cr_dragon_vambraces').have, 350, 'hides and leather alike');
+});
+
+test("crafting: the tanner's fee is counted, Al Kharid's or the dearer one in Canifis (v2.5)", () => {
+  // the server's fees a hide: leather 1, hard leather 3, dragonhide 20 in Al Kharid; 2, 5 and 45 in Canifis
+  const tan = (ix, id) => { const m = ix.byId.get(id); return [m.kind, m.xp, m.in, m.out]; };
+  assert.deepEqual(tan(cr, 'cr_tan_dragonhide_black'), ['prep', 0, { dragonhide_black: 1, coins: 20 }, { dragon_leather_black: 1 }]);
+  assert.deepEqual(tan(cr, 'cr_tan_leather'), ['source', 0, { cow_hide: 1, coins: 1 }, { leather: 1 }]);
+  assert.deepEqual(tan(cr, 'cr_tan_hard_leather'), ['source', 0, { cow_hide: 1, coins: 3 }, { hard_leather: 1 }]);
+  assert.deepEqual(['cr_tan_dragonhide_black', 'cr_tan_leather', 'cr_tan_hard_leather'].map(id => crCanifis.byId.get(id).in.coins), [45, 2, 5]);
+  assert.deepEqual(PLACES.crafting.options.map(o => [o.id, o.name, o.short]), [['al_kharid', 'Al Kharid', '20 gp a dragonhide'], ['canifis', 'Canifis', '45 gp a dragonhide']]);
+  assert.equal(PLACES.crafting.options[1].note, 'leather 2 gp, hard leather 5 gp, dragonhide 45 gp a hide');
+  assert.equal(ITEMS.coins.gp, 1, 'a coin is always 1 gp');
+  assert.deepEqual([...cr.fees], ['coins']);
+  assert.equal(ix.fees.size, 0, 'no fees in Herblore');
+
+  // From the bank: the fee is paid, not taken from it, and never holds the plan back.
+  const bank = { dragonhide_green: 300, dragon_leather: 50, coins: 5 };
+  const res = planBank(cr, { bank, startXp10: xp10ForLevel(63), unlimited: THREAD });
+  assert.deepEqual(crSteps(res), [['cr_set_green_dhide', 58, { cr_tan_dragonhide_green: 298 }], ['cr_dragonhide_chaps', 1, { cr_tan_dragonhide_green: 2 }]]);
+  assert.deepEqual(res.steps.map(s => s.paid), [{ coins: 298 * 20 }, { coins: 2 * 20 }]);
+  assert.deepEqual(res.paid, { coins: 300 * 20 });
+  assert.deepEqual(res.assumed, { thread: 35 }, 'the fee is apart from what you buy as you go');
+  assert.equal(res.leftover.have('coins'), 5, 'coins in a bank are left alone');
+  assert.deepEqual(planBank(crCanifis, { bank, startXp10: xp10ForLevel(63), unlimited: THREAD }).paid, { coins: 300 * 45 });
+  assert.equal(planBank(cr, { bank: { dragon_leather: 50 }, startXp10: xp10ForLevel(63), unlimited: THREAD }).paid, undefined, 'leather needs no tanner');
+
+  // The money. A coin needs no price: it's 1 gp.
+  const price = { dragonhide_green: 2000, set_green_dhide: 30000, dragonhide_chaps: 9000, dragonhide_body: 12000 };
+  const opts = { bank, currentXp10: xp10ForLevel(63), targetXp10: xp10ForLevel(70), unlimited: THREAD, priceOf: k => price[k] ?? null };
+  const plan = planGoal(cr, opts);
+  const set = row(plan, 'cr_set_green_dhide'), body = row(plan, 'cr_dragonhide_body');
+  assert.deepEqual(set.econ.inputs, { dragonhide_green: 6, coins: 120 });
+  assert.equal(set.econ.cost, 6 * 2000 + 120);
+  assert.equal(set.econ.net, 30000 - 6 * 2000 - 120);
+  // what the bank plan makes of it, and the fee for the 298 hides tanned for it
+  assert.deepEqual(set.gains.before, { total: 58 * 30000 - 5960, value: 58 * 30000, cost: 5960, missing: [] });
+  assert.equal(set.gains.net.total, set.gains.before.total + set.gains.collect.total);
+  // on its own the bank makes 116 bodies, tanning 298 hides for them
+  assert.equal(body.have, 116);
+  assert.equal(body.balance, null);
+  assert.deepEqual(body.gains.even, { total: 116 * 12000 - 5960, value: 116 * 12000, cost: 5960, missing: [] });
+  // the rest of the goal: hides, and the coins to tan them
+  const n = plan.fill.segments[0].runs;
+  assert.equal(plan.fill.id, 'cr_set_green_dhide');
+  assert.deepEqual(plan.fill.buy, { dragonhide_green: 6 * n, coins: 120 * n });
+  assert.equal(plan.fill.cost, 6 * n * 2000 + 120 * n);
+  // Canifis: the same plan, 45 a hide
+  const far = planGoal(crCanifis, opts);
+  assert.equal(row(far, 'cr_set_green_dhide').econ.cost, 6 * 2000 + 270);
+  assert.equal(row(far, 'cr_set_green_dhide').gains.before.cost, 298 * 45);
+  assert.equal(far.fromBank.xp10, plan.fromBank.xp10);
+  // a mix: the fee is part of what each step takes
+  const mix = planGoal(cr, { ...opts, useBank: false, mix: { cr_dragonhide_body: 10 } }).fromMix;
+  assert.deepEqual(mix.buy, { dragonhide_green: 30, coins: 600 });
+  assert.equal(mix.gain.total, 10 * 12000 - 30 * 2000 - 600);
+
+  // Cowhide is tanned when it's in your bank; from scratch a row takes leather, as the calculator lists it.
+  const cow = planGoal(cr, { bank: { cow_hide: 100, leather: 10 }, currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(40), unlimited: THREAD });
+  assert.deepEqual(crSteps(cow.fromBank), [['cr_hardleather_body', 100, { cr_tan_hard_leather: 100 }], ['cr_leather_chaps', 10, {}]]);
+  assert.deepEqual(cow.fromBank.paid, { coins: 300 }, '3 gp a hide for hard leather');
+  const gloves = row(cow, 'cr_leather_gloves');
+  assert.equal(gloves.have, 110, '10 leather and 100 cowhides');
+  assert.deepEqual(gloves.econ.inputs, { leather: 1 });
+  assert.deepEqual(gloves.collect, { leather: gloves.toMake });
+  assert.equal(row(planGoal(crCanifis, { bank: { cow_hide: 100 }, currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(40), unlimited: THREAD, priceOf: () => 100 }), 'cr_leather_gloves').gains.even.cost, 200, '2 gp a hide in Canifis');
+});
+
+test('crafting: key halves and crystal keys count as the uncut dragonstone the crystal chest gives (v2.5)', () => {
+  assert.deepEqual(['keyhalf1', 'keyhalf2', 'crystal_key'].map(k => ITEMS[k].name), ['Half of a key (tooth)', 'Half of a key (loop)', 'Crystal key']);
+  const src = id => { const m = cr.byId.get(id); return [m.kind, m.xp, m.in, m.out]; };
+  assert.deepEqual(src('cr_join_keys'), ['source', 0, { keyhalf1: 1, keyhalf2: 1 }, { crystal_key: 1 }]);
+  assert.deepEqual(src('cr_crystal_chest'), ['source', 0, { crystal_key: 1 }, { uncut_dragonstone: 1 }]);
+  assert.deepEqual(BANK_GROUPS.crafting.find(g => g.name === 'Crystal keys').items, ['keyhalf1', 'keyhalf2', 'crystal_key']);
+  assert.ok(!cr.train.some(m => m.group === 'Crystal keys'), 'no XP in it: not a way to train');
+
+  // Ostap's example: 9 teeth and 4 loops are 4 uncut dragonstones for now, and 5 more loops round them up to 9.
+  const price = { keyhalf1: 9000, keyhalf2: 6000, dragonstone: 15000, uncut_dragonstone: 14000, gold_bar: 300 };
+  const opts = { bank: { keyhalf1: 9, keyhalf2: 4 }, currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(70), unlimited: THREAD, priceOf: k => price[k] ?? null };
+  const plan = planGoal(cr, opts);
+  assert.deepEqual(crSteps(plan.fromBank), [['cr_dragonstone', 4, { cr_join_keys: 4, cr_crystal_chest: 4 }]]);
+  assert.equal(plan.fromBank.xp10, 4 * 1375, 'the XP is in the cutting');
+  assert.deepEqual(plan.fromBank.leftover.toObject(), { keyhalf1: 5, dragonstone: 4 });
+  const cut = row(plan, 'cr_dragonstone');
+  assert.equal(cut.have, 4);
+  assert.deepEqual(cut.balance, { runs: 9, collect: { keyhalf2: 5 } });
+  assert.deepEqual(cut.gains.even, { total: 9 * 15000 - 5 * 6000, value: 9 * 15000, cost: 5 * 6000, missing: [] });
+  assert.deepEqual(cut.gains.before, { total: 4 * 15000, value: 4 * 15000, cost: 0, missing: [] });
+  // from scratch it's bought as the uncut stone, like the calculator lists it: keys are only used from your bank
+  assert.deepEqual(cut.econ.inputs, { uncut_dragonstone: 1 });
+  assert.deepEqual(cut.collect, { uncut_dragonstone: cut.toMake });
+  // a ring takes a gold bar as well
+  assert.equal(row(plan, 'cr_dragonstone_ring').have, 0);
+  assert.deepEqual(row(plan, 'cr_dragonstone_ring').balance, { runs: 9, collect: { gold_bar: 9, keyhalf2: 5 } });
+  // whole keys and uncut stones in the bank add up with them
+  const more = planGoal(cr, { ...opts, bank: { keyhalf1: 9, keyhalf2: 4, crystal_key: 2, uncut_dragonstone: 3, gold_bar: 20 } });
+  assert.equal(row(more, 'cr_dragonstone').have, 9);
+  assert.deepEqual(row(more, 'cr_dragonstone').balance, { runs: 14, collect: { keyhalf2: 5 } });
+  assert.deepEqual(crSteps(more.fromBank).slice(0, 2), [['cr_dragonstone', 9, { cr_join_keys: 4, cr_crystal_chest: 6 }], ['cr_dragonstone_ring', 9, {}]],
+    '4 keys joined, 6 chests opened, 9 stones cut, then set in rings');
+  // Round up my supplies: the 5 loops are collected, and the teeth left over are used
+  const up = planGoal(cr, { ...opts, roundUp: true }).fromBank;
+  assert.deepEqual(evSteps(up).slice(0, 2), [['cr_dragonstone', 4, false, null], ['cr_dragonstone', 5, true, { keyhalf2: 5 }]]);
+  assert.equal(up.collect.keyhalf2, 5);
+  assert.equal(up.leftover.have('keyhalf1'), 0);
+  // unticking the cutting leaves the keys alone
+  const off = planGoal(cr, { ...opts, excluded: new Set(['cr_dragonstone']) });
+  assert.deepEqual(off.fromBank.steps, []);
+});
+
+test('crafting: a reel of thread lasts five items, when you count it', () => {
+  const bank = { dragonhide_green: 300, dragon_leather: 50, thread: 10 };
+  const plan = planGoal(cr, { bank, currentXp10: xp10ForLevel(63), targetXp10: xp10ForLevel(70) });
+  assert.deepEqual(crSteps(plan.fromBank), [['cr_dragonhide_body', 50, { cr_tan_dragonhide_green: 100 }]], '10 reels: 50 bodies');
+  assert.equal(plan.fromBank.leftover.have('thread'), 0);
+  const body = row(plan, 'cr_dragonhide_body');
+  assert.equal(body.have, 50);
+  assert.deepEqual(body.balance, { runs: 116, collect: { thread: 13.2 }, paid: { coins: 298 * 20 } }, '23.2 reels for 116 bodies, 10 in the bank (shown as 14); the tanner is paid for the 298 hides');
+  assert.deepEqual(body.collect, { dragonhide_green: 3 * body.toMake - 200, coins: 60 * body.toMake, thread: body.toMake / 5 });
+  for (const [reels, items] of [[1, 5], [3, 15], [7, 35], [29, 145], [333, 1665]]) {
+    const r = planBank(cr, { bank: { leather: 5000, thread: reels }, startXp10: 0 });
+    assert.equal(r.steps.reduce((a, s) => a + s.runs, 0), items, `${reels} reels`);
+    assert.equal(r.leftover.have('thread'), 0);
+    assert.equal(r.leftover.have('leather'), 5000 - items);
+  }
+  assert.deepEqual(crSteps(planBank(cr, { bank: { leather: 5000, thread: 3 }, startXp10: 0 })), [['cr_leather_gloves', 15, {}]]);
+  // with "I'll buy thread as I go" it never holds a plan back, and is left out of what to collect
+  const on = planGoal(cr, { bank, currentXp10: xp10ForLevel(63), targetXp10: xp10ForLevel(70), unlimited: THREAD });
+  assert.equal(row(on, 'cr_dragonhide_body').have, 116);
+  assert.equal(row(on, 'cr_dragonhide_body').balance, null);
+  assert.equal(row(on, 'cr_dragonhide_body').collect.thread, undefined);
+});
+
+test('crafting: a better row is switched to as soon as its level is reached, counting the XP made on the way', () => {
+  // You picked amulets (level 24) at level 23, 737 XP short: 8 sapphire necklaces get you there
+  // (55, plus 50 for each sapphire cut), not the 14 it would take without the cutting.
+  const bank = { gold_bar: 100, uncut_sapphire: 100 };
+  const res = planBank(cr, { bank, startXp10: xp10ForLevel(23), unlimited: THREAD, prefer: 'cr_unstrung_sapphire_amulet' });
+  assert.deepEqual(crSteps(res), [['cr_sapphire_necklace', 8, { cr_sapphire: 8 }], ['cr_unstrung_sapphire_amulet', 92, { cr_sapphire: 92 }]]);
+  assert.ok(xp10ForLevel(23) + 7 * 1050 < xp10ForLevel(24) && xp10ForLevel(23) + 8 * 1050 >= xp10ForLevel(24));
+  // With nothing picked, the plan with the most XP wins: cut them all first (that alone
+  // passes level 24), and every sapphire goes into an amulet.
+  const free = planBank(cr, { bank, startXp10: xp10ForLevel(23), unlimited: THREAD });
+  assert.deepEqual(crSteps(free), [['cr_sapphire', 100, {}], ['cr_unstrung_sapphire_amulet', 100, {}]]);
+  assert.ok(free.xp10 > res.xp10);
+});
+
+test('crafting: in a mix, what one row makes for another is used rather than bought as well', () => {
+  const price = { uncut_sapphire: 300, sapphire: 3000, gold_bar: 3600, sapphire_ring: 10800 };
+  const plan = planGoal(cr, { useBank: false, bank: { gold_bar: 999 }, mix: { cr_sapphire: 100, cr_sapphire_ring: 100 }, unlimited: THREAD,
+    currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(40), priceOf: k => price[k] ?? null });
+  const mix = plan.fromMix;
+  assert.deepEqual(mix.steps.map(s => [s.id, s.runs, s.buy]), [
+    ['cr_sapphire_ring', 100, { gold_bar: 100, sapphire: 100 }],          // each step on its own, from scratch
+    ['cr_sapphire', 100, { uncut_sapphire: 100 }],
+  ]);
+  assert.equal(mix.xp10, 100 * 400 + 100 * 500);
+  assert.deepEqual(mix.buy, { gold_bar: 100, uncut_sapphire: 100 }, 'the sapphires you cut go into the rings');
+  assert.deepEqual(mix.made, { sapphire_ring: 100 });
+  assert.equal(mix.gain.total, 100 * (10800 - 3600 - 300));
+  assert.equal(mix.gain.total, mix.steps.reduce((a, s) => a + s.gain.total, 0), 'the same net either way');
+  // more rings than sapphires cut: the rest is bought
+  const more = planGoal(cr, { useBank: false, mix: { cr_sapphire: 40, cr_sapphire_ring: 100 }, currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(40) }).fromMix;
+  assert.deepEqual(more.buy, { gold_bar: 100, sapphire: 60, uncut_sapphire: 40 });
+  assert.deepEqual(more.made, { sapphire_ring: 100 });
+});
+
+test('crafting: dragonhide sets, the three pieces the market trades as one (v2.5)', () => {
+  const set = id => { const m = cr.byId.get(id); return [m.level, m.xp, m.in, m.out, m.parts]; };
+  assert.deepEqual(set('cr_set_green_dhide'), [63, 3720, { dragon_leather: 6, thread: 0.6 }, { set_green_dhide: 1 }, [['vambraces', 620], ['chaps', 1240], ['body', 1860]]]);
+  assert.deepEqual(set('cr_set_blue_dhide').slice(0, 3), [71, 4200, { dragon_leather_blue: 6, thread: 0.6 }]);
+  assert.deepEqual(set('cr_set_red_dhide').slice(0, 3), [77, 4680, { dragon_leather_red: 6, thread: 0.6 }]);
+  assert.deepEqual(set('cr_set_black_dhide').slice(0, 3), [84, 5160, { dragon_leather_black: 6, thread: 0.6 }]);
+  // a set is its three rows added up: XP, hides and thread
+  for (const [id, parts] of [['cr_set_green_dhide', ['cr_dragon_vambraces', 'cr_dragonhide_chaps', 'cr_dragonhide_body']], ['cr_set_black_dhide', ['cr_black_dragon_vambraces', 'cr_black_dragonhide_chaps', 'cr_black_dragonhide_body']]]) {
+    const m = cr.byId.get(id), rows = parts.map(p => cr.byId.get(p));
+    assert.equal(m.xp, rows.reduce((a, r) => a + r.xp, 0));
+    assert.equal(m.level, Math.max(...rows.map(r => r.level)), 'the body\'s level');
+    assert.deepEqual(Object.values(m.in), [rows.reduce((a, r) => a + Object.values(r.in)[0], 0), 0.6]);
+    assert.deepEqual(m.parts.map(([, x]) => x), rows.map(r => r.xp));
+  }
+  // the market's own item: its slug and name, worth its pieces put together, and never in a bank
+  assert.deepEqual(ITEMS.set_red_dhide, { id: 1000003, name: "Red d'hide set", cost: 20010, members: 1, icon: ITEMS.red_dragonhide_body.icon, set: ['red_dragon_vambraces', 'red_dragonhide_chaps', 'red_dragonhide_body'] });
+  assert.equal(ITEMS.set_red_dhide.cost, ITEMS.red_dragon_vambraces.cost + ITEMS.red_dragonhide_chaps.cost + ITEMS.red_dragonhide_body.cost);
+  assert.deepEqual(SALE_GROUPS.crafting, [{ name: 'Dragonhide sets', items: ['set_green_dhide', 'set_blue_dhide', 'set_red_dhide', 'set_black_dhide'] }]);
+  assert.ok(!BANK_GROUPS.crafting.some(g => g.items.some(k => ITEMS[k].set)));
+  // priced as a set: what one set sells for, less six hides (thread bought as you go)
+  const price = { set_green_dhide: 30000, dragonhide_green: 2000, dragonhide_body: 12000 };
+  const plan = planGoal(cr, { bank: {}, useBank: false, unlimited: THREAD, currentXp10: xp10ForLevel(63), targetXp10: xp10ForLevel(70), priceOf: k => price[k] ?? null });
+  assert.deepEqual(row(plan, 'cr_set_green_dhide').econ.inputs, { dragonhide_green: 6, coins: 120 });
+  assert.equal(row(plan, 'cr_set_green_dhide').econ.net, 30000 - 6 * 2000 - 6 * 20, 'less the tanner\'s fee');
+  assert.equal(row(plan, 'cr_dragonhide_body').econ.net, 12000 - 3 * 2000 - 3 * 20);
+  assert.equal(row(plan, 'cr_set_green_dhide').needed, Math.ceil((xp10ForLevel(70) - xp10ForLevel(63)) / 3720));
+});
+
+test('crafting: enchanted jewellery, for what it sells as: the runes are counted, the Crafting XP is the plain one\'s (v2.5)', () => {
+  const r = id => { const m = cr.byId.get(id); return [m.level, m.xp, m.in, m.out]; };
+  // the server's enchant spells: Lvl-1 a water rune, Lvl-2 3 air, Lvl-3 5 fire, Lvl-4 10 earth, Lvl-5 15 earth and 15 water, and a cosmic rune each
+  assert.deepEqual(r('cr_ench_ring_of_recoil'), [20, 400, { gold_bar: 1, sapphire: 1, waterrune: 1, cosmicrune: 1 }, { ring_of_recoil: 1 }]);
+  assert.deepEqual(r('cr_ench_necklace_of_minigames_8'), [20, 550, { gold_bar: 1, sapphire: 1, waterrune: 1, cosmicrune: 1 }, { necklace_of_minigames_8: 1 }]);
+  assert.deepEqual(r('cr_ench_ring_of_dueling_8'), [27, 550, { gold_bar: 1, emerald: 1, airrune: 3, cosmicrune: 1 }, { ring_of_dueling_8: 1 }]);
+  assert.deepEqual(r('cr_ench_amulet_of_strength'), [50, 890, { gold_bar: 1, ruby: 1, ball_of_wool: 1, firerune: 5, cosmicrune: 1 }, { amulet_of_strength: 1 }]);
+  assert.deepEqual(r('cr_ench_ring_of_life'), [43, 850, { gold_bar: 1, diamond: 1, earthrune: 10, cosmicrune: 1 }, { ring_of_life: 1 }]);
+  assert.deepEqual(r('cr_ench_amulet_of_glory_4'), [80, 1540, { gold_bar: 1, dragonstone: 1, ball_of_wool: 1, earthrune: 15, waterrune: 15, cosmicrune: 1 }, { amulet_of_glory_4: 1 }]);
+  const ench = cr.train.filter(m => m.id.startsWith('cr_ench_'));
+  assert.deepEqual(ench.map(m => ITEMS[Object.keys(m.out)[0]].name), ['Ring of recoil', 'Games necklace(8)', 'Amulet of magic', 'Ring of dueling(8)', 'Amulet of defence',
+    'Ring of forging', 'Ring of life', 'Amulet of strength', 'Ring of wealth', 'Amulet of power', 'Amulet of glory(4)']);
+  // each sits right after the row it's made from, with that row's level, XP and tools
+  for (const m of ench) {
+    const before = cr.train[cr.train.indexOf(m) - 1];
+    assert.deepEqual([m.level, m.xp, m.tools, m.group, m.parts], [before.level, before.xp, before.tools, 'Jewellery', before.parts], m.id);
+    for (const [k, n] of Object.entries(before.in)) assert.equal(m.in[k], n);
+    assert.match(m.note, /^Enchanted with Lvl-[1-5] Enchant \(Magic \d+\), which gives Magic XP, not Crafting XP\./);
+  }
+  assert.match(cr.byId.get('cr_ench_amulet_of_glory_4').note, /Magic 68\).*Then charged at the Fountain of Heroes\.$/);
+  assert.equal(cr.byId.get('cr_ench_ring_of_dueling_8').name, 'Ring of dueling(8) (make & enchant)');
+  assert.equal(cr.byId.get('cr_ench_amulet_of_glory_4').name, 'Amulet of glory(4) (make, string & enchant)');
+  // the money: what the enchanted one sells for, less the bar, the gem, the wool and the runes
+  const price = { gold_bar: 500, dragonstone: 20000, ball_of_wool: 50, earthrune: 10, waterrune: 8, cosmicrune: 150, amulet_of_glory_4: 40000, strung_dragonstone_amulet: 25000 };
+  const plan = planGoal(cr, { bank: {}, useBank: false, currentXp10: xp10ForLevel(80), targetXp10: xp10ForLevel(85), priceOf: k => price[k] ?? null });
+  const glory = row(plan, 'cr_ench_amulet_of_glory_4'), plain = row(plan, 'cr_strung_dragonstone_amulet');
+  assert.equal(plain.econ.net, 25000 - 500 - 20000 - 50);
+  assert.equal(glory.econ.cost, 500 + 20000 + 50 + 15 * 10 + 15 * 8 + 150);
+  assert.equal(glory.econ.net, 40000 - glory.econ.cost);
+  assert.equal(glory.needed, plain.needed, 'the same Crafting XP each');
+  assert.deepEqual(glory.collect, { gold_bar: glory.needed, dragonstone: glory.needed, ball_of_wool: glory.needed, earthrune: 15 * glory.needed, waterrune: 15 * glory.needed, cosmicrune: glory.needed });
+});
+
+test('crafting: the bank makes the plain one unless you pick the enchanted one and have the runes (v2.5)', () => {
+  const bank = { gold_bar: 100, dragonstone: 100, earthrune: 1500, waterrune: 1500, cosmicrune: 60 };
+  const plain = planBank(cr, { bank, startXp10: xp10ForLevel(60), unlimited: THREAD });
+  assert.deepEqual(crSteps(plain), [['cr_dragonstone_ring', 100, {}]], 'the same XP either way, so the runes are left alone');
+  const picked = planBank(cr, { bank, startXp10: xp10ForLevel(60), unlimited: THREAD, prefer: 'cr_ench_ring_of_wealth' });
+  assert.deepEqual(crSteps(picked), [['cr_ench_ring_of_wealth', 60, {}], ['cr_dragonstone_ring', 40, {}]], '60 cosmic runes: 60 rings of wealth');
+  assert.equal(picked.xp10, plain.xp10);
+  assert.deepEqual(picked.leftover.toObject(), { earthrune: 600, waterrune: 600, ring_of_wealth: 60, dragonstone_ring: 40 });
+  // uncut dragonstones are cut on the way for the enchanted ring too
+  const cut = planBank(cr, { bank: { gold_bar: 10, uncut_dragonstone: 10, earthrune: 150, waterrune: 150, cosmicrune: 10 }, startXp10: xp10ForLevel(60), unlimited: THREAD, prefer: 'cr_ench_ring_of_wealth' });
+  assert.deepEqual(crSteps(cut), [['cr_ench_ring_of_wealth', 10, { cr_dragonstone: 10 }]]);
+  assert.equal(cut.xp10, 10 * (1000 + 1375));
+  // Round up my supplies says which runes are short
+  const plan = planGoal(cr, { bank, currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(65), unlimited: THREAD });
+  assert.equal(row(plan, 'cr_ench_ring_of_wealth').have, 60);
+  assert.deepEqual(row(plan, 'cr_ench_ring_of_wealth').balance, { runs: 100, collect: { cosmicrune: 40 } });
+  assert.equal(row(plan, 'cr_dragonstone_ring').have, 100);
+});
+
+// ── Round up my supplies (the toggle) ─────────────────────────────────────
+
+test('round up my supplies, on: after the bank plan, what it leaves is used up too, and what that takes is collected (v2.5)', () => {
+  const price = { kwuarm: 2000, limpwurt_root: 300, '3dose2strength': 3000, ranarr_weed: 4000, snape_grass: 400, '3doseprayerrestore': 6000 };
+  const opts = {
+    bank: { kwuarm: 605, limpwurt_root: 518, ranarr_weed: 1000, snape_grass: 700 },
+    currentXp10: xp10ForLevel(74), targetXp10: xp10ForLevel(78), unlimited: VIALS, priceOf: k => price[k] ?? null,
+  };
+  const now = planGoal(ix, opts), even = planGoal(ix, { ...opts, roundUp: true });
+  // as it is: 518 super strength and 700 prayer potions
+  assert.deepEqual(evSteps(now.fromBank), [['hb_3dose2strength', 518, false, null], ['hb_3doseprayerrestore', 700, false, null]]);
+  assert.equal(now.fromBank.xp10, 518 * 1250 + 700 * 875);
+  assert.equal(now.bankNow, undefined, 'only the rounded-up plan carries the plan as it is');
+  assert.equal(now.fromBank.collect, undefined);
+  // rounded up: the same steps first, then the 87 kwuarm and 300 ranarr left over
+  assert.deepEqual(evSteps(even.fromBank), [
+    ['hb_3dose2strength', 518, false, null], ['hb_3doseprayerrestore', 700, false, null],
+    ['hb_3dose2strength', 87, true, { limpwurt_root: 87 }], ['hb_3doseprayerrestore', 300, true, { snape_grass: 300 }],
+  ]);
+  assert.deepEqual(even.fromBank.collect, { limpwurt_root: 87, snape_grass: 300 });
+  assert.equal(even.fromBank.xp10, 605 * 1250 + 1000 * 875, 'the XP of the rounded-up amounts: 605 and 1,000');
+  assert.deepEqual(even.fromBank.leftover.toObject(), { '3dose2strength': 605, '3doseprayerrestore': 1000 }, 'nothing left over');
+  assert.deepEqual(even.bankNow, now.fromBank, 'what the bank makes as it is, to set beside it');
+  // the rest of the goal comes after it, with the same method
+  assert.equal(even.remaining, now.remaining - (87 * 1250 + 300 * 875));
+  assert.equal(even.fill.id, now.fill.id);
+  assert.ok(even.fill.segments[0].runs < now.fill.segments[0].runs);
+  // each row on its own is as it was; what the plan makes of it, and its net, are the rounded-up ones
+  for (const r of even.table) {
+    const r0 = row(now, r.id);
+    assert.deepEqual([r.have, r.balance, r.needed, r.gains.even], [r0.have, r0.balance, r0.needed, r0.gains.even], r.id);
+    assert.ok(r.toMake <= r0.toMake, r.id);
+  }
+  const ss = row(even, 'hb_3dose2strength');
+  assert.equal(ss.fromPlan, 605);
+  assert.deepEqual(ss.gains.before, { total: 605 * 3000 - 87 * 300, value: 605 * 3000, cost: 87 * 300, missing: [] }, 'less the limpwurt collected for it');
+  assert.deepEqual(row(now, 'hb_3dose2strength').gains.before, { total: 518 * 3000, value: 518 * 3000, cost: 0, missing: [] });
+  assert.equal(ss.gains.net.total, ss.gains.before.total + ss.gains.collect.total);
+  // with the bank left out there's nothing to round up
+  const off = planGoal(ix, { ...opts, useBank: false, roundUp: true });
+  assert.equal(off.bankNow, undefined);
+  assert.deepEqual(off.fromBank.steps, []);
+});
+
+test('round up my supplies, on: with nothing to collect it is the plan as it is (v2.5)', () => {
+  const opts = { bank: { kwuarm: 518, limpwurt_root: 518, ranarr_weed: 700, snape_grass: 700 }, currentXp10: xp10ForLevel(74), targetXp10: xp10ForLevel(78), unlimited: VIALS };
+  const now = planGoal(ix, opts), even = planGoal(ix, { ...opts, roundUp: true });
+  assert.deepEqual(even.fromBank.steps, now.fromBank.steps);
+  assert.deepEqual(even.fromBank.collect, {});
+  assert.equal(even.fromBank.xp10, now.fromBank.xp10);
+  // gold bars the bank already uses up aren't rounded up with gems it doesn't have
+  const craft = { bank: { gold_bar: 1000, sapphire: 300, emerald: 200 }, currentXp10: xp10ForLevel(40), targetXp10: xp10ForLevel(60), unlimited: THREAD };
+  const c0 = planGoal(cr, craft), c1 = planGoal(cr, { ...craft, roundUp: true });
+  assert.deepEqual(c1.fromBank.steps, c0.fromBank.steps);
+  assert.deepEqual(c1.fromBank.collect, {});
+});
+
+test('round up my supplies, on: things your bank can\'t make yet join in when they\'re one ingredient short, best XP first (v2.5)', () => {
+  const opts = (bank, more = {}) => ({ bank, currentXp10: xp10ForLevel(74), targetXp10: xp10ForLevel(78), unlimited: VIALS, roundUp: true, ...more });
+  // irit with nothing to go with: super attack (eye of newt) or superantipoison (unicorn horn), the one with more XP
+  let fb = planGoal(ix, opts({ irit_leaf: 200 })).fromBank;
+  assert.deepEqual(evSteps(fb), [['hb_3dose2antipoison', 200, true, { unicorn_horn: 200 }]]);
+  // unticked, the other one takes them; both unticked, the irit stays
+  fb = planGoal(ix, opts({ irit_leaf: 200 }, { excluded: new Set(['hb_3dose2antipoison']) })).fromBank;
+  assert.deepEqual(evSteps(fb), [['hb_3dose2attack', 200, true, { eye_of_newt: 200 }]]);
+  assert.equal(fb.xp10, 200 * 1000);
+  fb = planGoal(ix, opts({ irit_leaf: 200 }, { excluded: new Set(['hb_3dose2antipoison', 'hb_3dose2attack']) })).fromBank;
+  assert.deepEqual([fb.steps, fb.collect, fb.leftover.toObject()], [[], {}, { irit_leaf: 200 }]);
+  // a potion you can't make yet waits for its level: cadantine stays at 60...
+  fb = planGoal(ix, { ...opts({ cadantine: 50, eye_of_newt: 20 }), currentXp10: xp10ForLevel(60) }).fromBank;
+  assert.deepEqual(evSteps(fb), [['hb_3dose2attack', 20, true, { irit_leaf: 20 }]]);
+  assert.equal(fb.leftover.have('cadantine'), 50);
+  // ...and is used once the XP on the way gets you to 66
+  fb = planGoal(ix, { ...opts({ cadantine: 50, eye_of_newt: 5000, white_berries: 40 }), currentXp10: xp10ForLevel(60) }).fromBank;
+  assert.deepEqual(evSteps(fb), [
+    ['hb_3dose2attack', 2226, true, { irit_leaf: 2226 }], ['hb_3dose2defense', 50, true, { white_berries: 10 }], ['hb_3dose2attack', 2774, true, { irit_leaf: 2774 }],
+  ]);
+  assert.ok(xp10ForLevel(60) + 2226 * 1000 >= xp10ForLevel(66) && xp10ForLevel(60) + 2225 * 1000 < xp10ForLevel(66), 'super attack up to level 66');
+  // two ingredients short stays out: feathers alone make headless arrows from logs, not arrows with their tips as well
+  fb = planGoal(fl, { bank: { feather: 10000 }, currentXp10: xp10ForLevel(80), targetXp10: xp10ForLevel(85), fillGroup: 'Bows', roundUp: true }).fromBank;
+  assert.deepEqual(evSteps(fb), [['fl_logs_headless', 666, true, { logs: 666 }], ['fl_dart_adamant_dart', 10, true, { adamant_dart_tip: 10 }]]);
+  // balls of wool alone string a symbol (silver bars), not a gem amulet (a gold bar and a gem)
+  fb = planGoal(cr, { bank: { ball_of_wool: 500 }, currentXp10: xp10ForLevel(85), targetXp10: xp10ForLevel(90), unlimited: THREAD, roundUp: true }).fromBank;
+  assert.deepEqual(evSteps(fb), [['cr_stringstar', 500, true, { silver_bar: 500 }]]);
+});
+
+test('round up my supplies, on: what the bank made on the way is finished too: bows strung, gems set, glass blown (v2.5)', () => {
+  const bows = { bank: { bow_string: 2521, magic_logs: 973, yew_logs: 1044, maple_logs: 1034 }, currentXp10: xp10ForLevel(89), targetXp10: xp10ForLevel(92), fillGroup: 'Bows' };
+  const now = planGoal(fl, bows), even = planGoal(fl, { ...bows, roundUp: true });
+  // the strings run out at 504 maple longbows, so 530 are only cut: 530 bow strings finish them
+  assert.deepEqual(evSteps(even.fromBank), [
+    ['fl_cs_magic_longbow', 973, false, null], ['fl_cs_yew_longbow', 1044, false, null], ['fl_cs_maple_longbow', 504, false, null],
+    ['fl_cut_unstrung_maple_longbow', 530, false, null], ['fl_str_maple_longbow', 530, true, { bow_string: 530 }],
+  ]);
+  assert.deepEqual(even.fromBank.steps.filter(s => !s.rounded), now.fromBank.steps, 'the bank part is the plan as it is');
+  assert.deepEqual(even.fromBank.collect, { bow_string: 530 });
+  assert.equal(even.fromBank.xp10 - now.fromBank.xp10, 530 * fl.byId.get('fl_str_maple_longbow').xp);
+  assert.deepEqual(even.fromBank.leftover.toObject(), { magic_longbow: 973, yew_longbow: 1044, maple_longbow: 1034 });
+  // shafts, feathers and arrowtips: the arrows the bank is making are made of all the feathers
+  const arrows = planGoal(fl, { bank: { feather: 5000, arrow_shaft: 2000, bronze_arrowheads: 1000 }, currentXp10: xp10ForLevel(80), targetXp10: xp10ForLevel(85), fillGroup: 'Bows', roundUp: true }).fromBank;
+  assert.deepEqual(arrows.collect, { bronze_arrowheads: 4000, arrow_shaft: 3000 });
+  assert.deepEqual(arrows.leftover.toObject(), { bronze_arrow: 5000 });
+  // uncut gems are cut by the bank, then set (gold bars); orbs get battlestaves; sand gets soda ash, and the glass is blown
+  const craft = planGoal(cr, { bank: { uncut_sapphire: 500, air_orb: 200, bucket_sand: 300 }, currentXp10: xp10ForLevel(70), targetXp10: xp10ForLevel(75), unlimited: THREAD, roundUp: true }).fromBank;
+  assert.deepEqual(evSteps(craft), [
+    ['cr_sapphire', 500, false, null],
+    ['cr_air_battlestaff', 200, true, { battlestaff: 200 }], ['cr_unstrung_sapphire_amulet', 500, true, { gold_bar: 500 }],
+    ['cr_stafforb', 300, true, { soda_ash: 300 }],
+  ]);
+  assert.deepEqual(craft.steps[3].sub, { cr_molten_glass: 300 }, 'the glass is made on the way, with the soda ash collected for it');
+  assert.deepEqual(craft.leftover.toObject(), { air_battlestaff: 200, unstrung_sapphire_amulet: 500, stafforb: 300 });
+});
+
+test('round up my supplies, on: the one you picked to train with is rounded up first (v2.5)', () => {
+  // picked, magic longbows take all the bow strings: 1,548 more magic logs. The other logs are cut, then strung.
+  const bows = { bank: { bow_string: 2521, magic_logs: 973, yew_logs: 1044, maple_logs: 1034 }, currentXp10: xp10ForLevel(89), targetXp10: xp10ForLevel(92), fillGroup: 'Bows', fillId: 'fl_cs_magic_longbow' };
+  const now = planGoal(fl, bows), even = planGoal(fl, { ...bows, roundUp: true });
+  assert.deepEqual(row(now, 'fl_cs_magic_longbow').balance, { runs: 2521, collect: { magic_logs: 1548 } }, 'what its Round up my supplies says');
+  assert.deepEqual(evSteps(even.fromBank), [
+    ['fl_cs_magic_longbow', 2521, false, { magic_logs: 1548 }],
+    ['fl_cut_unstrung_yew_longbow', 1044, false, null], ['fl_cut_unstrung_maple_longbow', 1034, false, null],
+    ['fl_str_yew_longbow', 1044, true, { bow_string: 1044 }], ['fl_str_maple_longbow', 1034, true, { bow_string: 1034 }],
+  ]);
+  assert.deepEqual(even.fromBank.collect, { magic_logs: 1548, bow_string: 2078 });
+  assert.ok(even.fromBank.xp10 > now.fromBank.xp10);
+  assert.equal(even.fill.id, 'fl_cs_magic_longbow');
+  // a glory needs wool and runes the bank doesn't have, so as it is the gold and dragonstones go into plain amulets
+  const glory = { bank: { gold_bar: 500, dragonstone: 120, cosmicrune: 60 }, currentXp10: xp10ForLevel(88), targetXp10: xp10ForLevel(95), unlimited: THREAD };
+  const picked = planGoal(cr, { ...glory, fillId: 'cr_ench_amulet_of_glory_4', roundUp: true });
+  assert.deepEqual(crSteps(picked.bankNow), [['cr_unstrung_dragonstone_amulet', 120, {}], ['cr_unstrung_gold_amulet', 380, {}]]);
+  assert.deepEqual(evSteps(picked.fromBank), [
+    ['cr_ench_amulet_of_glory_4', 500, false, { dragonstone: 380, ball_of_wool: 500, earthrune: 7500, waterrune: 7500, cosmicrune: 440 }],
+  ]);
+  assert.deepEqual(row(picked, 'cr_ench_amulet_of_glory_4').balance.collect, picked.fromBank.collect, 'what its Round up my supplies says');
+  // not picked, the plain amulets use it all up: 60 cosmic runes alone are three ingredients short of anything
+  const free = planGoal(cr, { ...glory, roundUp: true });
+  assert.deepEqual(free.fromBank.steps, free.bankNow.steps);
+  assert.deepEqual(free.fromBank.collect, {});
 });

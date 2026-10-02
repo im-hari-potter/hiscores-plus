@@ -247,13 +247,15 @@ export function mergeReads(reads) {
     for (const s of r.slots) { bySlot.set(s.slot, s); empty.delete(s.slot); }
     for (const e of r.empty) if (!bySlot.has(e)) empty.add(e);
   }
-  const items = new Map();          // slug -> { count, min, max, approx, slots, also }
+  const items = new Map();          // slug -> { count, min, max, approx, slots, also, like? }
   let others = 0, unknown = 0;
   for (const s of [...bySlot.values()].sort((a, b) => a.slot - b.slot)) {
     if (!s.entry) { unknown++; continue; }
     if (s.entry.other) { others++; continue; }
     const slug = s.entry.of || s.entry.slug;
     const it = items.get(slug) || { slug, count: 0, min: 0, max: 0, approx: false, unsure: false, slots: [], also: s.entry.also || [] };
+    // items the planner doesn't use that look exactly the same (an amulet of glory)
+    if (s.entry.like) it.like = s.entry.like;
     it.count += s.count; it.min += s.min; it.max += s.max;
     it.approx ||= !!s.approx;
     // a close call between lookalikes (oak or magic logs), worth a look

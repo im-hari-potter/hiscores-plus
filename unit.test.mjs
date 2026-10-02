@@ -173,3 +173,30 @@ test('findTotal copes with the list growing during the search', async () => {
     assert.ok(res.probes < 60);
   }
 });
+
+test('snapshots: one can be deleted on its own, and the last one takes the history with it (v2.5)', async () => {
+  // store.js keeps everything in localStorage: give it one to keep things in
+  const mem = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
+    getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => { mem.set(k, String(v)); }, removeItem: k => { mem.delete(k); },
+  } });
+  const { snapshots } = await import('./store.js');
+  const profile = (xp, t) => ({ safe: 'demo_main', name: 'Demo Main', fetchedAt: t, stats: { 0: { level: 1500, xp, rank: 9 }, 1: { level: 60, xp: 300000, rank: 7 } } });
+  for (const [xp, t] of [[1000, 1e12], [2000, 1e12 + 60e3], [3000, 1e12 + 120e3]]) snapshots.add(profile(xp, t));
+  assert.deepEqual(snapshots.list('Demo Main').map(s => [s.t, s.stats[0].xp]), [[1e12, 1000], [1e12 + 60e3, 2000], [1e12 + 120e3, 3000]]);
+  // the middle one goes; the others and the player stay
+  assert.equal(snapshots.removeAt('demo main', 1e12 + 60e3), 2);
+  assert.deepEqual(snapshots.list('Demo Main').map(s => s.stats[0].xp), [1000, 3000]);
+  assert.deepEqual(snapshots.tracked(), [{ safe: 'demo_main', name: 'Demo Main', count: 2, last: 1e12 + 120e3 }]);
+  // a time that isn't there deletes nothing
+  assert.equal(snapshots.removeAt('Demo Main', 42), 2);
+  // the newest goes: the one before it is the latest now
+  assert.equal(snapshots.removeAt('Demo Main', 1e12 + 120e3), 1);
+  assert.deepEqual(snapshots.tracked(), [{ safe: 'demo_main', name: 'Demo Main', count: 1, last: 1e12 }]);
+  // the last one: nothing is left of that player's history
+  assert.equal(snapshots.removeAt('Demo Main', 1e12), 0);
+  assert.deepEqual(snapshots.list('Demo Main'), []);
+  assert.deepEqual(snapshots.tracked(), []);
+  assert.equal(mem.has('lchs.snap.demo_main'), false);
+  delete globalThis.localStorage;
+});

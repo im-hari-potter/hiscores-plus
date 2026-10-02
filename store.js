@@ -114,6 +114,19 @@ export const snapshots = {
     store.set('snapIndex', index);
   },
 
+  // Deletes one snapshot, by its time. Returns how many are left; with the last
+  // one gone the player's history is gone too.
+  removeAt(name, t) {
+    const safe = toSafeName(name);
+    const list = store.get('snap.' + safe, []).filter(snap => snap.t !== t);
+    if (!list.length) { this.remove(name); return 0; }
+    store.set('snap.' + safe, list);
+    const index = this.index();
+    index[safe] = { name: index[safe]?.name || toDisplayName(safe), count: list.length, last: list[list.length - 1].t };
+    store.set('snapIndex', index);
+    return list.length;
+  },
+
   tracked() {
     return Object.entries(this.index())
       .map(([safe, v]) => ({ safe, name: v.name || toDisplayName(safe), count: v.count || 0, last: v.last || 0 }))
