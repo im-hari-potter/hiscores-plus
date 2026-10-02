@@ -6,7 +6,7 @@
 
 import { SKILLS, SKILL_BY_KEY, SKILL_IDS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels } from './skills.js';
 import { ITEMS, METHODS, BANK_GROUPS, SALE_GROUPS, PLACES, ICONS_PER_ROW, ICON_SIZE, UNID_HERBS } from './gamedata.js';
-import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, MAX_XP10 } from './planner.js';
+import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, minorLast, castsIn, MAX_XP10 } from './planner.js';
 import { store, players } from './store.js';
 import { toSafeName, toDisplayName, checkName } from './api.js';
 import { topPercent, formatPercent } from './totals.js';
@@ -48,6 +48,28 @@ const DEFAULT_ASSUME = { herblore: ['vial_water'], crafting: ['thread'] };
 const ASSUME_LABEL = { herblore: 'vials of water', crafting: 'thread' };
 // "Vials of water are", "thread is"
 const ASSUME_ONE = { crafting: true };
+// Runes the spells on the way take (enchanting jewellery, charging orbs).
+const SPELL_RUNES = {};
+for (const m of METHODS) if (m.magic) for (const k of Object.keys(m.in)) if (/rune$/.test(k)) (SPELL_RUNES[m.skill] ||= new Set()).add(k);
+// What an item is finished with, rather than made of: the wool an amulet is strung with.
+const FINISHING = { crafting: ['ball_of_wool'] };
+// Round up my supplies never lets these hold it back, and never rounds up to
+// them: the supplies above (bought as you go or not), those runes and the
+// finishing. Herbs with no vials left are still made into potions, emeralds
+// with no runes into rings of dueling, dragonstones with no wool into amulets
+// of glory; what's short of them is collected with the rest. And 60 spare balls
+// of wool don't call for 60 more dragonstones.
+export const minorOf = key => new Set([...(DEFAULT_ASSUME[key] || []), ...(SPELL_RUNES[key] || []), ...(FINISHING[key] || [])]);
+// "Vials of water never hold it back", for the tooltip
+const MINOR_TEXT = { herblore: 'Vials of water never hold', crafting: 'Thread, runes and balls of wool never hold' };
+// Read from a screenshot but not added to your bank: tools (a plan names them,
+// it never counts them), and thread.
+const TOOLS = new Set(METHODS.flatMap(m => m.tools || []));
+const NOT_BANKED = new Set([...TOOLS, 'thread']);
+// Two items with the very same icon: which one a screenshot's stack is read as
+// until you say otherwise. Soda ash is banked for glass far more often than
+// ashes are kept. (Up to v2.5.0 it was filed under Ashes without asking.)
+const LIKELIER_TWIN = { ashes: 'soda_ash' };
 // With no method picked and nothing in the bank to go on, plans finish with the
 // classic way to train: bows, cut and strung, for Fletching.
 const DEFAULT_FILL_GROUP = { fletching: 'Bows' };
@@ -181,7 +203,10 @@ export function createPlanner(ctx) {
     if (!safe()) return { items: {}, updated: 0 };
     const b = store.get('bank.' + safe(), { items: {}, updated: 0 });
     const merged = mergeUnids(b.items || {});
-    if (merged.changed) { b.items = merged.items; store.set('bank.' + safe(), b); }
+    // (tools that a screenshot read into it up to v2.5.1: a plan never counts them)
+    const tools = Object.keys(merged.items).filter(k => TOOLS.has(k));
+    for (const k of tools) { delete merged.items[k]; if (b.slots) delete b.slots[k]; }
+    if (merged.changed || tools.length) { b.items = merged.items; store.set('bank.' + safe(), b); }
     return b;
   }
   const saveBank = b => { b.updated = Date.now(); store.set('bank.' + safe(), b); };
@@ -297,6 +322,7 @@ export function createPlanner(ctx) {
       priceOf: prices.priceOf,
       mix: goal.mix || null,
       roundUp: !!goal.roundUp && goal.useBank !== false && usesBank(goal.skill) && hasEven(ix),
+      minor: minorOf(goal.skill),
     });
     return { cur, target, ix, plan };
   }
@@ -624,7 +650,7 @@ export function createPlanner(ctx) {
     const bankCount = Object.values(b.items).filter(n => n > 0).length;
     const opts = `<div class="plan-opts">
       <label class="check"><input type="checkbox" data-gopt="useBank" ${useBank ? 'checked' : ''}> Use my bank</label>
-      ${useBank && hasEven(ix) ? `<label class="check" title="${esc(ROUND_UP_TIP)}"><input type="checkbox" data-gopt="roundUp" ${goal.roundUp ? 'checked' : ''}> Round up my supplies</label>` : ''}
+      ${useBank && hasEven(ix) ? `<label class="check" title="${esc(roundUpTip(goal.skill))}"><input type="checkbox" data-gopt="roundUp" ${goal.roundUp ? 'checked' : ''}> Round up my supplies</label>` : ''}
       ${ASSUME_LABEL[goal.skill] ? `<label class="check" title="${ASSUME_ONE[goal.skill] ? "When on, it never holds a plan back, and it's left out of what to collect and of costs." : "When on, these never hold a plan back, and they're left out of what to collect and of costs."}"><input type="checkbox" data-gopt="assume" ${assume.size ? 'checked' : ''}> I'll buy ${ASSUME_LABEL[goal.skill]} as I go</label>` : ''}
       ${placeHtml(goal)}
       <span class="c-faint">${bankCount ? `${bankCount} kinds of item in your bank, updated ${ago(b.updated)}` : 'Your bank is empty'} ·</span>
@@ -668,10 +694,35 @@ export function createPlanner(ctx) {
     "with whatever is missing for that collected. First for what your bank already makes, then for anything else that's one ingredient short " +
     '(best XP first; untick a row to leave it out). If you picked what to train with, that one is rounded up first. ' +
     'You see the XP your bank holds then, and what to collect for it.';
+  // "Vials of water never hold it back: ..."
+  const roundUpTip = key => (MINOR_TEXT[key] ? `${ROUND_UP_TIP} ${MINOR_TEXT[key]} it back: what you're short of is collected too.` : ROUND_UP_TIP);
+
+  // The Magic XP of the spells cast on the way (enchanting, charging orbs), as a
+  // tip under a plan. counts: [[method id, how many]]. A spell above your Magic
+  // level says so: that part of the plan waits for it.
+  function magicTip(ix, counts) {
+    const mg = castsIn(ix, counts);
+    if (!mg) return '';
+    // Your Magic level. Off the hiscores (under level 15) only the most it can be is known.
+    const cur = currentOf('magic');
+    const most = !cur ? null : cur.ranked ? cur.level : cur.range ? cur.range.max : null;
+    const youAre = cur && !cur.ranked && cur.range && cur.range.min < cur.range.max ? `you're ${most} at most` : `you're ${most}`;
+    // (one line a spell: Lvl-1 Enchant makes rings of recoil and games necklaces alike)
+    const spells = new Map();
+    for (const [id, n] of Object.entries(mg.by)) { const m = ix.byId.get(id); spells.set(m.spell, { n: (spells.get(m.spell)?.n || 0) + n, level: m.magicLevel }); }
+    const casts = [...spells].map(([spell, c]) => `${fmt(c.n)} × ${esc(spell)} ${most != null && most < c.level
+      ? `<span class="c-lose">(needs Magic ${c.level}: ${youAre})</span>`
+      : `<span class="c-faint">(Magic ${c.level})</span>`}`);
+    // What it does to your Magic level, when you can cast all of it.
+    const after = cur?.ranked && cur.level >= mg.level ? levelForXp10(Math.min(MAX_XP10, cur.xp10 + mg.xp10)) : 0;
+    const title = `Not part of the XP above: it's what the spells cast on the way give.${after > (cur?.level || 0) ? ` On its own it takes your Magic from ${cur.level} to ${after}.` : ''}`;
+    // (one span: a tip lays its children out in a row, which would set the commas apart)
+    return `<div class="tip magic" title="${title}"><span>Magic XP on the way: <b class="c-xp">+${xpText(mg.xp10)} XP</b> from ${casts.join(', ')}</span></div>`;
+  }
 
   // With your supplies rounded up, each thing is one line: what your bank makes
   // of it together with what rounding up adds.
-  function roundedSteps(fb) {
+  function roundedSteps(fb, minor) {
     const lines = [], first = new Map();
     for (const s of fb.steps) {
       const to = s.rounded ? first.get(s.id) : undefined;
@@ -686,6 +737,7 @@ export function createPlanner(ctx) {
       for (const [k, n] of Object.entries(s.made || {})) t.made[k] = (t.made[k] || 0) + n;
       for (const [k, n] of Object.entries(s.collect || {})) t.collect[k] = (t.collect[k] || 0) + n;
     }
+    for (const l of lines) l.collect = minorLast(l.collect, minor);
     return lines;
   }
 
@@ -696,7 +748,7 @@ export function createPlanner(ctx) {
       return `<div class="plan-sec"><h4>From your bank${rounded ? ', supplies rounded up' : ''}</h4><div class="c-faint small-note">Nothing in your bank makes ${esc(SKILL_BY_KEY.get(goal.skill).name)} XP at your level yet.
         Add ${textFor(goal.skill).bankHint} in the <button type="button" class="linkish" data-act="to-bank" data-skill="${goal.skill}">Bank</button> tab.</div>${unidNote(goal)}</div>`;
     }
-    const steps = rounded ? roundedSteps(fb) : fb.steps;
+    const steps = rounded ? roundedSteps(fb, minorOf(goal.skill)) : fb.steps;
     // Where the goal is reached. Rounded up, the lines are counted in the order shown.
     let goalAt = rounded ? null : fb.goalReached;
     if (rounded && fb.goalReached) {
@@ -746,11 +798,12 @@ export function createPlanner(ctx) {
       <span class="c-faint">${known ? '(your banked supplies are already yours)' : '(some prices are still unknown)'}</span>
     </div>`;
     const reach = fb.goalReached ? `<span class="c-win">That reaches your goal.</span>` : '';
+    const magic = magicTip(ix, fb.steps.flatMap(s => [[s.id, s.runs], ...Object.entries(s.sub)]));
     const collectLine = !rounded ? '' : toCollect
       ? `<div class="collect"><span class="c-muted">To round up your supplies, collect:</span> ${itemList(toCollect)}</div>`
       : `<div class="c-faint small-note">Nothing to collect: your bank leaves nothing over.</div>`;
     return `<div class="plan-sec"><h4>From your bank${rounded ? ', supplies rounded up' : ''} <span class="c-level">+${xpText(fb.xp10)} XP</span> <span class="c-faint">→ level ${fb.endLevel}</span> ${reach}</h4>
-      <div class="steps">${rows}</div>${collectLine}${money}${assumed}${unidNote(goal)}</div>`;
+      <div class="steps">${rows}</div>${collectLine}${money}${magic}${assumed}${unidNote(goal)}</div>`;
   }
 
   // With your bank left out: a mix you plan yourself, typed into the table's
@@ -781,7 +834,7 @@ export function createPlanner(ctx) {
         <button type="button" class="linkish small-note" data-act="mix-clear">Clear the mix</button></h4>
       <div class="steps">${rows}</div>
       ${buys ? `<div class="collect"><span class="c-muted">To collect or buy:</span> ${itemList(mx.buy)}</div>` : ''}
-      ${money}</div>`;
+      ${money}${magicTip(ix, mx.steps.flatMap(st => Object.entries(st.casts || {})))}</div>`;
   }
 
   function thenHtml(goal, plan, ix) {
@@ -825,7 +878,7 @@ export function createPlanner(ctx) {
       <div class="bar wrap"><span class="c-muted">Train with</span> ${sel}</div>
       <div class="steps">${segs}</div>
       ${buys ? `<div class="collect"><span class="c-muted">To collect or buy:</span> ${itemList(f.buy)}</div>` : ''}
-      ${toolLine}${noteLine}${money}${balance}</div>`;
+      ${toolLine}${noteLine}${money}${magicTip(ix, Object.entries(f.steps))}${balance}</div>`;
   }
 
   function unitNote(key, ix, mixed, { bankOn, even, assumed, mix, whatIf }) {
@@ -947,8 +1000,8 @@ export function createPlanner(ctx) {
     // Use comes first, where it can't scroll out of sight: untick anything you
     // don't plan to make.
     if (bankCols) {
-      columns.unshift(['<th title="Let the bank plan use this. Untick anything you don\'t plan to make.">Use</th>',
-        (r, m) => `<td class="c"><input type="checkbox" data-use="${m.id}" ${excluded.has(m.id) ? '' : 'checked'} title="Let the bank plan use this" aria-label="Use ${esc(m.name)} in the bank plan"></td>`]);
+      columns.unshift(['<th title="Let the bank plan make this. Untick anything you don\'t plan to make. (What a ticked row needs is still made on the way: a ring\'s sapphire is cut even with Sapphire (cut) unticked.)">Use</th>',
+        (r, m) => `<td class="c"><input type="checkbox" data-use="${m.id}" ${excluded.has(m.id) ? '' : 'checked'} title="Let the bank plan make this" aria-label="Use ${esc(m.name)} in the bank plan"></td>`]);
     }
     const nameCol = columns.findIndex(([head]) => head.includes(`>${textFor(goal.skill).what}<`));
     const body = groups.filter(g => !shown || g === shown).map(gname => {
@@ -1062,8 +1115,13 @@ export function createPlanner(ctx) {
           reads.push({ name, ok: false, why: 'unreadable' });
         }
       }
-      S.shots = { reads, merged: B.mergeReads(reads.filter(r => r.ok)) };
-      prices.want(S.shots.merged.items.map(i => i.slug));
+      const merged = B.mergeReads(reads.filter(r => r.ok));
+      const b = bank();
+      const read = B.reviewRows(merged, { bank: b.items, memory: b.twins, likelier: LIKELIER_TWIN, repeat: [UNID_HERBS.item] });
+      const rows = read.filter(r => !NOT_BANKED.has(r.slug));
+      // off: lines you've unticked. (Kept here: the view is redrawn as prices arrive.) left: tools and thread, not added.
+      S.shots = { reads, merged, off: new Set(), rows, left: read.length - rows.length };
+      prices.want(S.shots.rows.flatMap(r => r.choices || [r.slug]));
     } catch (e) {
       S.shots = { error: e?.message || String(e) };
     }
@@ -1095,31 +1153,51 @@ export function createPlanner(ctx) {
     const bad = sh.reads.filter(r => !r.ok);
     const okCount = sh.reads.length - bad.length;
     const problems = bad.map(r => `<li><b>${esc(r.name)}</b>: ${r.why === 'no-bank' ? 'no bank in this one. Open your bank before pressing the screenshot key.' : 'couldn\'t open this picture.'}</li>`).join('');
-    const rows = m.items.map(it => {
-      const cur = b[it.slug] || 0;
-      const next = it.approx && cur >= it.min && cur <= it.max ? cur : it.count;
+    const moved = reader.B.movedFrom(sh.rows, b, { complete: m.complete });
+    const lines = shotLines(sh.rows, b);
+    const first = new Set();
+    const rows = sh.rows.map(it => {
+      const { cur, next, approx, min, max } = lines.get(it.slug);
       const read = it.approx ? `≈${esc(gpShort(it.count))}` : fmt(it.count);
-      const tip = it.approx ? `The bank shows rounded amounts from 100K up: this is between ${fmt(it.min)} and ${fmt(it.max)}.${cur >= it.min && cur <= it.max ? ' Your amount is in that range, so it\'s kept.' : ''}` : '';
-      // the same icon as another item: one of ours (also), or one the planner doesn't use (like)
-      const twins = [...(it.also || []).map(a => itemName(a)), ...(it.like || []).map(n => esc(n))];
-      const also = twins.length ? ` <span class="c-faint small-note">or ${twins.join(', ')}: they look the same</span>` : '';
+      const tip = it.approx ? `The bank shows rounded amounts from 100K up: this is between ${fmt(it.min)} and ${fmt(it.max)}.${approx && cur >= min && cur <= max ? ' Your amount is in that range, so it\'s kept.' : ''}` : '';
+      // the same icon as another item: one of ours (you pick which), or one the planner doesn't use (like)
+      const likes = (it.like || []).map(n => esc(n));
+      const twins = it.choices ? [] : (it.also || []).map(a => itemName(a));
+      const also = twins.length + likes.length ? ` <span class="c-faint small-note">or ${[...twins, ...likes].join(', ')}: they look the same</span>` : '';
       const unsure = it.unsure ? ` <span class="shot-check" title="A close call between items that look alike: check this one">check</span>` : '';
-      return `<label class="shot-row${next !== cur ? ' changed' : ''}">
-        <input type="checkbox" data-shot="${it.slug}" checked>
-        ${itemIcon(it.slug, true)} <span class="shot-name">${itemName(it.slug)}${also}${unsure}</span>
+      const name = it.choices
+        ? `<select class="input small shot-as" data-shot-as="${it.key}" aria-label="Which item this is" title="These look exactly the same in the game: pick the one this is. Your pick is kept for next time.">${it.choices.map(c =>
+          `<option value="${c}"${c === it.slug ? ' selected' : ''}>${itemName(c)}</option>`).join('')}</select>`
+        : itemName(it.slug);
+      // one "was" for an item, on its first line
+      const lead = !first.has(it.slug);
+      first.add(it.slug);
+      // (a stack an earlier read filed under the item it looks like: "was under Ashes", with the amount if it's another)
+      const from = moved[it.key];
+      const was = from ? `was ${b[from] === it.count ? '' : `${fmt(b[from])} `}under ${itemName(from)}`
+        : !lead ? '' : next === cur ? 'same' : `was ${fmt(cur)}`;
+      // (any unid herb could be lantadyme, which looks just like one: its drop-down is there, without the nudge)
+      const nudge = it.choices && it.icon !== UNID_HERBS.item;
+      return `<label class="shot-row${next !== cur ? ' changed' : ''}${nudge ? ' twin' : ''}">
+        <input type="checkbox" data-shot="${it.key}"${sh.off.has(it.key) ? '' : ' checked'}>
+        ${itemIcon(it.slug, true)} <span class="shot-name">${name}${also}${unsure}</span>
         <span class="shot-n" title="${esc(tip)}">${read}</span>
-        <span class="shot-was c-faint">${next === cur ? 'same' : `was ${fmt(cur)}`}</span>
+        <span class="shot-was c-faint">${was}</span>
       </label>`;
     }).join('');
-    const missing = m.complete ? Object.keys(b).filter(slug => b[slug] > 0 && !m.items.some(i => i.slug === slug)) : [];
+    const twinCount = sh.rows.filter(r => r.choices && r.icon !== UNID_HERBS.item).length;
+    const twinNote = twinCount ? ` <b class="c-level">${twinCount === 1 ? 'One of them looks' : `${twinCount} of them look`} exactly like another item</b> (soda ash and ashes, a sapphire ring and a ring of recoil): pick which ${twinCount === 1 ? 'it is' : 'each is'} from its drop-down. Your pick is kept for next time.` : '';
+    const gone = Object.values(moved);
+    const skipped = m.others + m.unknown + (sh.left || 0);
+    const missing = m.complete ? Object.keys(b).filter(slug => b[slug] > 0 && !lines.has(slug) && !gone.includes(slug) && !NOT_BANKED.has(slug)) : [];
     el.innerHTML = `<div class="card shots-result" data-drop="1">
-      <div class="shots-title">From ${okCount} screenshot${okCount === 1 ? '' : 's'}: ${m.items.length} of your planner items</div>
-      <p class="note">${fmt(m.seen)} bank slots read${m.complete ? ', the whole bank' : ''}. ${m.others + m.unknown ? `${fmt(m.others + m.unknown)} other item${m.others + m.unknown === 1 ? '' : 's'} the planner doesn't use ${m.others + m.unknown === 1 ? 'was' : 'were'} skipped.` : ''}
-        Items cut off at the top or bottom edge are skipped too, so let screenshots overlap a little.</p>
+      <div class="shots-title">From ${okCount} screenshot${okCount === 1 ? '' : 's'}: ${lines.size} of your planner items</div>
+      <p class="note">${fmt(m.seen)} bank slots read${m.complete ? ', the whole bank' : ''}. ${skipped ? `${fmt(skipped)} other item${skipped === 1 ? '' : 's'} the planner doesn't count ${skipped === 1 ? 'was' : 'were'} skipped${sh.left ? ' (tools and thread among them)' : ''}.` : ''}
+        Items cut off at the top or bottom edge are skipped too, so let screenshots overlap a little.${twinNote}</p>
       ${problems ? `<ul class="shot-problems">${problems}</ul>` : ''}
       ${rows ? `<div class="shot-list">${rows}</div>` : '<p class="c-faint">None of the items the planner uses are in these screenshots.</p>'}
-      ${missing.length ? `<label class="check shot-clear"><input type="checkbox" id="shots-clear"> Also clear ${missing.length} item${missing.length === 1 ? '' : 's'} that ${missing.length === 1 ? 'isn\'t' : 'aren\'t'} in your bank anymore: ${missing.map(itemName).join(', ')}</label>` : ''}
-      ${rows && Array.isArray(bank().order) ? `<label class="check shot-clear"><input type="checkbox" id="shots-order" checked> Put the All view back in your bank's order (you've moved items around there)</label>` : ''}
+      ${missing.length ? `<label class="check shot-clear"><input type="checkbox" id="shots-clear"${sh.clear ? ' checked' : ''}> Also clear ${missing.length} item${missing.length === 1 ? '' : 's'} that ${missing.length === 1 ? 'isn\'t' : 'aren\'t'} in your bank anymore: ${missing.map(itemName).join(', ')}</label>` : ''}
+      ${rows && Array.isArray(bank().order) ? `<label class="check shot-clear"><input type="checkbox" id="shots-order"${sh.keepOrder ? '' : ' checked'}> Put the All view back in your bank's order (you've moved items around there)</label>` : ''}
       <div class="bar wrap">
         ${rows ? `<button type="button" class="btn small" data-act="shots-apply">Update my bank</button>` : ''}
         <button type="button" class="btn small" data-act="shots-discard">${rows ? 'Discard' : 'Close'}</button>
@@ -1129,32 +1207,66 @@ export function createPlanner(ctx) {
     </div>`;
   }
 
-  function applyShots() {
-    const m = S.shots?.merged;
-    if (!m) return;
-    const b = bank();
-    const ticked = new Set([...document.querySelectorAll('[data-shot]')].filter(x => x.checked).map(x => x.dataset.shot));
-    let changed = 0;
-    for (const it of m.items) {
-      if (!ticked.has(it.slug)) continue;
-      const cur = b.items[it.slug] || 0;
-      const next = it.approx && cur >= it.min && cur <= it.max ? cur : it.count;
-      if (next !== cur) changed++;
-      if (next > 0) b.items[it.slug] = next; else delete b.items[it.slug];
+  // What the review's lines come to, item by item: { slug -> { count, min, max,
+  // approx, cur (in your bank now), next (after updating), slots } }. Lines of
+  // one item add up (unid herbs in several slots). only: the lines that count.
+  function shotLines(rows, b, only = () => true) {
+    const out = new Map();
+    for (const r of rows) {
+      if (!only(r)) continue;
+      const t = out.get(r.slug) || { count: 0, min: 0, max: 0, approx: false, slots: [] };
+      t.count += r.count; t.min += r.min; t.max += r.max;
+      t.approx ||= !!r.approx;
+      t.slots.push(...(r.slots || []));
+      out.set(r.slug, t);
     }
-    if ($('shots-clear')?.checked) {
-      for (const slug of Object.keys(b.items)) if (!m.items.some(i => i.slug === slug)) { delete b.items[slug]; changed++; }
+    for (const [slug, t] of out) {
+      t.cur = b[slug] || 0;
+      // 100K and up the bank shows rounded: an amount of yours in that range is kept
+      t.next = t.approx && t.cur >= t.min && t.cur <= t.max ? t.cur : t.count;
+    }
+    return out;
+  }
+
+  function applyShots() {
+    const sh = S.shots;
+    if (!sh?.merged) return;
+    const m = sh.merged;
+    const b = bank();
+    const on = r => !sh.off.has(r.key);
+    const all = shotLines(sh.rows, b.items);                   // every line read, ticked or not
+    const lines = shotLines(sh.rows, b.items, on);
+    let changed = 0;
+    // a stack that was filed under the other item with its icon moves over
+    const moved = reader.B.movedFrom(sh.rows, b.items, { complete: m.complete });
+    for (const r of sh.rows) {
+      const from = on(r) && moved[r.key];
+      if (!from || !(b.items[from] > 0)) continue;
+      delete b.items[from];
+      if (b.slots) delete b.slots[from];
+      changed++;
+    }
+    for (const [slug, t] of lines) {
+      if (t.next !== t.cur) changed++;
+      if (t.next > 0) b.items[slug] = t.next; else delete b.items[slug];
+    }
+    if (sh.clear && m.complete) {
+      for (const slug of Object.keys(b.items)) if (!all.has(slug) && !NOT_BANKED.has(slug)) { delete b.items[slug]; changed++; }
     }
     // Where each item is in the bank, for the All view's order. Screenshots of
     // the whole bank replace what was known; a part of it updates what it shows.
     const slots = m.complete ? {} : { ...(b.slots || {}) };
-    for (const it of m.items) {
-      if (!it.slots?.length) continue;
-      if (ticked.has(it.slug)) slots[it.slug] = Math.min(...it.slots);
-      else if (b.slots?.[it.slug] != null) slots[it.slug] = b.slots[it.slug];
+    for (const [slug, t] of all) {
+      if (!t.slots.length) continue;
+      if (lines.has(slug)) slots[slug] = Math.min(...lines.get(slug).slots);
+      else if (b.slots?.[slug] != null) slots[slug] = b.slots[slug];
     }
     b.slots = slots;
-    const reordered = $('shots-order')?.checked;
+    // which of two look-alikes each stack is, for next time
+    const twins = { ...(b.twins || {}) };
+    for (const r of sh.rows) if (r.choices) twins[r.icon] = sh.rows.filter(x => x.icon === r.icon).map(x => x.slug);
+    if (Object.keys(twins).length) b.twins = twins;
+    const reordered = Array.isArray(b.order) && !sh.keepOrder && !!$('shots-order');
     if (reordered) delete b.order;
     saveBank(b);
     S.shots = null;
@@ -1300,7 +1412,8 @@ export function createPlanner(ctx) {
   // in is found again afterwards, with its text and caret where they were.
   function fieldKey(el) {
     if (el.dataset?.psrc) return `[data-psrc="${el.dataset.psrc}"][value="${el.value}"]`;
-    for (const a of ['bank', 'price', 'gopt', 'use', 'mix']) if (el.dataset?.[a]) return `[data-${a}="${el.dataset[a]}"]`;
+    for (const a of ['bank', 'price', 'gopt', 'use', 'mix', 'shot']) if (el.dataset?.[a]) return `[data-${a}="${el.dataset[a]}"]`;
+    if (el.dataset?.shotAs) return `[data-shot-as="${el.dataset.shotAs}"]`;
     const form = el.closest('[data-form]');
     if (form && el.name) return `[data-form="${form.dataset.form}"] [name="${el.name}"]`;
     return null;
@@ -1516,6 +1629,16 @@ export function createPlanner(ctx) {
   function onChange(e) {
     const t = e.target;
     if (t.id === 'shots-file') { if (t.files?.length) readShots(t.files); return; }
+    // The screenshot review: what's ticked, and which look-alike a line is.
+    if (S.shots?.rows) {
+      if (t.id === 'shots-clear') { S.shots.clear = t.checked; return; }
+      if (t.id === 'shots-order') { S.shots.keepOrder = !t.checked; return; }
+      if (t.dataset.shot) { if (t.checked) S.shots.off.delete(t.dataset.shot); else S.shots.off.add(t.dataset.shot); return; }
+      if (t.dataset.shotAs) {
+        if (reader.B.pickRow(S.shots.rows, t.dataset.shotAs, t.value, [UNID_HERBS.item])) { render('bank'); }
+        return;
+      }
+    }
     const card = t.closest('[data-goal]');
     if (card && t.dataset.gopt) {
       const id = card.dataset.goal;

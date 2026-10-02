@@ -247,20 +247,25 @@ export function mergeReads(reads) {
     for (const s of r.slots) { bySlot.set(s.slot, s); empty.delete(s.slot); }
     for (const e of r.empty) if (!bySlot.has(e)) empty.add(e);
   }
-  const items = new Map();          // slug -> { count, min, max, approx, slots, also, like? }
+  const items = new Map();          // slug -> { count, min, max, approx, slots, also, like?, parts }
   let others = 0, unknown = 0;
   for (const s of [...bySlot.values()].sort((a, b) => a.slot - b.slot)) {
     if (!s.entry) { unknown++; continue; }
     if (s.entry.other) { others++; continue; }
     const slug = s.entry.of || s.entry.slug;
-    const it = items.get(slug) || { slug, count: 0, min: 0, max: 0, approx: false, unsure: false, slots: [], also: s.entry.also || [] };
+    const it = items.get(slug) || { slug, count: 0, min: 0, max: 0, approx: false, unsure: false, slots: [], also: [], parts: [] };
+    // other planner items with the very same icon (soda ash and ashes)
+    if (s.entry.also?.length) it.also = s.entry.also;
     // items the planner doesn't use that look exactly the same (an amulet of glory)
     if (s.entry.like) it.like = s.entry.like;
     it.count += s.count; it.min += s.min; it.max += s.max;
     it.approx ||= !!s.approx;
     // a close call between lookalikes (oak or magic logs), worth a look
-    it.unsure ||= s.margin < 2 || s.dist > 15;
+    const unsure = s.margin < 2 || s.dist > 15;
+    it.unsure ||= unsure;
     it.slots.push(s.slot);
+    // slot by slot, for reviewRows: an icon two planner items share is a line a slot
+    it.parts.push({ slot: s.slot, count: s.count, min: s.min, max: s.max, approx: !!s.approx, unsure, shared: !!s.entry.also?.length });
     items.set(slug, it);
   }
   // The bank keeps items together from the first slot, so it's all been seen
@@ -269,4 +274,95 @@ export function mergeReads(reads) {
   let complete = Number.isFinite(firstEmpty);
   for (let i = 0; complete && i < firstEmpty; i++) if (!bySlot.has(i)) complete = false;
   return { items: [...items.values()], others, unknown, seen: bySlot.size, complete };
+}
+
+// ── The review ────────────────────────────────────────────────────────────
+// One line for each planner item that was read. Two planner items with the
+// very same icon (soda ash and ashes, a sapphire ring and a ring of recoil)
+// can't be told apart from a picture, so each bank slot that shows one is a
+// line of its own, with choices: you say which it is. Its first pick, in order:
+//   - what you said last time (memory: { icon: [slug for each line] }), while
+//     the bank shows as many stacks of it as it did then;
+//   - one whose amount in your bank this is (bank: { slug: n }), then the one
+//     whose amount is nearest. Until you've said which is which, only the second
+//     names count for that: up to v2.5.0 a read filed such a stack under the
+//     icon's own name without asking, so that amount proves nothing, while an
+//     amount under the second name is one you typed in yourself;
+//   - the likelier of the two (likelier: { icon: slug });
+//   - the icon's own name.
+// repeat: items several slots can be (every unid herb is one "Unid herb").
+export function reviewRows(merged, { bank = {}, memory = {}, likelier = {}, repeat = [] } = {}) {
+  const many = new Set(repeat);
+  const rows = [];
+  for (const it of merged.items) {
+    const shared = it.also?.length ? (it.parts || []).filter(p => p.shared) : [];
+    const { parts: _parts, ...whole } = it;
+    if (!shared.length) { rows.push({ key: it.slug, ...whole }); continue; }
+    const choices = [it.slug, ...it.also];
+    const lines = shared.map((p, i) => ({
+      key: `${it.slug}@${i}`, icon: it.slug, choices, slug: it.slug, count: p.count, min: p.min, max: p.max,
+      approx: p.approx, unsure: p.unsure, slots: [p.slot], also: it.also, ...(it.like ? { like: it.like } : {}),
+    }));
+    const picks = firstPicks(lines, it.slug, choices, { bank, memory: memory?.[it.slug], likelier: likelier[it.slug], many });
+    lines.forEach((l, i) => { l.slug = picks[i]; rows.push(l); });
+    // the rest of it, from icons of its own (an unid herb that looks a little different)
+    const plain = it.parts.filter(p => !p.shared);
+    if (plain.length) {
+      rows.push({
+        key: it.slug, slug: it.slug, count: sum(plain, 'count'), min: sum(plain, 'min'), max: sum(plain, 'max'),
+        approx: plain.some(p => p.approx), unsure: plain.some(p => p.unsure), slots: plain.map(p => p.slot), also: [],
+      });
+    }
+  }
+  return rows;
+}
+const sum = (list, k) => list.reduce((a, x) => a + x[k], 0);
+
+function firstPicks(lines, icon, choices, { bank, memory, likelier, many }) {
+  const known = Array.isArray(memory) && memory.length > 0 && memory.every(x => choices.includes(x));
+  if (known && memory.length === lines.length) return [...memory];
+  // Amounts in your bank that are surely what they say: the second names, and
+  // once you've said which is which, all of them.
+  const sure = (known ? choices : choices.slice(1)).filter(x => bank[x] > 0);
+  const picks = lines.map(() => null);
+  const free = x => many.has(x) || !picks.includes(x);
+  lines.forEach((l, i) => {
+    const hit = sure.filter(x => free(x) && bank[x] >= l.min && bank[x] <= l.max);
+    if (hit.length === 1) picks[i] = hit[0];
+  });
+  lines.forEach((l, i) => {
+    if (picks[i]) return;
+    // (several unid herbs are the rule: only its very amount makes a stack lantadyme)
+    const near = many.has(icon) ? [] : [...sure].sort((a, b) => Math.abs(bank[a] - l.count) - Math.abs(bank[b] - l.count));
+    const order = [...new Set([...near, ...(many.has(icon) ? [icon] : [likelier, icon, ...choices])].filter(x => x && choices.includes(x)))];
+    picks[i] = order.find(free) || order[0];
+  });
+  return picks;
+}
+
+// You say which one a line is. A bank holds one stack of each item, so where
+// another line with that icon was the one you picked, the two swap.
+export function pickRow(rows, key, slug, repeat = []) {
+  const row = rows.find(r => r.key === key);
+  if (!row || !row.choices?.includes(slug) || row.slug === slug) return false;
+  const other = repeat.includes(slug) ? null : rows.find(r => r !== row && r.icon === row.icon && r.slug === slug);
+  if (other) other.slug = row.slug;
+  row.slug = slug;
+  return true;
+}
+
+// Stacks an earlier read filed under the other name: a line whose item isn't in
+// your bank at all, while another item with the same icon is, that no line says
+// it is. When that's this very amount it's the same stack; and when the whole
+// bank was read (complete) it can't be anything else, whatever the amount.
+// Returns { line key: that other item }; updating the bank moves it over.
+export function movedFrom(rows, bank = {}, { complete = false } = {}) {
+  const out = {};
+  const said = new Set(rows.map(x => x.slug));
+  for (const r of rows) {
+    if (!r.choices || bank[r.slug] > 0) continue;
+    const from = r.choices.filter(a => !said.has(a) && bank[a] > 0 && (complete || (bank[a] >= r.min && bank[a] <= r.max)));
+    if (from.length === 1 && !Object.values(out).includes(from[0])) out[r.key] = from[0];
+  }
+  return out;
 }

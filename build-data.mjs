@@ -436,6 +436,10 @@ await fletching();
 //     Magic XP, not Crafting XP.
 //   - dragonhide sets: vambraces, chaps and body, which markets.lostcity.rs
 //     trades as one item (its ItemSetsSeeder; not an item in the game).
+// And one step the calculator leaves to you: the orb a battlestaff takes is an
+// unpowered orb charged with a Charge Orb spell (the spell's runes; Magic XP).
+// It's a step on the way, so a plan with no charged orbs lists the unpowered
+// orbs and runes, and unpowered orbs or molten glass in your bank count.
 const craftingNotes = [];
 async function crafting() {
   const dir = p => scripts('skill_crafting/' + p);
@@ -666,13 +670,21 @@ async function crafting() {
   for (const m of fountain.matchAll(/if \(([^)]*)\) \{[\s\S]*?inv_setslot\(inv, \$slot, (\w+), 1\)/g)) {
     for (const from of m[1].matchAll(/last_useitem = (\w+)/g)) charged.set(from[1], m[2]);
   }
+  // What one cast of a spell takes, and the Magic XP it gives (magic, in tenths;
+  // spell and magicLevel name it). Crafting XP isn't touched by it.
+  const xpText = xp10 => String(xp10 / 10);
+  const cast = (d, spell) => {
+    const runes = {};
+    for (let i = 0; i + 1 < d.runesrequired.length; i += 2) if (d.runesrequired[i] !== 'null') runes[need(d.runesrequired[i])] = Number(d.runesrequired[i + 1]);
+    const magic = Number(d.experience[0]), magicLevel = Number(d.levelrequired[0]);
+    if (!(magic > 0) || !(magicLevel > 0) || !Object.keys(runes).length) throw new Error(`crafting: can't read the ${spell} spell`);
+    return { runes, magic, magicLevel, spell };
+  };
   const enchanted = [];
   for (const row of spells.values()) {
     const lvl = row.name.match(/^magic_spell_enchant_level(\d)$/);
     if (!lvl) continue;
-    const d = fields(row);
-    const runes = {};
-    for (let i = 0; i + 1 < d.runesrequired.length; i += 2) if (d.runesrequired[i] !== 'null') runes[need(d.runesrequired[i])] = Number(d.runesrequired[i + 1]);
+    const c = cast(fields(row), `Lvl-${lvl[1]} Enchant`);
     for (const [, from, to] of row.data.filter(([k]) => k === 'convertobj')) {
       const base = rowOf(from);
       const final = need(charged.get(to) || to);
@@ -680,19 +692,44 @@ async function crafting() {
       after(base.id, {
         id: `cr_ench_${final}`, skill: 'crafting', group: base.group, kind: 'xp', ...(base.tools ? { tools: base.tools } : {}),
         name: `${ITEM.get(final).name} (${base.parts ? 'make, string & enchant' : 'make & enchant'})`,
-        level: base.level, xp: base.xp, in: { ...base.in, ...runes }, out: { [final]: 1 }, ...(base.parts ? { parts: base.parts } : {}),
-        note: `Enchanted with Lvl-${lvl[1]} Enchant (Magic ${d.levelrequired[0]}), which gives Magic XP, not Crafting XP.${charged.has(to) ? ' Then charged at the Fountain of Heroes.' : ''}`,
+        level: base.level, xp: base.xp, in: { ...base.in, ...c.runes }, out: { [final]: 1 }, ...(base.parts ? { parts: base.parts } : {}),
+        magic: c.magic, spell: c.spell, magicLevel: c.magicLevel,
+        note: `Enchanted with ${c.spell} (Magic ${c.magicLevel}): ${xpText(c.magic)} Magic XP each, on top of the Crafting XP.${charged.has(to) ? ' Then charged at the Fountain of Heroes.' : ''}`,
       });
     }
   }
   if (enchanted.length !== 11) throw new Error(`crafting: expected 11 enchanted items, found ${enchanted.length}`);
 
+  // Orbs: an unpowered orb is charged at an obelisk with a Charge Orb spell. No
+  // Crafting XP in it, so it's a step on the way, like an unfinished potion.
+  const charging = [];
+  for (const row of spells.values()) {
+    const el = row.name.match(/^magic_spell_charge_(\w+)_orb$/);
+    if (!el) continue;
+    const c = cast(fields(row), `Charge ${el[1][0].toUpperCase()}${el[1].slice(1)} Orb`);
+    for (const [, from, to] of row.data.filter(([k]) => k === 'convertobj')) {
+      charging.push({ id: `cr_charge_${need(to)}`, skill: 'crafting', group: 'Charging orbs', kind: 'prep',
+        name: `Charge ${ITEM.get(to).name.toLowerCase()}`, level: 1, xp: 0,
+        in: { [need(from)]: 1, ...c.runes }, out: { [to]: 1 }, magic: c.magic, spell: c.spell, magicLevel: c.magicLevel });
+    }
+  }
+  const orbOf = new Map(charging.map(m => [Object.keys(m.out)[0], m]));
+  for (const [staff, s] of staves) {
+    const m = orbOf.get(s.orb);
+    if (!m) throw new Error(`crafting: no Charge Orb spell makes the ${s.orb} a ${staff} takes`);
+    if (!rowOf(Object.keys(m.in)[0])) throw new Error(`crafting: no row makes what's charged into ${s.orb}`);
+    // the battlestaff's own row says so, where its tooltip is
+    rowOf(staff).note = `The orb is an unpowered orb charged with ${m.spell} (Magic ${m.magicLevel}): ${xpText(m.magic)} Magic XP each. A plan with no ${ITEM.get(s.orb).name.toLowerCase()}s lists the unpowered orbs and runes.`;
+  }
+  if (charging.length !== staves.size) throw new Error(`crafting: expected ${staves.size} Charge Orb spells, found ${charging.length}`);
+
   // A row whose product another row uses (a cut sapphire, molten glass, a ball
   // of wool, a leather body for studding) feeds it: with those in your bank the
   // plan makes them on the way, and their XP counts.
   const mine = methods.filter(m => m.skill === 'crafting');
-  const inputs = new Set(mine.flatMap(m => Object.keys(m.in)));
+  const inputs = new Set([...mine, ...charging].flatMap(m => Object.keys(m.in)));
   for (const m of mine) if (Object.keys(m.out).some(k => inputs.has(k))) m.feeds = 1;
+  methods.push(...charging);
 
   // Tanning: no XP, so it's a step on the way, like an unfinished potion, and the
   // tanner's fee is part of it (pays: coins never come out of your bank and never
@@ -845,6 +882,9 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // feeds: an xp method whose product another one uses (a cut gem for a ring):
 // a plan makes it on the way from what's in your bank, like a source, and its
 // XP counts. note: a line for the row's tooltip (what else it takes).
+// magic: the Magic XP (in tenths) of the spell a method casts each time, on top
+// of its own XP: enchanting a ring, or charging an orb on the way to a
+// battlestaff (spell: its name; magicLevel: the Magic level it takes).
 // pays: inputs that are a fee (the tanner's coins): never taken from a bank,
 // never holding a plan back, always a cost. at: what the step takes instead at
 // another place (the Canifis tanner's fee); PLACES names the choice.

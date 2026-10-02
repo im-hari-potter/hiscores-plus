@@ -650,5 +650,8 @@ a.it-chip.mk:hover b { text-decoration: underline; }
 .shot-row.changed .shot-was { color: var(--level); }
 .shot-check { margin-left: 4px; padding: 0 4px; border: 1px solid var(--gold-dim); border-radius: 3px; font-family: var(--small); font-size: 12px; color: var(--gold-hi); }
 .shot-clear { display: block; margin: 0 0 8px; font-family: var(--small); font-size: 13px; }
+/* two items with the very same icon: a drop-down says which this stack is */
+.shot-row.twin { background: rgba(240, 196, 25, 0.07); box-shadow: inset 2px 0 0 var(--gold-dim); }
+.shot-as { max-width: 100%; padding: 2px 4px; border-color: var(--gold-dim); }
 .skill-tab .sw-v { font-family: var(--small); font-size: 12px; color: var(--gold-hi); font-weight: normal; }
 .skill-tab.all-tab { padding-left: 10px; }

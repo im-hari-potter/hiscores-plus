@@ -17,9 +17,13 @@
 // feeds: an xp method whose product goes into another one (Crafting: a cut gem
 // for a ring, molten glass for a vial). When a plan needs that product it stands
 // in for a source: made on the way from what's in the bank, with its XP counted,
-// and never put on a shopping list. Unticking it stops that too.
+// and never put on a shopping list. Unticking it only stops it being made for
+// its own sake: a ring you've left ticked still has its sapphire cut on the way.
 // pays: inputs that are a fee (the tanner's coins). They're never taken from the
 // bank and never hold a plan back; they're always a cost, at 1 gp each.
+// magic: the Magic XP (in tenths) of the spell a method casts each time: an
+// enchanted ring's row, or charging an orb on the way to a battlestaff. It isn't
+// the skill's XP, so plans only report it (castsIn).
 
 import { XP_TABLE, MAX_LEVEL } from './skills.js';
 
@@ -127,11 +131,14 @@ const priced = (ix, priceOf) => (ix.fees.size ? item => (ix.fees.has(item) ? 1 :
 const feesOnly = (ix, items) => Object.fromEntries(Object.entries(items).filter(([item]) => ix.fees.has(item)));
 
 // ctx: { level, kinds: Set of producer kinds allowed, unlimited: Set of items,
-//        excluded: Set of method ids you've unticked }
-// A feeding method counts as a source, unless it's unticked.
+//        excluded: Set of method ids you've unticked (carried along; what's
+//        made on the way doesn't look at it) }
+// A feeding method counts as a source, ticked or not: unticking a row says not
+// to make it for its own sake, and what a ticked row needs is still made on the
+// way. (Up to v2.5.1 unticking stopped that too, so unticking Sapphire (cut)
+// left uncut sapphires out of the rings as well.)
 const producerKind = p => (p.feeds ? 'source' : p.kind);
-const unticked = (p, ctx) => !!p.feeds && !!ctx.excluded && ctx.excluded.has(p.id);
-const allowed = (p, ctx) => ctx.kinds.has(producerKind(p)) && p.level <= ctx.level && !unticked(p, ctx);
+const allowed = (p, ctx) => ctx.kinds.has(producerKind(p)) && p.level <= ctx.level;
 
 // How many of `item` the stock can provide, making more with allowed producers.
 function avail(ix, item, stock, ctx, depth = 0) {
@@ -221,7 +228,7 @@ export function expand(ix, m, runs, stock, ctx) {
       let missing = tidy(want - stock.take(item, want));
       const makers = ix.producers.get(item) || [];
       for (const p of makers) {
-        if (missing <= EPS || depth > 6 || producerKind(p) !== 'source' || p.level > ctx.level || unticked(p, ctx)) continue;
+        if (missing <= EPS || depth > 6 || producerKind(p) !== 'source' || p.level > ctx.level) continue;
         const done = Math.min(Math.ceil(missing / p.out[item]), (ctx.most ? mostRuns : maxRuns)(ix, p, stock, { ...ctx, kinds: BANK_KINDS }, depth + 1));
         if (done <= 0) continue;
         go(p, done, depth + 1);
@@ -252,7 +259,8 @@ export function planBank(ix, opts) {
   // Views redraw as prices arrive; the bank plan doesn't depend on prices, so
   // the last few are kept. (Callers only read the result.)
   const key = JSON.stringify([opts.bank || {}, opts.startXp10, opts.targetXp10 ?? null,
-    [...(opts.excluded || [])].sort(), [...(opts.unlimited || [])].sort(), opts.prefer || null, opts.roundUp || null]);
+    [...(opts.excluded || [])].sort(), [...(opts.unlimited || [])].sort(), opts.prefer || null, opts.roundUp || null,
+    [...(opts.minor || [])].sort()]);
   let memo = BANK_MEMO.get(ix);
   if (!memo) BANK_MEMO.set(ix, memo = new Map());
   if (memo.has(key)) return memo.get(key);
@@ -290,7 +298,13 @@ const LED = new WeakMap();                    // a bank plan -> the method that 
 // made (and those in also), then with anything else that's no more than one
 // ingredient short, best XP first. After that, the rest as usual. Steps after
 // the bank's own are marked rounded.
-function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new Set(), unlimited = new Set(), prefer = null, roundUp = null }) {
+// minor: the cheap supplies (vials of water, thread). Rounding up, they never
+// hold anything back, from the first step on: the plan is the one you'd get
+// buying them as you go. When you count them instead, what it uses beyond your
+// bank is collected like the rest (and not in assumed).
+function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new Set(), unlimited: counting = new Set(), prefer = null, roundUp = null, minor = null }) {
+  const unlimited = roundUp ? looseWith(counting, minor) : counting;
+  const counted = [...unlimited].filter(k => !counting.has(k));      // cheap supplies you count: collected when short
   const stock = new Stock(bank);
   const log = { steps: {}, assumed: {} };
   const steps = [];                           // [{ id, runs, xp10, sub: {id: runs}, made: {item: n} }] in order
@@ -378,12 +392,14 @@ function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new S
       }
     }
 
-    const before = { ...log.steps }, paidBefore = feesOnly(ix, log.assumed);
+    const before = { ...log.steps }, usedBefore = { ...log.assumed };
     const got = {};                             // collected for this step (rounding up)
     const [gained, did] = make(best, runs, stock, ctx, log, got);
+    const beyond = item => tidy((log.assumed[item] || 0) - (usedBefore[item] || 0));     // used that wasn't in the bank
+    for (const item of counted) { const d = beyond(item); if (d > EPS) got[item] = tidy((got[item] || 0) + d); }
     for (const [item, n] of Object.entries(got)) collected[item] = tidy((collected[item] || 0) + n);
     const paid = {};                            // fees this step paid (the tanner's)
-    for (const item of ix.fees) { const d = (log.assumed[item] || 0) - (paidBefore[item] || 0); if (d > 0) paid[item] = d; }
+    for (const item of ix.fees) { const d = beyond(item); if (d > 0) paid[item] = d; }
     if (!did) { usable.splice(usable.indexOf(best), 1); continue; }
     runs = did;
     const made = madeOver(best, runs, xp);
@@ -420,11 +436,12 @@ function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new S
   }
   // What it used that wasn't in the bank: things you buy as you go (assumed), and fees paid.
   const paid = feesOnly(ix, log.assumed);
+  if (counted.length) for (const s of steps) if (s.collect) s.collect = minorLast(s.collect, minor);
   return {
-    steps, used, assumed: without(log.assumed, ix.fees), leftover: stock,
+    steps, used, assumed: without(log.assumed, [...ix.fees, ...counted]), leftover: stock,
     xp10: xp - startXp10, endXp10: xp, endLevel: levelForXp10(xp), goalReached,
     ...(Object.keys(paid).length ? { paid } : {}),
-    ...(roundUp ? { collect: collected } : {}),
+    ...(roundUp ? { collect: counted.length ? minorLast(collected, minor) : collected } : {}),
   };
 }
 
@@ -454,6 +471,14 @@ function without(items, leaveOut) {
   return out;
 }
 const times = (out, n) => Object.fromEntries(Object.entries(out).map(([item, q]) => [item, q * n]));
+// The cheap supplies (minor: vials of water, thread) never hold rounding up
+// back, whether you buy them as you go or count them: herbs with no vials left
+// are still made into potions. Counted, the ones you're short of are collected
+// with the rest. looseWith: what never holds a rounded-up plan back.
+const looseWith = (unlimited, minor) => (minor && [...minor].some(k => !unlimited.has(k)) ? new Set([...unlimited, ...minor]) : unlimited);
+// In a list of what to collect, they go last.
+export const minorLast = (items, minor) => (!minor || !minor.size ? items
+  : Object.fromEntries(Object.entries(items).sort(([a], [b]) => minor.has(a) - minor.has(b))));
 
 // Economics of one action of m, bought from scratch: what goes in (down to buyable
 // items), what comes out, the net (worth less cost: negative is a loss), and gp
@@ -488,10 +513,13 @@ export function planMix(ix, mix, { startXp10, targetXp10 = null, unlimited = new
   const steps = picks.map(([m, runs]) => {
     const level = levelForXp10(xp);
     const out = madeOver(m, runs, xp);
-    const need = without(expand(ix, m, runs, new Stock(), { level: MAX_LEVEL, unlimited }).buy, unlimited);
+    const e = expand(ix, m, runs, new Stock(), { level: MAX_LEVEL, unlimited });
+    const need = without(e.buy, unlimited);
     for (const [k, n] of Object.entries(need)) buy[k] = (buy[k] || 0) + n;
     for (const [k, n] of Object.entries(out)) made[k] = (made[k] || 0) + n;
-    const step = { id: m.id, runs, xp10: runs * m.xp, made: out, buy: need, gain: gainOf(out, need, priceOf), levelAt: level, locked: m.level > level };
+    const casts = castsIn(ix, Object.entries(e.steps));
+    const step = { id: m.id, runs, xp10: runs * m.xp, made: out, buy: need, gain: gainOf(out, need, priceOf), levelAt: level, locked: m.level > level,
+      ...(casts ? { casts: casts.by } : {}) };
     xp += runs * m.xp;
     return step;
   });
@@ -521,12 +549,15 @@ export function planMix(ix, mix, { startXp10, targetXp10 = null, unlimited = new
 //         from when nothing is chosen, e.g. bows for Fletching), priceOf,
 //         mix (with the bank left out: how many of each you plan to make),
 //         roundUp (Round up my supplies: after the bank plan, what it leaves
-//         in your bank is used up too, with what's missing for that collected) }
+//         in your bank is used up too, with what's missing for that collected),
+//         minor (Set of the cheap supplies, vials of water and thread: rounding
+//         up, they never hold anything back, bought as you go or not) }
 export function planGoal(ix, opts) {
   const {
     bank = {}, currentXp10, targetXp10, excluded = new Set(), unlimited = new Set(),
-    useBank = true, fillId = null, fillGroup = null, mix = null, roundUp = false,
+    useBank = true, fillId = null, fillGroup = null, mix = null, roundUp = false, minor = null,
   } = opts;
+  const loose = looseWith(unlimited, minor);    // what never holds rounding up back
   const priceOf = priced(ix, opts.priceOf || (() => null));
   const level = levelForXp10(currentXp10);
   const toGo = Math.max(0, targetXp10 - currentXp10);
@@ -560,10 +591,13 @@ export function planGoal(ix, opts) {
   // (fromBank.collect). The one you picked to train with is rounded up from the
   // start; not picked, the one the plan carries on with joins in at the end even
   // if your bank can't make any of it yet.
-  const lead = useBank && roundUp ? methodFor(bankNow, bankNow.endLevel) || null : null;
+  // (Counting your vials, it starts from the plan you'd get buying them as you go.)
+  const usual = useBank && roundUp && loose !== unlimited
+    ? planBank(ix, { bank, startXp10: currentXp10, targetXp10, excluded, unlimited: loose, prefer: fillId }) : bankNow;
+  const lead = useBank && roundUp ? methodFor(usual, usual.endLevel) || null : null;
   const fromBank = useBank && roundUp
-    ? planBank(ix, { bank, startXp10: currentXp10, targetXp10, excluded, unlimited, prefer: LED.get(bankNow) || null,
-      roundUp: { first: lead && lead.id === fillId ? fillId : null, also: lead ? [lead.id] : [] } })
+    ? planBank(ix, { bank, startXp10: currentXp10, targetXp10, excluded, unlimited, prefer: LED.get(usual) || null,
+      roundUp: { first: lead && lead.id === fillId ? fillId : null, also: lead ? [lead.id] : [] }, minor })
     : bankNow;
   // Without the bank, a mix you plan yourself goes first.
   const fromMix = !useBank && mix && Object.values(mix).some(n => n > 0)
@@ -654,13 +688,13 @@ export function planGoal(ix, opts) {
     let balance = null;
     // (fees paid on the way to those: the tanner's)
     const paidFor = n => (ix.fees.size && n > 0 && Number.isFinite(n)
-      ? feesOnly(ix, expand(ix, m, n, bankStock.clone(), { level: MAX_LEVEL, unlimited, excluded, most: true }).buy) : {});
+      ? feesOnly(ix, expand(ix, m, n, bankStock.clone(), { level: MAX_LEVEL, unlimited: loose, excluded, most: true }).buy) : {});
     if (useBank && !gathers(m)) {
-      const most = mostRuns(ix, m, bankStock, ctx);
+      const most = mostRuns(ix, m, bankStock, loose === unlimited ? ctx : { ...ctx, unlimited: loose });
       if (most > have) {
-        const extra = without(expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited, excluded, most: true }).buy, [...unlimited, ...ix.fees]);
+        const extra = without(expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited: loose, excluded, most: true }).buy, [...unlimited, ...ix.fees]);
         const paid = paidFor(most);
-        if (Object.keys(extra).length) balance = { runs: most, collect: extra, ...(Object.keys(paid).length ? { paid } : {}) };
+        if (Object.keys(extra).length) balance = { runs: most, collect: minorLast(extra, minor), ...(Object.keys(paid).length ? { paid } : {}) };
       }
     }
     // Totals, counting what's in your bank as already yours: what the bank
@@ -710,4 +744,21 @@ function bestAt(methods, level) {
 // Total value of a bank (items with no known price are listed separately).
 export function bankValue(bank, priceOf) {
   return valueOf(bank, priceOf);
+}
+
+// The spells cast on the way, and the Magic XP they give. counts: [[method id,
+// how many]] (a plan's steps and what was made on the way to them). Returns
+// null when there are none, else { xp10, level (the highest Magic level it
+// takes), by: { method id: casts } }.
+export function castsIn(ix, counts) {
+  const by = {};
+  let xp10 = 0, level = 0;
+  for (const [id, n] of counts) {
+    const m = ix.byId.get(id);
+    if (!m || !m.magic || !(n > 0)) continue;
+    by[id] = (by[id] || 0) + n;
+    xp10 += m.magic * n;
+    level = Math.max(level, m.magicLevel || 0);
+  }
+  return xp10 > 0 ? { xp10, level, by } : null;
 }

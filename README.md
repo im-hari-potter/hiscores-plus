@@ -72,7 +72,8 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
     - What one row makes can go into another. With uncut sapphires, gold bars and wool in your bank,
       the plan cuts the sapphires and spins the wool on the way to the amulets, and counts that XP
       too. It does the same with sand and soda ash for glass, and with leather for studded armour.
-      Untick a row (cutting sapphires, say) and the plan leaves those alone.
+      Unticking a row (cutting sapphires, say) only stops it being made for its own sake: a ring
+      you've left ticked still has its sapphire cut on the way.
     - What's still to buy is listed the way the calculator lists it: cut gems for jewellery, molten
       glass for vials and orbs, a leather body for a studded one.
     - Hides are tanned before they're worked, and **the tanner's fee is counted**: it's in the
@@ -100,10 +101,23 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
         amulet of glory(4) and the rest, each right under the piece it's made from. The runes of
         the enchant spell are in its supplies and its cost: a cosmic rune and the elemental ones
         (counted even where a staff would save them). Enchanting gives Magic XP, not Crafting XP,
-        so the row's XP is the plain piece's; hover over the row for the Magic level it takes. An
-        amulet of glory is then charged at the Fountain of Heroes, which costs nothing.
+        so the row's XP is the plain piece's; hover over the row for the Magic level it takes and
+        the Magic XP of one cast. An amulet of glory is then charged at the Fountain of Heroes,
+        which costs nothing.
       - The bank plan makes the plain piece (the XP is the same) unless you pick the enchanted one
-        under **Train with** and have the runes in your bank.
+        under **Train with** and have the runes in your bank, or you've unticked the plain one.
+    - **Battlestaves**: the orb on a battlestaff is an unpowered orb charged with a Charge Orb spell
+      (30 of the element's runes and 3 cosmic runes; Magic 56 for water, 60 earth, 63 fire, 66 air).
+      The plan does that on the way:
+      - Charged orbs in your bank are used first, then unpowered orbs, then molten glass (blown into
+        orbs on the way, which counts its 52.5 XP), as far as your runes go.
+      - What's still to buy lists the unpowered orbs and the runes instead of the orb, and the
+        orbs or glass you already have come off it: 2,000 molten glass are 2,000 fewer orbs to buy.
+    - **Magic XP**: a line under each part of the plan adds up what the spells cast on the way give
+      (enchanting, charging orbs), spell by spell, with the Magic level each takes. It isn't part
+      of the Crafting XP above it. A spell above your Magic level is marked in red with your level
+      next to it (that part of the plan waits for it); otherwise, hover over the line for the
+      Magic level that XP takes you to.
     - Where the calculator and Lost City's server differ, the server is followed: a sapphire
       necklace is level 20 (the calculator says 22). Opal, jade and red topaz can smash when you cut
       them; like the calculator, plans count every cut as a success.
@@ -187,6 +201,14 @@ your bank. It's one or the other: the table below already shows both side by sid
     leave it out**. Two or more ingredients short, it stays out.
   - If you **picked** what to train with, that one is rounded up before anything else: it's made as
     many times as its most plentiful ingredient allows.
+  - **Vials of water** (and **thread**, in Crafting) never hold it back, whether you buy them as you go
+    or count them. Counted, the plan is still the one you'd get buying them as you go, so herbs with no
+    vials left are made into potions too, and the vials you're short of are listed to collect with the
+    rest. They never decide how many, either: 100 reels of thread and 3 leather round up to nothing.
+  - In Crafting the same goes for **runes** (enchanting, charging orbs) and the **balls of wool**
+    amulets are strung with. So emeralds round up to rings of dueling with the gold bars and runes
+    to collect, 2,000 molten glass round up to 2,000 unpowered orbs and 2,000 battlestaves with
+    the battlestaffs and runes to collect, and a few spare balls of wool don't ask for dragonstones.
   - **To round up your supplies, collect** lists it all, and the money line takes its cost off: Gross,
     Rounding up your supplies, Net.
   - Everything after it (Then, Still needed to goal, Supplies needed) comes after the rounded-up bank.
@@ -207,6 +229,11 @@ by default, so **turn off anything you don't plan to make**: a potion you'd rath
 supplies you're saving. Otherwise the plan spends your supplies on it, and From your bank, Still needed to
 goal and the gp totals count XP you won't get. Unticked options also leave the Train with list.
 
+In Crafting, what a ticked row needs is still made on the way, even if that row is unticked itself: with
+Sapphire (cut), Molten glass or Unpowered orb unticked, sapphires are still cut for a games necklace and
+glass still made and blown for a battlestaff. They just aren't made for their own sake. To leave uncut
+sapphires alone, untick the things made from sapphires.
+
 #### Vials of water and thread
 
 **I'll buy vials of water as I go** is on by default for Herblore: vials never hold a plan back, and
@@ -215,6 +242,9 @@ vials in your bank and count them like any other supply.
 
 Crafting has the same for thread, **I'll buy thread as I go**. Turn it off and thread is counted: a
 reel for every five items, so 100 leather bodies take 20.
+
+Counted, they hold back the plan from your bank as it is: 600 vials make 600 potions. **Round up my
+supplies** looks past that (see above): it uses up your herbs and lists the vials you're short of.
 
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
   its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
@@ -233,15 +263,22 @@ reel for every five items, so 100 leather bodies take 20.
       say how many. Screenshots that overlap don't count twice.
     - Amounts of 100K and up are rounded on screen (`150K`). If the amount you entered fits, it's kept;
       otherwise the low end is used.
-    - Lantadyme looks exactly like an unid herb in this version, so it's read as one. Soda ash looks
-      exactly like ashes, so it's read as ashes: type the amount under Soda ash if that's what it is.
-    - Some things look exactly like another item, and the review names the twin next to each of
-      those, so untick (or type in yourself) the ones that aren't what they say.
-      - Enchanted jewellery is the plain piece with a spell on it. It's read as the enchanted one (a
-        ring of dueling(8), not an emerald ring), since that's what a bank mostly holds. Whatever
-        charges are left, it counts as a full one.
-      - A jug of wine looks like wine of Zamorak, and a plain staff or a Dramen staff like a
-        battlestaff.
+    - Some items look exactly like another one in this version, and a picture can't tell them apart:
+      soda ash and ashes, a sapphire ring and a ring of recoil, a cadantine potion (unf) and a
+      lantadyme one, lantadyme and an unid herb. Each stack of those has a **drop-down** in the review:
+      pick the one it is. Your pick is kept for next time, and when your bank holds both, each has its
+      own line.
+      - The first time, it's the one you typed into your bank yourself, if you did. Otherwise soda ash
+        rather than ashes, an unid herb rather than lantadyme, and the enchanted piece rather than the
+        plain one (a ring of dueling(8), not an emerald ring), since that's what a bank mostly holds.
+        Whatever charges are left, it counts as a full one.
+      - A stack that an earlier read filed under the other name moves over (the review says "was
+        under Ashes").
+    - Things the planner doesn't use can look like one it does, and the review names them next to it:
+      a jug of wine looks like wine of Zamorak, and a plain staff or a Dramen staff like a battlestaff.
+      Untick those.
+    - Tools (a chisel, moulds, a needle) and thread are left out: a plan names the tools a row needs,
+      it never counts them. Thread can still be typed in on the Crafting tab if you count yours.
     - Items cut off at the top or bottom edge of the bank are skipped, so let screenshots overlap.
     - Where each item sits is kept too, for All. If you've dragged items around since, you can choose
       to put them back in your bank's order.

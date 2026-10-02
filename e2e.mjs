@@ -674,6 +674,59 @@ await check('goals: Round up my supplies shows your bank with nothing left over,
   await page.click('.tab[data-tab="goals"]');
 });
 
+await check('goals: rounded up, vials you count never hold a potion back; the ones you are short of are collected too', async () => {
+  // 600 vials for 1,605 potions' worth of herbs
+  await setBank('herblore', { kwuarm: '605', limpwurt_root: '518', vial_water: '600' });
+  await page.click('.tab[data-tab="goals"]');
+  const goal = page.locator('.goal').first();
+  const sec = goal.locator('.plan-sec').first();
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  await goal.locator('.step', { hasText: '518 × Super strength' }).waitFor();
+  assert.match(await goal.locator('label:has(input[data-gopt="roundUp"])').getAttribute('title'),
+    /what to collect for it\. Vials of water never hold it back: what you're short of is collected too\.$/);
+  // counted, and as it is: the vials run out during the prayer potions (picked, so they go first)
+  await goal.locator('input[data-gopt="assume"]').uncheck();
+  await goal.locator('.step', { hasText: '600 × Prayer potion' }).waitFor();
+  assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +52,500 XP → level 75');
+  assert.equal(await sec.locator('.step').count(), 1, 'no vials left for the super strength');
+  // each row on its own: 600 vials make 518 super strength, and rounding up to 605 takes 5 more
+  const cellsOf = async id => (await goal.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+  let ss = await cellsOf('hb_3dose2strength');
+  assert.equal(ss[6], '518', 'From bank');
+  assert.match(ss[8], /^87\s*5\s*→\s*605$/, 'Round up my supplies: 87 limpwurt root, and 5 vials');
+  assert.equal(await goal.locator('tr[data-method="hb_3dose2strength"] td.even').getAttribute('title'),
+    'Collect 87 Limpwurt root and 5 Vial of water, and your bank covers 605 × Super strength instead of 518.');
+  const pp = await cellsOf('hb_3doseprayerrestore');
+  assert.equal(pp[6], '600', 'From bank: the vials hold it back');
+  assert.match(pp[8], /^300\s*400\s*→\s*1,000$/, 'Round up my supplies: 300 snape grass, and 400 vials');
+  // rounded up: the potions you'd get buying vials as you go, all 605 super strength among them
+  // (v2.5.0 left the 87 kwuarm over: with no vials left, they didn't count)
+  await goal.locator('input[data-gopt="roundUp"]').check();
+  await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
+  assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank, supplies rounded up +163,125 XP → level 76');
+  let steps = (await sec.locator('.step').allInnerTexts()).map(flat);
+  assert.equal(steps.length, 2, steps.join(' / '));
+  assert.match(steps[0], /^1,000 × Prayer potion \+87,500 XP .*incl\. 1,000 × Ranarr potion \(unf\) collect 300 Snape grass 400 Vial of water$/);
+  assert.match(steps[1], /^605 × Super strength \+75,625 XP .*incl\. 605 × Kwuarm potion \(unf\) collect 87 Limpwurt root 605 Vial of water$/);
+  assert.match(flat(await sec.locator('.collect').innerText()),
+    /^To round up your supplies, collect: 300 Snape grass \([\d.,]+[KM]?\) 87 Limpwurt root \([\d.,]+[KM]?\) 1,005 Vial of water( \([\d.,]+[KM]?\))?$/, 'vials last');
+  assert.equal(await sec.locator('.tip', { hasText: 'Also uses' }).count(), 0, 'collected, not bought as you go');
+  assert.match(await goalText(), /Then, to reach your goal: 270,048 XP/);
+  await page.screenshot({ path: `${SHOTS}/10f-round-up-vials-counted.png`, fullPage: true });
+  // bought as you go: the same potions, and the vials leave the lists
+  await goal.locator('input[data-gopt="assume"]').check();
+  await page.waitForFunction(() => !/Vial of water \(/.test(document.querySelector('.goal .plan-sec .collect').innerText));
+  assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank, supplies rounded up +163,125 XP → level 76');
+  steps = (await sec.locator('.step').allInnerTexts()).map(flat);
+  assert.match(steps[0], /^1,000 × Prayer potion \+87,500 XP .*collect 300 Snape grass$/);
+  assert.match(steps[1], /^605 × Super strength \+75,625 XP .*collect 87 Limpwurt root$/);
+  assert.match(flat(await sec.locator('.tip', { hasText: 'Also uses' }).innerText()), /^Also uses 1,005 Vial of water that isn't in your bank: you'll buy it as you go\.$/);
+  await goal.locator('input[data-gopt="roundUp"]').uncheck();
+  await goal.locator('.step', { hasText: '518 × Super strength' }).waitFor();
+  await setBank('herblore', { kwuarm: '', limpwurt_root: '', vial_water: '' });
+  await page.click('.tab[data-tab="goals"]');
+});
+
 await check('goals: a rank goal looks up who holds that rank', async () => {
   await page.click('[data-nskill="herblore"]');
   await page.click('[data-ntype="rank"]');
@@ -925,9 +978,9 @@ await check('crafting: the calculator\'s four tabs, gems cut and glass made on t
   assert.deepEqual(games.slice(1, 4), ['20', 'Games necklace(8) (make & enchant)', '55']);
   assert.match(games[11], /^([\d,]+)\s*\1\s*\1\s*\1$/, 'a gold bar, a sapphire, a water rune and a cosmic rune each');
   assert.match(await card.locator('tr[data-method="cr_ench_necklace_of_minigames_8"]').getAttribute('title'),
-    /Needs \(from scratch\): 1 Gold bar, 1 Sapphire, 1 Water rune, 1 Cosmic rune\nTools: Necklace mould\nEnchanted with Lvl-1 Enchant \(Magic 7\), which gives Magic XP, not Crafting XP\./);
+    /Needs \(from scratch\): 1 Gold bar, 1 Sapphire, 1 Water rune, 1 Cosmic rune\nTools: Necklace mould\nEnchanted with Lvl-1 Enchant \(Magic 7\): 17\.5 Magic XP each, on top of the Crafting XP\./);
   assert.match(await card.locator('tr[data-method="cr_ench_amulet_of_glory_4"]').getAttribute('title'),
-    /Amulet of glory\(4\) \(make, string & enchant\): level 80, 154 XP each \(make 150 \+ string 4\)\nNeeds \(from scratch\): 1 Gold bar, 1 Dragonstone, 1 Ball of wool, 15 Earth rune, 15 Water rune, 1 Cosmic rune\nTools: Amulet mould\nEnchanted with Lvl-5 Enchant \(Magic 68\), which gives Magic XP, not Crafting XP\. Then charged at the Fountain of Heroes\./);
+    /Amulet of glory\(4\) \(make, string & enchant\): level 80, 154 XP each \(make 150 \+ string 4\)\nNeeds \(from scratch\): 1 Gold bar, 1 Dragonstone, 1 Ball of wool, 15 Earth rune, 15 Water rune, 1 Cosmic rune\nTools: Amulet mould\nEnchanted with Lvl-5 Enchant \(Magic 68\): 78 Magic XP each, on top of the Crafting XP\. Then charged at the Fountain of Heroes\./);
   assert.match(await card.locator('tr[data-method="cr_strung_sapphire_amulet"]').getAttribute('title'), /level 24, 69 XP each \(make 65 \+ string 4\)\nNeeds \(from scratch\): 1 Gold bar, 1 Sapphire, 1 Ball of wool\nTools: Amulet mould/);
   // key halves and crystal keys: 9 teeth and 4 loops are 4 uncut dragonstones for now, and 5 loops round them up to 9
   await setBank('crafting', { keyhalf1: '9', keyhalf2: '4' });
@@ -1017,6 +1070,129 @@ await check('crafting: the calculator\'s four tabs, gems cut and glass made on t
   await page.click('#prices-head [data-bskill="herblore"]');
 });
 
+await check('crafting: orbs are charged on the way to battlestaves, runes are collected when rounding up, and the Magic XP is shown', async () => {
+  const card = page.locator('.goal', { hasText: 'Crafting' });
+  try {
+    const flat = t => t.replace(/\s+/g, ' ').trim();
+    await setBank('crafting', { molten_glass: '2000' });
+    await addGoal('crafting', 95);
+    const sec = card.locator('.plan-sec').first();
+    await card.locator('.step', { hasText: '2,000 × Unpowered orb' }).waitFor();
+    // as it is: the glass is blown into orbs, and that's all (no battlestaffs, no runes)
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +105,000 XP → level 88');
+    assert.equal(await sec.locator('.step').count(), 1);
+    assert.equal(await sec.locator('.tip.magic').count(), 0, 'nothing cast');
+    await card.locator('[data-tgroup="Pottery & glass"]').click();
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+    const air = await cells('cr_air_battlestaff');
+    assert.deepEqual([air[1], air[2], air[3], air[6]], ['66', 'Air battlestaff', '137.5', '0']);
+    assert.match(air[8], /^2,000\s*60,000\s*6,000\s*→\s*2,000$/, 'round up: battlestaffs and the runes to charge the orbs');
+    assert.equal(await card.locator('tr[data-method="cr_air_battlestaff"] td.even').getAttribute('title'),
+      'Collect 2,000 Battlestaff, 60,000 Air rune and 6,000 Cosmic rune, and your bank covers 2,000 × Air battlestaff instead of 0.');
+    assert.match(await card.locator('tr[data-method="cr_air_battlestaff"]').getAttribute('title'),
+      /Air battlestaff: level 66, 137\.5 XP each\nNeeds \(from scratch\): 1 Unpowered orb, 30 Air rune, 3 Cosmic rune, 1 Battlestaff\nThe orb is an unpowered orb charged with Charge Air Orb \(Magic 66\): 76 Magic XP each\./);
+    // the orbs in your bank count toward what's still needed: 2,000 fewer to buy than battlestaffs
+    const [orbs, , , staffs] = air[11].split(/\s+/).map(x => Number(x.replace(/,/g, '')));
+    assert.equal(staffs - orbs, 2000, air[11]);
+    // rounded up: the orbs are charged and put on battlestaves, with the battlestaffs and runes to collect
+    assert.match(await card.locator('label:has(input[data-gopt="roundUp"])').getAttribute('title'), /Thread, runes and balls of wool never hold it back: what you're short of is collected too\.$/);
+    await card.locator('input[data-gopt="roundUp"]').check();
+    await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank, supplies rounded up +380,000 XP → level 88');
+    const steps = (await sec.locator('.step').allInnerTexts()).map(flat);
+    assert.equal(steps.length, 2, steps.join(' / '));
+    assert.match(steps[0], /^2,000 × Unpowered orb \+105,000 XP/);
+    assert.match(steps[1], /^2,000 × Air battlestaff \+275,000 XP .*incl\. 2,000 × Charge air orb collect 2,000 Battlestaff 6,000 Cosmic rune 60,000 Air rune$/);
+    assert.equal(flat(await sec.locator('.tip.magic').innerText()), 'Magic XP on the way: +152,000 XP from 2,000 × Charge Air Orb (Magic 66)');
+    assert.match(flat(await sec.locator('.collect').innerText()), /^To round up your supplies, collect: 2,000 Battlestaff( \([\d.,]+[KM]?\))? 6,000 Cosmic rune( \([\d.,]+[KM]?\))? 60,000 Air rune( \([\d.,]+[KM]?\))?$/);
+    await page.screenshot({ path: `${SHOTS}/10g-crafting-battlestaves.png`, fullPage: true });
+    // the rest of the goal with air battlestaves: unpowered orbs and runes in the list, and its Magic XP
+    await card.locator('select[data-gopt="fill"]').selectOption('cr_air_battlestaff');
+    const then = card.locator('.plan-sec', { hasText: 'to reach your goal' }).first();
+    await then.locator('.step', { hasText: 'Air battlestaff' }).waitFor();
+    const buy = (await then.locator('.collect').first().locator('.it-chip').allInnerTexts()).map(flat);
+    assert.deepEqual(buy.map(x => x.replace(/^[\d,]+ /, '').replace(/ \(.*$/, '')), ['Unpowered orb', 'Air rune', 'Cosmic rune', 'Battlestaff']);
+    assert.match(flat(await then.locator('.tip.magic').innerText()), /^Magic XP on the way: \+[\d,.]+ XP from [\d,]+ × Charge Air Orb \(Magic 66\)$/);
+    // hovering says what it does to your Magic level (Demo Main is Magic 90), where it's enough for one
+    assert.match(await then.locator('.tip.magic').getAttribute('title'), /^Not part of the XP above: it's what the spells cast on the way give\. On its own it takes your Magic from 90 to 9\d\.$/);
+    assert.equal(await sec.locator('.tip.magic').getAttribute('title'), "Not part of the XP above: it's what the spells cast on the way give.", '152,000 XP is no level at 90');
+    // Only three enchanted pieces ticked (the gem-cutting rows unticked with the rest), uncut gems and too few
+    // gold bars: as it is the bars go to the most XP; rounded up, the rest are made too, their gems cut on the way
+    await card.locator('input[data-gopt="roundUp"]').uncheck();
+    await setBank('crafting', { molten_glass: '', uncut_sapphire: '300', uncut_emerald: '250', ruby: '120', gold_bar: '100', cosmicrune: '500', firerune: '1000' });
+    await page.click('.tab[data-tab="goals"]');
+    await card.locator('[data-tgroup="Jewellery"]').click();
+    const keep = ['cr_ench_necklace_of_minigames_8', 'cr_ench_ring_of_dueling_8', 'cr_ench_ring_of_forging'];
+    await page.evaluate(keep => {
+      const k = 'lchs.goals.demo_main', goals = JSON.parse(localStorage.getItem(k));
+      const g = goals.find(x => x.skill === 'crafting');
+      g.excluded = [...document.querySelectorAll('.goal tr[data-method]')].map(tr => tr.dataset.method).filter(id => !keep.includes(id));
+      g.fillId = null;
+      localStorage.setItem(k, JSON.stringify(goals));
+    }, keep);
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('.tab[data-tab="goals"]');
+    await card.locator('.step', { hasText: '100 × Ring of forging (make & enchant)' }).waitFor();
+    assert.equal(await sec.locator('.step').count(), 1, 'the gold bars are used up: nothing for the emeralds and sapphires, which stay uncut');
+    assert.equal(await card.locator('input[data-use="cr_sapphire"]').isChecked(), false);
+    assert.match(await card.locator('.plan-t thead th').first().getAttribute('title'), /What a ticked row needs is still made on the way/);
+    assert.equal(flat(await sec.locator('.tip.magic').innerText()), 'Magic XP on the way: +5,900 XP from 100 × Lvl-3 Enchant (Magic 49)');
+    await card.locator('input[data-gopt="roundUp"]').check();
+    await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
+    // (with the runes to be collected, rings of dueling can be made, and they get the gold bars in your bank:
+    // an emerald cut and set is 122.5 XP a bar, a ruby ring 70)
+    const made = (await sec.locator('.step').allInnerTexts()).map(flat);
+    assert.equal(made.length, 3, made.join(' / '));
+    assert.match(made[0], /^250 × Ring of dueling\(8\) \(make & enchant\) \+30,625 XP .*incl\. 250 × Emerald \(cut\) \+16,875 XP collect 150 Gold bar 750 Air rune$/, 'cut on the way, though Emerald (cut) is unticked');
+    assert.match(made[1], /^120 × Ring of forging \(make & enchant\) \+8,400 XP .*collect 120 Gold bar$/);
+    assert.match(made[2], /^300 × Games necklace\(8\) \(make & enchant\) \+31,500 XP .*incl\. 300 × Sapphire \(cut\) \+15,000 XP collect 300 Gold bar 300 Water rune 170 Cosmic rune$/);
+    assert.equal(flat(await sec.locator('.tip.magic').innerText()),
+      'Magic XP on the way: +21,580 XP from 250 × Lvl-2 Enchant (Magic 27), 120 × Lvl-3 Enchant (Magic 49), 300 × Lvl-1 Enchant (Magic 7)');
+    assert.match(flat(await sec.locator('.collect').innerText()), /^To round up your supplies, collect: 570 Gold bar( \([\d.,]+[KM]?\))? 750 Air rune( \([\d.,]+[KM]?\))? 300 Water rune( \([\d.,]+[KM]?\))? 170 Cosmic rune( \([\d.,]+[KM]?\))?$/);
+  } finally {
+    // leave things as they were, whatever happened
+    await setBank('crafting', { molten_glass: '', uncut_sapphire: '', uncut_emerald: '', ruby: '', gold_bar: '', cosmicrune: '', firerune: '' });
+    await page.click('.tab[data-tab="goals"]');
+    await card.locator('[data-act="remove-goal"]').click();
+    await card.locator('[data-act="remove-goal"]').click();
+    await page.waitForFunction(() => ![...document.querySelectorAll('.goal')].some(g => g.innerText.includes('Crafting')));
+  }
+});
+
+await check('crafting: a spell above your Magic level says so in the Magic XP tip', async () => {
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  const planAs = async (name, shown) => {
+    await page.click('.tab[data-tab="goals"]');
+    await page.fill('#plan-account input[name=account]', name);
+    await page.click('#plan-account button[type=submit]');
+    await page.waitForFunction(n => document.querySelector('#plan-account input[name=account]')?.value === n
+      && document.querySelector('#plan-account').innerText.includes('XP from the hiscores'), shown, { timeout: 15000 });
+  };
+  // Old Badger: Crafting 56 (water battlestaves from 54), Magic 50 (Charge Water Orb takes Magic 56)
+  await planAs('old badger', 'Old Badger');
+  const card = page.locator('.goal', { hasText: 'Crafting' });
+  try {
+    await addGoal('crafting', 60);
+    await card.locator('.plan').waitFor();
+    assert.match(flat(await card.locator('.goal-title').innerText()), /Level 56 → 60/);
+    await card.locator('select[data-gopt="fill"]').selectOption('cr_water_battlestaff');
+    const then = card.locator('.plan-sec', { hasText: 'reach your goal' }).first();
+    await then.locator('.step', { hasText: 'Water battlestaff' }).waitFor();
+    const tip = then.locator('.tip.magic');
+    assert.match(flat(await tip.innerText()), /^Magic XP on the way: \+[\d,.]+ XP from [\d,]+ × Charge Water Orb \(needs Magic 56: you're 50\)$/);
+    assert.equal(flat(await tip.locator('.c-lose').innerText()), "(needs Magic 56: you're 50)");
+    assert.equal(await tip.getAttribute('title'), "Not part of the XP above: it's what the spells cast on the way give.", "no level it takes you to: you can't cast it yet");
+    await page.screenshot({ path: `${SHOTS}/10h-crafting-magic-too-low.png`, fullPage: true });
+  } finally {
+    // leave things as they were, whatever happened
+    if (await card.count()) {
+      await card.locator('[data-act="remove-goal"]').click();
+      await card.locator('[data-act="remove-goal"]').click();
+    }
+    await planAs('demo main', 'Demo Main');
+  }
+});
+
 await check('firemaking: the bank\'s logs burn toward the goal, best first', async () => {
   await setBank('firemaking', { willow_logs: '10k' });
   assert.match(await text('#bank-head'), /Achey tree logs aren't listed/);
@@ -1054,6 +1230,8 @@ await check('bank: read from screenshots, review, then update', async () => {
     { slot: 3, icon: 'bronze_arrow_5', count: 5000 },
     { slot: 4, icon: 'unidentified_guam', count: 25 },
     { slot: 5, icon: 'unidentified_ardrigal', count: 10 },
+    { slot: 6, icon: 'chisel', count: 1 },                        // tools and thread aren't added to your bank
+    { slot: 7, icon: 'thread', count: 643 },
     { slot: 48, icon: 'willow_logs', count: 814 },
   ];
   await page.setInputFiles('#shots-file', [
@@ -1064,14 +1242,24 @@ await check('bank: read from screenshots, review, then update', async () => {
   await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
   const t = await text('#bank-shots');
   assert.match(t, /From 2 screenshots: 5 of your planner items/);
-  assert.match(t, /1 other item the planner doesn't use was skipped/);
+  assert.match(t, /3 other items the planner doesn't count were skipped \(tools and thread among them\)/);
+  assert.equal(await page.locator('[data-shot="chisel"], [data-shot="thread"]').count(), 0);
   assert.match(t, /not-a-bank\.png: no bank in this one/);
   assert.match(t, /Law rune\s*3,960/);
   assert.match(t, /Rune essence\s*≈150K/);
   assert.match(t, /Bronze arrow\s*5,000/);
-  assert.match(t, /Unid herb or Lantadyme: they look the same\s*35/);
+  // lantadyme looks just like an unid herb, so that stack has the choice; an unid herb with an icon of its own doesn't
+  assert.equal(await page.locator('[data-shot-as="unidentified_guam@0"]').inputValue(), 'unidentified_guam');
+  assert.deepEqual(await page.locator('[data-shot-as="unidentified_guam@0"] option').allInnerTexts(), ['Unid herb', 'Lantadyme']);
+  assert.match(await page.locator('.shot-row', { has: page.locator('[data-shot="unidentified_guam@0"]') }).innerText(), /\s25\s/);
+  assert.match(await page.locator('.shot-row', { has: page.locator('[data-shot="unidentified_guam"]') }).innerText(), /^\s*Unid herb\s*10\s*$/);
+  assert.doesNotMatch(t, /look exactly like another item/, 'no nudge for unid herbs');
   assert.match(t, /Willow logs\s*814/);
   await page.locator('[data-shot="willow_logs"]').uncheck();
+  // the list is redrawn as prices arrive: what you unticked stays unticked
+  await page.evaluate(() => window.__skills.prices.dispatchEvent(new CustomEvent('update', { detail: {} })));
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('[data-shot="willow_logs"]').isChecked(), false);
   await page.click('[data-act="shots-apply"]');
   await page.waitForSelector('#bank-msg:not([hidden])');
   assert.match(await text('#bank-msg'), /Bank updated from your screenshots: 4 items changed/);
@@ -1081,6 +1269,76 @@ await check('bank: read from screenshots, review, then update', async () => {
   await page.click('[data-bskill="herblore"]');
   assert.equal(await page.inputValue('[data-bank="unidentified_guam"]'), '35');
   assert.equal(await page.locator('#bank-shots .shots-result').count(), 0, 'back to the drop box');
+});
+
+await check('bank: a stack that looks exactly like two items asks which it is: soda ash, not ashes', async () => {
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  const saved = await page.evaluate(() => localStorage.getItem('lchs.bank.demo_main'));
+  // as v2.5.0 left it: the soda ash filed under Ashes (54 more of it have been collected since)
+  await setBank('herblore', { ashes: '1180' });
+  const items = [
+    { slot: 0, icon: 'gold_bar', count: 300 },
+    { slot: 1, icon: 'ashes', count: 1234 },                     // soda ash and ashes are drawn the same
+    { slot: 2, icon: 'ring_of_recoil', count: 500 },             // so are a sapphire ring and a ring of recoil
+    { slot: 3, icon: 'keyhalf1', count: 9 },
+  ];
+  const shot = { name: 'screenshot-4.png', mimeType: 'image/png', buffer: encodePng(fakeBank({ items })) };
+  const rowOf = key => page.locator('.shot-row', { has: page.locator(`[data-shot="${key}"]`) });
+  await page.setInputFiles('#shots-file', [shot]);
+  await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
+  assert.match(flat(await text('#bank-shots .note')), /2 of them look exactly like another item \(soda ash and ashes, a sapphire ring and a ring of recoil\): pick which each is from its drop-down\. Your pick is kept for next time\.$/);
+  // soda ash until you say otherwise. The whole bank was read and nothing else in it could be the
+  // ashes an earlier read filed, so they are this stack
+  const ash = page.locator('[data-shot-as="ashes@0"]');
+  assert.equal(await ash.inputValue(), 'soda_ash');
+  assert.deepEqual(await ash.locator('option').allInnerTexts(), ['Ashes', 'Soda ash']);
+  assert.match(flat(await rowOf('ashes@0').innerText()), /1,234 was 1,180 under Ashes$/);
+  assert.doesNotMatch(flat(await page.locator('.shot-clear').first().innerText()), /Ashes/, 'not among the items to clear: it moves');
+  assert.match(await rowOf('ashes@0').getAttribute('class'), /\btwin\b/);
+  const ring = page.locator('[data-shot-as="ring_of_recoil@0"]');
+  assert.equal(await ring.inputValue(), 'ring_of_recoil', 'the enchanted one, as a bank mostly holds');
+  assert.match(flat(await rowOf('gold_bar').innerText()), /^Gold bar 300 was 0$/);
+  assert.equal(await rowOf('gold_bar').locator('select').count(), 0);
+  // opening a drop-down doesn't untick its line
+  await ash.click();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('[data-shot="ashes@0"]').isChecked(), true);
+  // these are sapphire rings
+  await ring.selectOption('sapphire_ring');
+  await page.waitForFunction(() => document.querySelector('[data-shot-as="ring_of_recoil@0"]')?.value === 'sapphire_ring');
+  assert.equal(await ash.inputValue(), 'soda_ash', 'the other pick is kept through the redraw');
+  await page.screenshot({ path: `${SHOTS}/9c-bank-lookalikes.png`, fullPage: true });
+  await page.click('[data-act="shots-apply"]');
+  await page.waitForSelector('#bank-msg:not([hidden])');
+  assert.match(await text('#bank-msg'), /Bank updated from your screenshots: 5 items changed/, 'soda ash, the ashes it moved from, sapphire rings, gold bars and key teeth');
+  await page.click('[data-bskill="crafting"]');
+  assert.equal(await page.inputValue('[data-bank="soda_ash"]'), '1,234');
+  assert.equal(await page.inputValue('[data-bank="sapphire_ring"]'), '500');
+  assert.equal(await page.inputValue('[data-bank="ring_of_recoil"]'), '');
+  await page.click('[data-bskill="herblore"]');
+  assert.equal(await page.inputValue('[data-bank="ashes"]'), '', 'moved to soda ash');
+  const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.bank.demo_main')).twins);
+  assert.deepEqual([kept.ashes, kept.ring_of_recoil], [['soda_ash'], ['sapphire_ring']], 'your picks, for next time');
+  // the same screenshot again: your picks are remembered, and nothing changes
+  await page.setInputFiles('#shots-file', [shot]);
+  await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
+  assert.equal(await page.locator('[data-shot-as="ashes@0"]').inputValue(), 'soda_ash');
+  assert.equal(await page.locator('[data-shot-as="ring_of_recoil@0"]').inputValue(), 'sapphire_ring');
+  assert.match(flat(await rowOf('ashes@0').innerText()), /1,234 same$/);
+  assert.equal(await page.locator('.shot-row.changed').count(), 0);
+  // it was ashes after all: it moves back
+  await page.locator('[data-shot-as="ashes@0"]').selectOption('ashes');
+  await page.waitForFunction(() => /was under Soda ash/.test(document.querySelector('#bank-shots').innerText));
+  await page.click('[data-act="shots-apply"]');
+  await page.waitForSelector('#bank-msg:not([hidden])');
+  await page.click('[data-bskill="herblore"]');
+  assert.equal(await page.inputValue('[data-bank="ashes"]'), '1,234');
+  await page.click('[data-bskill="crafting"]');
+  assert.equal(await page.inputValue('[data-bank="soda_ash"]'), '');
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.bank.demo_main')).twins.ashes), ['ashes']);
+  // (the bank as it was, for the checks that follow)
+  await page.evaluate(v => localStorage.setItem('lchs.bank.demo_main', v), saved);
+  await page.click('[data-bskill="herblore"]');
 });
 
 await check('bank: Choose screenshots opens the picker in Pictures and reads what you pick', async () => {
