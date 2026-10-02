@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareIcons, readBank, mergeReads, parseStack, findBank, reviewRows, pickRow, movedFrom } from './bankread.js';
 import { BANK_ICONS, BANK_ICONS_PER_ROW, BANK_LAYOUT, STACK_FONT } from './bankread-data.js';
-import { ITEMS, BANK_GROUPS } from './gamedata.js';
+import { ITEMS, BANK_GROUPS, METHODS } from './gamedata.js';
 import { fakeBank, atlas, crop } from './bankfake.mjs';
 
 const icons = prepareIcons(atlas, BANK_ICONS, BANK_ICONS_PER_ROW);
@@ -104,8 +104,19 @@ test('a different brightness setting bends colours, and is allowed for', () => {
 
 test('every planner item but lantadyme has an icon to be read by', () => {
   const read = new Set(BANK_ICONS.flatMap(e => [e.of || e.slug, ...(e.also || [])]));
-  // (the market's armour sets aren't items in the game, so never in a bank; coins are a fee here, not a bank item)
-  assert.deepEqual(Object.keys(ITEMS).filter(k => !read.has(k) && !ITEMS[k].set && ITEMS[k].gp == null), []);
+  // (v2.8) What only Thieving and Agility name is not read: loot, a lockpick, an Agility Arena ticket. No plan
+  // takes those from a bank, so they'd only be lines to check. Everything the other skills use still is.
+  const NO_BANK = new Set(['thieving', 'agility']);
+  const named = m => [...Object.keys(m.in), ...Object.keys(m.out), ...(m.tools || []), ...(m.icon ? [m.icon] : [])];
+  const banked = new Set([...METHODS.filter(m => !NO_BANK.has(m.skill)).flatMap(named), ...Object.values(BANK_GROUPS).flatMap(gs => gs.flatMap(g => g.items))]);
+  for (const k of [...banked]) if (/^3dose/.test(k) && ITEMS[k.replace(/^3dose/, '4dose')]) banked.add(k.replace(/^3dose/, '4dose'));
+  // (the market's armour sets aren't items in the game, so never in a bank; coins are a fee or loot here, not a bank item)
+  assert.deepEqual(Object.keys(ITEMS).filter(k => banked.has(k) && !read.has(k) && !ITEMS[k].set && ITEMS[k].gp == null), []);
+  const ours = new Set(BANK_ICONS.filter(e => !e.other).flatMap(e => [e.of || e.slug, ...(e.also || [])]));
+  const onlyNew = Object.keys(ITEMS).filter(k => !banked.has(k) && !ITEMS[k].set && !ITEMS[k].charge);
+  assert.deepEqual(onlyNew.filter(k => ours.has(k)), [], 'none of them is read as a planner item');
+  assert.ok(['silk', 'king_worm', 'lockpick', 'agilityarena_ticket', 'coins_25'].every(k => onlyNew.includes(k)));
+  assert.equal(BANK_ICONS.length, 921, 'the icons a bank is read by are the ones v2.7 had');
   assert.ok(!BANK_ICONS.some(e => (e.of || e.slug) === 'coins' && !e.other), 'a stack of coins is not read as a planner item');
 });
 

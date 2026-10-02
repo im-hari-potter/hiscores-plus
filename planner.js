@@ -40,6 +40,13 @@
 // Plans count the tries a success takes on average, level by level: see
 // indexMethods. (chanceAt and chanceWorn, set by a goal's choices, go before it:
 // another fire, cooking gauntlets.)
+// odds: how often a try works where failing takes nothing (a pocket picked, a
+// lock): only said, never counted, so nothing here looks at it.
+// exchange: a method that earns something handed in for XP later, in batches
+// worth more the bigger they are (an Agility Arena ticket: 240 XP for one, 320
+// each for a thousand). { own: its XP before that, batches: [[size, xp], …],
+// biggest first }. A plan hands its tickets in together and counts each at
+// their average: see averaged.
 
 import { XP_TABLE, MAX_LEVEL } from './skills.js';
 
@@ -164,9 +171,11 @@ const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 
 // at: a place whose prices to use where a step has a choice (the Canifis tanner).
 // opts: the choices in use ([ids], in the order they apply: see a method's opt).
-export function indexMethods(methods, { at = null, opts = null } = {}) {
+// set: what a goal's plan makes of some methods ({ id: { xp, … } }: see averaged).
+export function indexMethods(methods, { at = null, opts = null, set = null } = {}) {
   if (at) methods = methods.map(m => (m.at?.[at] ? { ...m, in: { ...m.in, ...m.at[at] } } : m));
   if (opts && opts.length) methods = methods.map(m => withOptions(m, opts));
+  if (set) methods = methods.map(m => (set[m.id] ? { ...m, ...set[m.id] } : m));
   // What can fail is split in two. A try turns the raw thing into as many
   // "shares" of a success as its chance at your level (so many in 256); the
   // method itself then takes a whole 256 of them. So everything stays in whole
@@ -213,7 +222,9 @@ export function indexMethods(methods, { at = null, opts = null } = {}) {
   return { methods, byId, producers, train, feeds: methods.some(m => m.feeds), fees, through: methods.some(m => m.through), batch,
     // (feedsLoose: something feeds without being planned through, where others are: see fewest)
     feedsLoose: methods.some(m => m.feeds && !m.through),
-    byLevel: leveled.size > 0, leveled };
+    byLevel: leveled.size > 0, leveled,
+    // (exchanges: something is handed in later, in batches: see averaged)
+    exchanges: methods.some(m => m.exchange) };
 }
 // A fee is worth what it is: a coin is 1 gp.
 const priced = (ix, priceOf) => (ix.fees.size ? item => (ix.fees.has(item) ? 1 : priceOf(item)) : priceOf);
@@ -668,6 +679,94 @@ function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new S
   };
 }
 
+// ── What's handed in later, in batches ────────────────────────────────────
+// The XP n of them give, handed in in the biggest batches they fill (batches:
+// [[size, xp], …], biggest first, down to one at a time).
+export function exchangeXp(batches, n) {
+  let xp = 0, left = Math.max(0, Math.floor(n));
+  for (const [size, each] of batches) {
+    const k = Math.floor(left / size);
+    xp += k * each;
+    left -= k * size;
+  }
+  return xp;
+}
+// How n are handed in: [[size, how many batches of it], …], biggest first.
+export function exchangeBatches(batches, n) {
+  const out = [];
+  let left = Math.max(0, Math.floor(n));
+  for (const [size] of batches) {
+    const k = Math.floor(left / size);
+    if (k) out.push([size, k]);
+    left -= k * size;
+  }
+  return out;
+}
+
+// What a goal's plan makes of methods with an exchange (Agility Arena tickets),
+// in a skill that doesn't use the bank. The tickets of the whole plan are handed
+// in together: the ones in your mix, and the ones the rest of the goal takes
+// when a ticket is what you finish with (fillId). Each then counts at their
+// average. Returns null when the index has no such method, else:
+//   set   - the XP each of them counts at ({ id: { xp, parts } }): index the
+//           methods with it (indexMethods) and plan with that index
+//   least - the fewest of the one the goal is finished with ({ id: n }), for
+//           planGoal. A batch has to be whole, so a plan can take more tickets
+//           than their average says: 999 give far less than 1,000.
+//   pool  - what was handed in together, to say so: { tickets, each (the XP one
+//           is exchanged for, on average), batches: [[size, how many], …],
+//           spare (the XP it comes to beyond the goal), counted (false when the
+//           plan has no tickets: these are then what a ticket's row comes to) }
+export function averaged(ix, { currentXp10, targetXp10, mix = null, fillId = null }) {
+  const pooled = ix.methods.filter(m => m.exchange);
+  if (!pooled.length) return null;
+  const { batches } = pooled[0].exchange;
+  const single = batches[batches.length - 1][1];
+  // Your mix: its tickets, whose own XP counts as it is, and everything else in it.
+  let held = 0, before = 0;
+  for (const m of ix.train) {
+    const n = Math.max(0, Math.floor(Number(mix?.[m.id]) || 0));
+    if (!n) continue;
+    if (m.exchange) { held += n; before += n * m.exchange.own; } else before += n * m.xp;
+  }
+  const need = Math.max(0, targetXp10 - currentXp10) - before;
+  // The rest of the goal: the fewest more of the one it's finished with. (When
+  // that isn't a ticket and the mix has none either, the first one's: what its
+  // row in the table comes to.)
+  const fill = pooled.find(m => m.id === fillId) || null;
+  const lead = fill || (held ? null : pooled[0]);
+  let more = 0;
+  if (lead) {
+    const reaches = n => n * lead.exchange.own + exchangeXp(batches, held + n) >= need;
+    if (!reaches(0)) {
+      // (never more than this: each gives at least its own XP and a single one's)
+      let lo = 1, hi = Math.max(1, Math.ceil(need / (lead.exchange.own + single)));
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (reaches(mid)) hi = mid; else lo = mid + 1;
+      }
+      more = lo;
+    }
+  }
+  const tickets = held + more;
+  const xp10 = exchangeXp(batches, tickets);
+  // To a tenth. Rounded up where the count comes from least: the plan's XP is
+  // then never short of what its tickets give, and the count stays the fewest.
+  // Rounded down where the goal is finished with something else: the mix's
+  // tickets then never count for more than they give, so the rest isn't short.
+  const each = !tickets ? single : lead ? Math.ceil(xp10 / tickets - 1e-9) : Math.floor(xp10 / tickets + 1e-9);
+  const set = {};
+  for (const m of pooled) {
+    const own = m.exchange.own;
+    set[m.id] = { xp: own + each, ...(m.parts ? { parts: [[m.parts[0][0], own], [m.parts[1][0], each]] } : {}) };
+  }
+  return {
+    set, least: more > 0 ? { [lead.id]: more } : {},
+    pool: { tickets, each, batches: exchangeBatches(batches, tickets), counted: !!fill || held > 0,
+      spare: more > 0 ? more * lead.exchange.own + xp10 - need : 0 },
+  };
+}
+
 // ── Prices ────────────────────────────────────────────────────────────────
 // priceOf(item) -> gp per item, or null when unknown.
 function valueOf(items, priceOf) {
@@ -783,11 +882,14 @@ export function planMix(ix, mix, { startXp10, targetXp10 = null, unlimited = new
 //         minor (Set of the cheap supplies, vials of water and thread: rounding
 //         up, they never hold anything back, bought as you go or not),
 //         order (the bank plan's lines in an order of your own: [method ids],
-//         top first; see planBank) }
+//         top first; see planBank),
+//         least (the fewest of a method the goal may be finished with: { id: n },
+//         where its batches have to be whole; see averaged. Those are added even
+//         when the XP before them already comes to the goal) }
 export function planGoal(ix, opts) {
   const {
     bank = {}, currentXp10, targetXp10, excluded = new Set(), unlimited = new Set(),
-    useBank = true, fillId = null, fillGroup = null, mix = null, roundUp = false, minor = null, order = null,
+    useBank = true, fillId = null, fillGroup = null, mix = null, roundUp = false, minor = null, order = null, least = null,
   } = opts;
   const own = !!fillId;                         // what goes first in the bank plan is your pick
   const loose = looseWith(unlimited, minor);    // what never holds rounding up back
@@ -842,9 +944,14 @@ export function planGoal(ix, opts) {
   const afterLevel = levelForXp10(afterXp);
   const remaining = Math.max(0, targetXp10 - afterXp);
   let fill = null;
-  if (remaining > 0) {
-    // (rounded up, it's the same method as without)
-    const method = lead || methodFor(fromBank, afterLevel);
+  // (rounded up, it's the same method as without)
+  const finish = lead || methodFor(fromBank, afterLevel);
+  // owed: some of it still to add though the XP so far says the goal is reached.
+  // Tickets in a mix are counted at the average of a batch these complete
+  // (least: see averaged), so the mix alone can look like enough.
+  const owed = !!finish && remaining <= 0 && (least?.[finish.id] || 0) > 0;
+  if (remaining > 0 || owed) {
+    const method = finish;
     if (method) {
       const stock = fromBank.leftover.clone();
       const segments = [];
@@ -855,7 +962,8 @@ export function planGoal(ix, opts) {
       // over and bought beyond it. When you make your own bars (ix.through) the
       // ones smelted on the way count, so it takes fewer, and the stretch says so.
       const stretch = (m, need, bridge) => {
-        const runs = fewest(ix, m, need, stock, scratch);
+        // (least: whole batches can take more than the average asks for)
+        const runs = Math.max(fewest(ix, m, need, stock, scratch), bridge ? 0 : least?.[m.id] || 0);
         const e = expandOver(ix, m, runs, stock, scratch, xp);
         for (const [k, n] of Object.entries(e.buy)) all[k] = (all[k] || 0) + n;
         for (const [k, n] of Object.entries(e.steps)) steps[k] = (steps[k] || 0) + n;
@@ -882,7 +990,7 @@ export function planGoal(ix, opts) {
           stretch(bridge, stop - xp, true);
         }
       }
-      if (xp < targetXp10) stretch(method, targetXp10 - xp, false);
+      if (xp < targetXp10 || owed) stretch(method, Math.max(0, targetXp10 - xp), false);
       const buy = without(all, unlimited);
       const cost = valueOf(buy, priceOf);
       fill = { id: method.id, locked: method.level > afterLevel, segments, buy, steps, cost: cost.total, costMissing: cost.missing };
@@ -916,12 +1024,15 @@ export function planGoal(ix, opts) {
   const table = ix.train.map(m => {
     // (from scratch, with the bars smelted on the way counted when you make your own)
     const each = xpEach(ix, m);
-    const needed = toGo > 0 ? Math.ceil(toGo / each) : 0;
+    // (atLeast: a count its batches make whole; see least)
+    const atLeast = least?.[m.id] || 0;
+    const needed = toGo > 0 ? Math.max(Math.ceil(toGo / each), !useBank && !fromMix ? atLeast : 0) : 0;
     const lvl = Math.max(level, m.level);
     const ctx = { level: lvl, kinds: BANK_KINDS, unlimited, excluded };
     const have = useBank && !gathers(m) ? maxRuns(ix, m, bankStock, ctx) : 0;
     // Still needed: after everything the bank (or your mix) makes; with neither, all of them.
-    const still = !useBank && !fromMix ? needed : remaining > 0 ? fewest(ix, m, remaining, after, { level: MAX_LEVEL, unlimited, excluded }) : 0;
+    const still = !useBank && !fromMix ? needed : remaining > 0 ? Math.max(fewest(ix, m, remaining, after, { level: MAX_LEVEL, unlimited, excluded }), atLeast)
+      : owed && m.id === finish.id ? atLeast : 0;
     const collect = without(expandOver(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited, excluded }, afterXp).buy, unlimited);
     // Balance: the most you could make if every ingredient matched your most
     // plentiful one, and what that would take. (In actions: a log of arrows

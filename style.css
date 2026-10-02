@@ -446,6 +446,9 @@ table.cmp tfoot td { background: #241e10; font-size: 13px; }
 /* Item icons: one 32x32 sprite each in items.png, drawn at their own pixel size */
 .item { display: inline-block; width: 32px; height: 32px; background: url('items.png') no-repeat; image-rendering: pixelated; flex-shrink: 0; vertical-align: middle; }
 .item.sm { width: 16px; height: 16px; }
+/* A way to train with no item to show (an Agility course): the skill's own icon in the item's place. */
+.item.blank { background: none; display: inline-flex; align-items: center; justify-content: center; }
+.item.blank.sm .ico { width: 16px; height: 16px; background-size: contain; }
 
 .plan-account { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
 .plan-account form { align-items: center; gap: 6px; }

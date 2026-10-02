@@ -7,9 +7,8 @@
 //     XP come straight from the configs the game server runs, so the numbers are the
 //     game's own. XP is kept in tenths, the way the server stores it.
 //   - LostHQ/2004 (GPL-3.0): item_data.json for names, ids and shop values,
-//     item_spritesheet.png for the 32x32 item icons, and for Crafting, Mining and
-//     Smithing the rows of its calculators (js/calculators/), checked against
-//     the server.
+//     item_spritesheet.png for the 32x32 item icons, and from Crafting on the
+//     rows of its calculators (js/calculators/), checked against the server.
 // The output is committed, so the site itself never needs either checkout.
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -1704,19 +1703,786 @@ async function cooking() {
 
 await cooking();
 
+// ── The server's scripts and map, for the two skills below ────────────────
+// A script's blocks ("[oploc1,x]", "[proc,y]", "[label,z]" …) with comments
+// taken out: "kind,name" -> what follows its heading.
+function scriptBlocks(text) {
+  const out = new Map();
+  for (const part of text.replace(/\/\/[^\n]*/g, '').split(/^(?=\[)/m)) {
+    const h = part.match(/^\[(\w+),([^\]]+)\]/);
+    if (h) out.set(`${h[1]},${h[2]}`, part.slice(h[0].length));
+  }
+  return out;
+}
+const andList = list => list.join(', ').replace(/, ([^,]*)$/, ' and $1');
+const orList = list => list.join(', ').replace(/, ([^,]*)$/, ' or $1');
+// Game ticks (0.6 s each) in words: "5 seconds", "1½ minutes", "8 minutes".
+function ticksText(ticks) {
+  const s = ticks * 0.6;
+  if (s < 55) return `${Math.round(s)} seconds`;
+  const halves = Math.round(s / 30);            // to the nearest half minute
+  return `${Math.floor(halves / 2) || ''}${halves % 2 ? '½' : ''} minute${halves === 2 ? '' : 's'}`;
+}
+// Where a kind of loc stands in a map square: [{ name, level, x, z, angle }],
+// x and z counted inside the square. (maps/m<square>.jm2: its LOC part has a
+// line for each, "level x z: id shape angle"; the NPC and OBJ parts after it
+// look the same and aren't locs.)
+const locIds = new Map((await readFile(join(CONTENT, 'pack/loc.pack'), 'utf8')).split(/\r?\n/).filter(Boolean).map(l => [l.slice(l.indexOf('=') + 1), Number(l.slice(0, l.indexOf('=')))]));
+const mapSquares = new Map();
+async function locsOn(square, names) {
+  if (!mapSquares.has(square)) {
+    const text = await readFile(join(CONTENT, `maps/m${square}.jm2`), 'utf8');
+    const from = text.indexOf('==== LOC ====');
+    if (from < 0) throw new Error(`map ${square} has no locs`);
+    const to = text.indexOf('\n====', from + 5);
+    mapSquares.set(square, text.slice(from, to < 0 ? undefined : to).split(/\r?\n/).slice(1).filter(l => /^\d/.test(l)).map(l => {
+      const [pos, rest] = l.split(': ');
+      const [level, x, z] = pos.split(' ').map(Number);
+      const [id, , angle = 0] = rest.split(' ').map(Number);
+      return { level, x, z, id, angle };
+    }));
+  }
+  const wanted = new Map(names.map(n => {
+    if (!locIds.has(n)) throw new Error(`the server has no loc called ${n}`);
+    return [locIds.get(n), n];
+  }));
+  return mapSquares.get(square).filter(l => wanted.has(l.id)).map(l => ({ ...l, name: wanted.get(l.id) }));
+}
+// Every script, to see that none gives a skill XP without being looked at.
+async function everyScript() {
+  const { readdir } = await import('node:fs/promises');
+  return (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.rs2')).map(f => f.replace(/\\/g, '/'));
+}
+
+// ── Thieving ───────────────────────────────────────────────────────────────
+// The rows are LostHQ's Thieving calculator (js/calculators/thieving.js): its
+// four tabs, NPCs, stalls, chests and doors. Every row is checked against the
+// server: its pickpocket, stealing, trapped_chest and locked_door tables, and
+// the two scripts that keep theirs to themselves (the Digsite workman, the
+// rock cake stall in Gu'Tanoth). Where the two differ the server's number is
+// used and the row says so; a difference this script hasn't seen before stops
+// it, and so does anything the server has that isn't listed here.
+//
+// Nothing goes in (a lockpick for some locks, named and never used up), so
+// like Mining these plans don't use the bank. A row's XP is for a theft that
+// works. What comes out is the loot, as the server's own rolls hand it out on
+// average, so a row has a worth; coins are worth what they are.
+//   - a pocket or a chest: every line of its loot is rolled for on its own,
+//     from the last to the first, each out of what the lines before it left of
+//     128. Where the chances come to 128 the first line is given every time,
+//     and the others on top of it: a rogue's coins always, a lockpick 5 times
+//     in 127.
+//   - a stall: one thing, by its weight.
+// odds: how often a try works, as the rolls the server makes ([[low, high], …],
+// what stat_random is given, so it depends on your level). Not a chance, which
+// plans count the tries of: a theft that fails takes nothing but time.
+const thievingNotes = [];
+const ADDED = "Not on LostHQ's calculator: the server's own level and XP.";      // (the wording Mining's limestone has)
+async function thieving() {
+  const dir = p => scripts('skill_thieving/' + p);
+  const x10 = xp => Math.round(xp * 10);
+  const calc = await calculatorTables('thieving.js', ['npcs', 'stalls', 'chests', 'pickabledoors']);
+  const rowsOf = async file => new Map([...(await readConfig(dir(file))).values()].map(r => [r.name, r]));
+  const every = (row, key) => (row.data || []).filter(([k]) => k === key).map(([, ...v]) => v);
+  const first = (row, key) => every(row, key)[0] || (() => { throw new Error(`thieving: ${row.name} has no ${key}`); })();
+  const num = (row, key) => Number(first(row, key)[0]);
+  const lower = k => ITEM.get(need(k)).name.toLowerCase();
+  const tidy = n => Math.round(n * 1e9) / 1e9;
+  const fmt = n => n.toLocaleString('en-US');
+  const many = name => (/s$/.test(name) ? name : `${name}s`);
+  // "3 coins", "25 to 40 coins", "lockpick"
+  const amount = ({ item, min, max }) => (min !== max ? `${fmt(min)} to ${fmt(max)} ${many(lower(item))}` : min === 1 ? lower(item) : `${fmt(min)} ${many(lower(item))}`);
+  const sold = item => ITEM.get(item).tradeable === true;
+  const lootLine = ([item, min, max, n]) => ({ item: need(item), min: Number(min), max: Number(max), n: Number(n) });
+
+  // ── How the server hands out loot ──
+  // Three loops, in thieving.rs2. Each goes down the list from its last line,
+  // rolls out of what's left, then takes the line's share off what's left; the
+  // line is given when the roll is at least that. A stall's stops there.
+  const shared = scriptBlocks(await readFile(dir('scripts/thieving.rs2'), 'utf8'));
+  const loop = (name, from, stops) => {
+    const body = shared.get(`proc,${name}`) || '';
+    const roll = body.indexOf('= random($reward_rarity_denominator);');
+    const less = body.indexOf('$reward_rarity_denominator = sub($reward_rarity_denominator, $reward_rarity_numerator);');
+    const ok = body.includes(`def_int $reward_rarity_denominator = ${from};`) && roll > 0 && less > roll
+      && />= \$reward_rarity_denominator\) \{/.test(body) && /\$count = calc\((?:\$length|db_getfieldcount\([^)]*\)) - 1\);/.test(body)
+      && body.includes('$count = calc($count - 1);') && /\breturn;/.test(body) === stops;
+    if (!ok) throw new Error(`thieving: ${name} no longer hands out loot the way this script counts it`);
+  };
+  loop('pick_pocket_check_for_reward', '128', false);
+  loop('trapped_chest_check_for_reward', '128', false);
+  loop('stealing_check_for_reward', 'db_getfield($data, stealing:loot_total, 0)', true);
+  // What a list of loot comes to on average: [[item, how many], …] in the list's
+  // order. A line that leaves nothing of `total` is given every time. oneOnly:
+  // the loop stops at the first thing it gives. (What can't be traded is worth
+  // nothing, so it's left out.)
+  const lootOf = (list, total, oneOnly) => {
+    const out = [];
+    let left = total, reach = 1;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const { item, min, max, n } = list[i];
+      const after = left - n;
+      const p = after <= 0 ? 1 : n / left;
+      if (sold(item)) out.unshift([item, tidy(reach * p * ((min + max) / 2))]);
+      if (oneOnly) reach *= 1 - p;
+      left = after;
+    }
+    if (new Set(out.map(([k]) => k)).size !== out.length) throw new Error('thieving: an item is on a loot list twice');
+    return Object.fromEntries(out);
+  };
+  // The same in words, for a row's tooltip.
+  const lootNote = (list, total, oneOnly) => {
+    let text;
+    if (oneOnly) {
+      text = list.length === 1 ? amount(list[0]) : `one of ${orList([...list].sort((a, b) => b.n - a.n).map(l => `${amount(l)} (${l.n} in ${total})`))}`;
+    } else {
+      const sure = [], maybe = [];
+      let left = total;
+      for (let i = list.length - 1; i >= 0; i--) {
+        const after = left - list[i].n;
+        if (after <= 0) sure.unshift(amount(list[i])); else maybe.unshift(`${amount(list[i])} (${list[i].n} in ${left})`);
+        left = after;
+      }
+      text = !maybe.length ? andList(sure) : !sure.length ? `${maybe.join(', ')}; otherwise nothing`
+        : `${andList(sure)} every time; now and then on top of that, ${maybe.join(', ')}`;
+    }
+    const unsold = list.filter(l => !sold(l.item)).map(l => lower(l.item));
+    return `Loot: ${text}.${unsold.length ? ` ${unsold.length === 1 ? `A ${unsold[0]}` : andList(unsold)} can't be traded, so ${unsold.length === 1 ? "it isn't" : "they aren't"} counted in what a theft is worth.` : ''}`;
+  };
+  // Coins are shown as the pile a stack that size is in the game (3 coins, 25,
+  // 1,000): the one coin a stack of one is would be a dot beside a row's name.
+  const COINS = need('coins');
+  const { readdir } = await import('node:fs/promises');
+  let coinObj = null;
+  for (const f of (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.obj'))) {
+    const text = await readFile(scripts(f), 'utf8');
+    if (/^\[coins\]$/m.test(text)) { coinObj = parseConfig(text).get(COINS); break; }
+  }
+  const piles = Object.entries(coinObj?.props || {}).filter(([k]) => /^count\d+$/.test(k)).map(([, v]) => [need(v.split(',')[0]), Number(v.split(',')[1])]).sort((a, b) => a[1] - b[1]);
+  if (piles.length < 5) throw new Error("thieving: can't read the piles a stack of coins is shown as");
+  for (const [item] of piles) nameOverride[item] = ITEM.get(COINS).name;
+  const pile = n => piles.reduce((icon, [item, from]) => (n >= from ? item : icon), COINS);
+  // The item a row is shown as, when it isn't just the first thing it gives:
+  // where it gives one thing of several, the likeliest (a fish stall's salmon);
+  // and coins as their pile.
+  const iconOf = (list, oneOnly) => {
+    const worth = list.filter(l => sold(l.item));
+    const shown = oneOnly ? [...worth].sort((a, b) => b.n - a.n)[0] : worth[0];
+    if (!shown) return {};
+    return shown.item === COINS ? { icon: pile((shown.min + shown.max) / 2) } : shown !== worth[0] ? { icon: shown.item } : {};
+  };
+
+  // Where the calculator and the server differ, the server's number is used and
+  // the row says so. One this script hasn't seen stops it; so does one that's gone.
+  const KNOWN = new Set(['Digsite Workman: level 10, not 25', '10 Coin Chest: level 1, not 13', 'Magic Axe Hut Door: 22.5 XP, not 25']);
+  const differs = (key, row, level, xp) => {
+    const found = [];
+    if (row.level !== level) found.push([`${key}: level ${row.level}, not ${level}`, `LostHQ's calculator says level ${row.level}; the server asks for ${level}.`]);
+    if (x10(row.xp) !== xp) found.push([`${key}: ${row.xp} XP, not ${xp / 10}`, `LostHQ's calculator says ${row.xp} XP; the server gives ${xp / 10}.`]);
+    for (const [k] of found) {
+      if (!KNOWN.delete(k)) throw new Error(`thieving, ${k} on the server: look at it, then list it`);
+      thievingNotes.push(`${k} on the server (the server's is used)`);
+    }
+    return found.map(([, text]) => text);
+  };
+  const FREMENNIK = 'Once The Fremennik Trials is done.';
+  const gated = body => /%viking < \^viking_complete/.test(body || '');
+  // A group's rows: the calculator's, in its order, then the server's own; by level.
+  const mine = [];
+  const group = (name, rows) => {
+    rows.map((r, i) => [r, i]).sort(([a, i], [b, j]) => a.level - b.level || i - j).forEach(([r]) => {
+      const { id, name: label, level, xp, out, notes, ...rest } = r;
+      const note = notes.filter(Boolean).join(' ');
+      mine.push({ id, skill: 'thieving', group: name, kind: 'xp', name: label, level, xp, in: {}, out, ...rest, ...(note ? { note } : {}) });
+    });
+  };
+
+  // ── NPCs ──
+  // The server's table, and the Digsite workman, whose pocket is in his quest's script.
+  const pockets = [...(await rowsOf('configs/pickpocking/pickpocket.dbrow')).values()].map(row => ({
+    key: row.name, npcs: every(row, 'npc').map(v => v[0]), level: num(row, 'level'), xp: num(row, 'experience'), odds: first(row, 'success_chance').map(Number),
+    stun: num(row, 'stun_ticks'), hit: num(row, 'stun_damage'), loot: every(row, 'loot').map(lootLine), total: 128, oneOnly: false,
+  }));
+  const dig = scriptBlocks(await readFile(scripts('quests/quest_itexam/scripts/digsite_workman.rs2'), 'utf8'));
+  const digBody = dig.get('label,pickpocket_digworkman1') || '';
+  const digOdds = digBody.match(/stat_random\(thieving, (\d+), (\d+)\) = false/);
+  const digOf = fromScript(digBody, /def_int \$rand = random\((\d+)\);/, "what a Digsite workman's loot is rolled out of");
+  const digRolls = [...digBody.matchAll(/\$rand < (\d+)/g)].map(m => Number(m[1]));
+  // (a rock sample comes in place of the first coins while the quest asks for one)
+  const QUEST_ONLY = new Set(['rock_sample1']);
+  const digGives = [...digBody.matchAll(/inv_add\(inv, (\w+), (\d+)\);/g)].map(m => ({ item: m[1], n: Number(m[2]) })).filter(g => !QUEST_ONLY.has(g.item));
+  if (!digOdds || digGives.length !== digRolls.length + 1 || digRolls.some((r, i) => r <= (digRolls[i - 1] || 0)) || digRolls[digRolls.length - 1] >= digOf) throw new Error("thieving: can't read the Digsite workman's loot");
+  const digLoot = [];
+  digGives.forEach((g, i) => {
+    const n = (i < digRolls.length ? digRolls[i] : digOf) - (digRolls[i - 1] || 0);
+    const seen = digLoot.find(l => l.item === g.item && l.min === g.n);
+    if (seen) seen.n += n; else digLoot.push({ item: need(g.item), min: g.n, max: g.n, n });
+  });
+  pockets.push({
+    key: 'digworkman', npcs: ['digworkman1', 'digworkman2'], level: fromScript(digBody, /stat\(thieving\) < (\d+)/, "the Digsite workman's level"),
+    xp: fromScript(digBody, /stat_advance\(thieving, (\d+)\)/, "the Digsite workman's XP"), odds: [Number(digOdds[1]), Number(digOdds[2])],
+    stun: fromScript(digBody, /%stunned = calc\(map_clock \+ (\d+)\)/, "the Digsite workman's stun"), hit: fromScript(digBody, /~damage_self\((\d+)\)/, "the Digsite workman's hit"),
+    loot: digLoot, total: digOf, oneOnly: true,
+  });
+  for (const npc of pockets[pockets.length - 1].npcs) if (!dig.get(`opnpc3,${npc}`)?.includes('@pickpocket_digworkman1')) throw new Error(`thieving: ${npc} is no longer pickpocketed`);
+  // Who needs The Fremennik Trials: every one of a row's NPCs, or none.
+  const pick = scriptBlocks(await readFile(dir('scripts/pickpocketing/pickpocket.rs2'), 'utf8'));
+  if (!gated(pick.get('label,attempt_pick_viking_pocket'))) throw new Error('thieving: Fremennik citizens no longer wait for their quest');
+  for (const p of pockets.slice(0, -1)) {
+    const how = p.npcs.map(npc => (pick.get(`opnpc3,${npc}`) || '').match(/@(attempt_pick_(?:viking_)?pocket)\(npc_type\)/)?.[1]);
+    if (how.some(h => !h) || new Set(how).size !== 1) throw new Error(`thieving: can't read how ${p.key} is pickpocketed`);
+    p.quest = how[0] === 'attempt_pick_viking_pocket';
+  }
+  // (the calculator's key, the row of the server's it is by one of its NPCs, and rows the calculator joins with it)
+  const NPCS = {
+    'Man/Woman': { id: 'th_man', name: 'Man or woman', also: ['pickpocket_woman'] },
+    'Digsite Workman': { id: 'th_digworkman', name: 'Digsite workman' },
+    Farmer: { id: 'th_farmer', name: 'Farmer' },
+    'Warrior/Al Kharid warrior': { id: 'th_warrior', name: 'Warrior', who: 'Warrior women and Al-Kharid warriors.' },
+    Rogue: { id: 'th_rogue', name: 'Rogue' },
+    Guard: { id: 'th_guard', name: 'Guard' },
+    'Knight of Ardougne': { id: 'th_knight', name: 'Knight of Ardougne' },
+    'Yanille Watchman': { id: 'th_watchman', name: 'Yanille watchman' },
+    Paladin: { id: 'th_paladin', name: 'Paladin' },
+    Gnome: { id: 'th_gnome', name: 'Gnome', who: 'Gnomes, gnome children and gnome women.' },
+    Hero: { id: 'th_hero', name: 'Hero' },
+  };
+  const NPCS_ADDED = { pickpocket_viking: { id: 'th_fremennik', name: 'Fremennik citizen' } };
+  const same = (a, b) => JSON.stringify([a.level, a.xp, a.odds, a.stun, a.hit, a.loot]) === JSON.stringify([b.level, b.xp, b.odds, b.stun, b.hit, b.loot]);
+  const pocketRow = (p, spec, extra) => ({
+    id: spec.id, name: spec.name, level: p.level, xp: p.xp, out: lootOf(p.loot, p.total, p.oneOnly), ...iconOf(p.loot, p.oneOnly), odds: [p.odds], ...(p.quest ? { aside: 1 } : {}),
+    notes: [spec.who, lootNote(p.loot, p.total, p.oneOnly), `Caught: stunned for ${ticksText(p.stun)}, hit for ${p.hit}.`, p.quest ? FREMENNIK : '', ...extra],
+  });
+  const npcRows = [], pocketed = new Set();
+  for (const [key, row] of Object.entries(calc.npcs)) {
+    const spec = NPCS[key], p = pockets.find(x => x.npcs.includes(row.npcname));
+    if (!spec || !p) throw new Error(`thieving: the calculator's ${key} is new, or the server has nobody for it`);
+    pocketed.add(p);
+    for (const k of spec.also || []) {
+      const twin = pockets.find(x => x.key === k);
+      if (!twin || !same(p, twin)) throw new Error(`thieving: ${k} is no longer the same as ${p.key}`);
+      pocketed.add(twin);
+    }
+    npcRows.push(pocketRow(p, spec, differs(key, row, p.level, p.xp)));
+  }
+  for (const p of pockets) {
+    if (pocketed.has(p)) continue;
+    const spec = NPCS_ADDED[p.key];
+    if (!spec) throw new Error(`thieving: the server has a pocket the calculator doesn't (${p.key}): look at it, then list it`);
+    npcRows.push(pocketRow(p, spec, [ADDED]));
+    thievingNotes.push(`${spec.name}: level ${p.level}, ${p.xp / 10} XP on the server; not in LostHQ's calculator (added)`);
+  }
+  group('NPCs', npcRows);
+
+  // ── Stalls ──
+  const stalls = await rowsOf('configs/stalls/stealing.dbrow');
+  const steal = scriptBlocks(await readFile(dir('scripts/stalls/stealing.rs2'), 'utf8'));
+  const STALLS = {
+    'Bakery Stall': ['stealing_bakery_stall', 'th_stall_bakery', 'Bakery stall'], 'Tea Stall': ['stealing_tea_stall', 'th_stall_tea', 'Tea stall'],
+    'Silk Stall': ['stealing_silk_stall', 'th_stall_silk', 'Silk stall'], 'Fur Stall': ['stealing_fur_stall', 'th_stall_fur', 'Fur stall'],
+    'Fur Stall (Rellekka)': ['stealing_viking_fur_stall', 'th_stall_fur_rellekka', 'Fur stall (Rellekka)'], 'Fish Stall (Rellekka)': ['stealing_viking_fish_stall', 'th_stall_fish_rellekka', 'Fish stall (Rellekka)'],
+    'Silver Stall': ['stealing_silver_stall', 'th_stall_silver', 'Silver stall'], 'Spice Stall': ['stealing_spice_stall', 'th_stall_spice', 'Spice stall'], 'Gem Stall': ['stealing_gem_stall', 'th_stall_gem', 'Gem stall'],
+  };
+  const stallRows = [], stolen = new Set();
+  for (const [key, row] of Object.entries(calc.stalls)) {
+    const [name, id, label] = STALLS[key] || [];
+    const s = stalls.get(name);
+    if (!s) throw new Error(`thieving: the calculator's ${key} is new, or the server has no stall for it`);
+    stolen.add(name);
+    const loot = every(s, 'loot').map(lootLine), total = num(s, 'loot_total');
+    if (loot.reduce((a, l) => a + l.n, 0) !== total) throw new Error(`thieving: ${name}'s chances don't add up`);
+    const quest = gated(steal.get(`oploc2,${first(s, 'loc')[0]}`));
+    const out = lootOf(loot, total, true);
+    stallRows.push({ id, name: label, level: num(s, 'level'), xp: num(s, 'experience'), out, ...iconOf(loot, true), ...(quest ? { aside: 1 } : {}),
+      notes: [lootNote(loot, total, true), `Empty for about ${ticksText(num(s, 'respawn_ticks'))} after a theft.`, quest ? FREMENNIK : '', ...differs(key, row, num(s, 'level'), num(s, 'experience'))] });
+  }
+  for (const name of stalls.keys()) if (!stolen.has(name)) throw new Error(`thieving: the server has a stall the calculator doesn't (${name}): look at it, then list it`);
+  if (!Object.keys(STALLS).some(k => /Rellekka/.test(k) && stallRows.find(r => r.name === STALLS[k][2]).aside)) throw new Error("thieving: Rellekka's stalls no longer wait for their quest");
+  // The ogres' rock cake stall has its own script, and no chance of anything but a cake.
+  const cakes = scriptBlocks(await readFile(scripts('areas/area_yanille/scripts/ogre_trader.rs2'), 'utf8')).get('oploc1,rockcounter_withcakes') || '';
+  const cake = { item: need(fromScriptText(cakes, /inv_add\(inv, (\w+), 1\);/, 'what the rock cake stall gives')), min: 1, max: 1, n: 1 };
+  const cakeStall = { level: fromScript(cakes, /stat\(thieving\) < (\d+)/, "the rock cake stall's level"), xp: fromScript(cakes, /stat_advance\(thieving, (\d+)\)/, "the rock cake stall's XP") };
+  stallRows.push({ id: 'th_stall_rockcake', name: `${ITEM.get(cake.item).name} stall`, ...cakeStall, out: lootOf([cake], 1, true), icon: cake.item,
+    notes: [lootNote([cake], 1, true), `Empty for about ${ticksText(fromScript(cakes, /loc_change\(empty_rock_cake_counter, (\d+)\)/, 'how long the rock cake stall stays empty'))} after a theft.`, "In Gu'Tanoth, the ogres' city.", ADDED] });
+  thievingNotes.push(`${ITEM.get(cake.item).name} stall: level ${cakeStall.level}, ${cakeStall.xp / 10} XP on the server; not in LostHQ's calculator (added)`);
+  group('Stalls', stallRows);
+
+  // ── Chests ──
+  const chests = await rowsOf('configs/chests/trapped_chest.dbrow');
+  const chestScript = scriptBlocks(await readFile(dir('scripts/chest/trapped_chest.rs2'), 'utf8'));
+  const pickLock = need('lockpick');
+  if (!new RegExp(`inv_total\\(inv, ${pickLock}\\) < 1`).test(chestScript.get('proc,attempt_locked_chest') || '')) throw new Error('thieving: a locked chest no longer wants a lockpick');
+  const CHESTS = {
+    '10 Coin Chest': ['trapped_chest_chest_10_coins', 'th_chest_10_coins', '10 coin chest'], 'Nature Rune Chest': ['trapped_chest_chest_nature_rune', 'th_chest_nature', 'Nature rune chest'],
+    '50 Coin Chest': ['trapped_chest_chest_50_coins', 'th_chest_50_coins', '50 coin chest'], 'Steel Arrowtips Chest': ['trapped_chest_chest_steel_arrowtips', 'th_chest_arrowtips', 'Steel arrowtips chest'],
+    'Blood Rune Chest': ['trapped_chest_chest_blood_runes', 'th_chest_blood', 'Blood rune chest'], 'Ardougne Castle Chest': ['trapped_chest_chest_ardougne_castle', 'th_chest_castle', 'Ardougne castle chest'],
+  };
+  const chestRows = [], opened = new Set();
+  for (const [key, row] of Object.entries(calc.chests)) {
+    const [name, id, label] = CHESTS[key] || [];
+    const c = chests.get(name);
+    if (!c) throw new Error(`thieving: the calculator's ${key} is new, or the server has no chest for it`);
+    opened.add(name);
+    const loot = every(c, 'loot').map(lootLine), level = num(c, 'level'), xp = num(c, 'experience');
+    const how = chestScript.get(`oploc2,${first(c, 'loc')[0]}`) || '';
+    const locked = how.includes('~attempt_locked_chest');
+    if (!locked && !how.includes('@attempt_trapped_chest')) throw new Error(`thieving: can't read how ${name} is opened`);
+    chestRows.push({ id, name: label, level, xp, out: lootOf(loot, 128, false), ...iconOf(loot, false), ...(locked ? { tools: [pickLock] } : {}),
+      notes: [lootNote(loot, 128, false), `Empty for about ${ticksText(num(c, 'respawn_ticks'))} after it's looted.`,
+        every(c, 'tele_coord').length ? 'A second trap then teleports you away.' : '', ...differs(key, row, level, xp)] });
+  }
+  for (const name of chests.keys()) if (!opened.has(name)) throw new Error(`thieving: the server has a chest the calculator doesn't (${name}): look at it, then list it`);
+  group('Chests', chestRows);
+
+  // ── Doors ──
+  // (a lock can have a trap, rolled for before the lock itself: both have to go your way)
+  const doors = await rowsOf('configs/doors/locked_door.dbrow');
+  const door = name => {
+    const d = doors.get(name);
+    if (!d) throw new Error(`thieving: the server has no door called ${name}`);
+    const tool = every(d, 'tool')[0]?.[0] || null;
+    return { level: num(d, 'level'), xp: num(d, 'experience'), odds: [...every(d, 'trap_successchance'), first(d, 'door_successchance')].map(o => o.map(Number)), tool: tool && need(tool), trap: every(d, 'trap_successchance').length > 0 };
+  };
+  const lock = scriptBlocks(await readFile(dir('scripts/doors/locked_door.rs2'), 'utf8')).get('proc,pick_locked_door') || '';
+  const trapAt = lock.indexOf('locked_door:trap_successchance, 0)) = false'), doorAt = lock.indexOf('locked_door:door_successchance, 0)) = false'), xpAt = lock.indexOf('stat_advance(thieving, $experience)');
+  if (!(trapAt > 0 && doorAt > trapAt && xpAt > doorAt) || !lock.includes('inv_total(inv, $tool) = 0')) throw new Error('thieving: a locked door no longer works the way this script counts it');
+  // The house doors say what's inside, so the map has to agree.
+  const inHouse = async (square, name, chestNames, within) => {
+    const at = await locsOn(square, [name]);
+    for (const c of chestNames) {
+      const found = await locsOn(square, [c]);
+      if (at.length !== 1 || !found.some(l => Math.abs(l.x - at[0].x) <= within && Math.abs(l.z - at[0].z) <= within)) throw new Error(`thieving: ${name} is no longer the door of a house with a ${c}`);
+    }
+  };
+  await inHouse('41_51', 'loc_2550', ['chest_10_coins'], 3);
+  await inHouse('41_51', 'loc_2551', ['chest_nature_rune'], 3);
+  await inHouse('40_51', 'loc_2556', ['chest_10_coins', 'chest_nature_rune'], 4);
+  const DOORS = {
+    'Ross House Door': [['locked_door_loc_2556'], 'th_door_ross', 'Ross house door', 'In East Ardougne: the house north of the church, with a 10 coin chest and a nature rune chest upstairs.'],
+    'Magic Axe Hut Door': [['locked_door_loc_2557'], 'th_door_axe_hut', 'Magic axe hut door'],
+    'Ardougne Sewer Gate': [['locked_door_east_ardy_sewer_gate_north', 'locked_door_east_ardy_sewer_gate_south'], 'th_door_sewer', 'Ardougne sewer gate'],
+    'Pirate Hideout Door': [['locked_door_loc_2558'], 'th_door_pirates', 'Pirate hideout door'],
+    'Chaos Druid Tower Door': [['locked_door_loc_2554'], 'th_door_druid_tower', 'Chaos Druid Tower door'],
+    'Ardougne Castle Door': [['locked_door_loc_2555'], 'th_door_castle', 'Ardougne castle door'],
+    'Yanille Dungeon Door': [['locked_door_loc_2559'], 'th_door_yanille', 'Yanille dungeon door'],
+  };
+  const DOORS_ADDED = {
+    locked_door_loc_2550: ['th_door_house_10', 'Ardougne house door (10 coin chest)', 'East of the market in East Ardougne: the house with a 10 coin chest.'],
+    locked_door_loc_2551: ['th_door_house_nature', 'Ardougne house door (nature rune chest)', 'East of the market in East Ardougne: the house with a nature rune chest upstairs.'],
+  };
+  const doorRow = (d, id, name, where, extra) => ({ id, name, level: d.level, xp: d.xp, out: {}, odds: d.odds, icon: pickLock, ...(d.tool ? { tools: [d.tool] } : {}),
+    notes: [where, d.trap ? 'The lock has a trap that can go off first.' : '', ...extra] });
+  const doorRows = [], picked = new Set();
+  for (const [key, row] of Object.entries(calc.pickabledoors)) {
+    const [names, id, label, where] = DOORS[key] || [[]];
+    if (!names.length) throw new Error(`thieving: the calculator's ${key} is new`);
+    const [d, ...rest] = names.map(door);
+    if (rest.some(o => JSON.stringify(o) !== JSON.stringify(d))) throw new Error(`thieving: the two sides of ${key} are no longer the same`);
+    if (!!d.tool !== !!row.lockpick) throw new Error(`thieving: ${key} and its lockpick: the calculator and the server disagree`);
+    for (const n of names) picked.add(n);
+    doorRows.push(doorRow(d, id, label, where, differs(key, row, d.level, d.xp)));
+  }
+  for (const name of doors.keys()) {
+    if (picked.has(name)) continue;
+    const [id, label, where] = DOORS_ADDED[name] || [];
+    if (!id) throw new Error(`thieving: the server has a door the calculator doesn't (${name}): look at it, then list it`);
+    const d = door(name);
+    doorRows.push(doorRow(d, id, label, where, [ADDED]));
+    thievingNotes.push(`${label}: level ${d.level}, ${d.xp / 10} XP on the server; not in LostHQ's calculator (added)`);
+  }
+  group('Doors', doorRows);
+  if (KNOWN.size) throw new Error(`thieving: no longer different on the server: ${[...KNOWN].join('; ')}`);
+
+  // Every script that gives Thieving XP is one of these, or looked at and left out.
+  const USED = ['skill_thieving/scripts/thieving.rs2', 'skill_thieving/scripts/chest/trapped_chest.rs2', 'skill_thieving/scripts/doors/locked_door.rs2',
+    'quests/quest_itexam/scripts/digsite_workman.rs2', 'areas/area_yanille/scripts/ogre_trader.rs2'];
+  const LEFT_OUT = {
+    'quests/quest_arena/scripts/quest_arena.rs2': 'a quest reward', 'quests/quest_biohazard/scripts/quest_biohazard.rs2': 'a quest reward', 'quests/quest_desertrescue/scripts/irena.rs2': 'a quest reward',
+    'quests/quest_hazeelcult/scripts/quest_hazeelcult.rs2': 'a quest reward', 'quests/quest_totem/scripts/quest_totem.rs2': 'a quest reward', 'quests/quest_viking/scripts/quest_viking.rs2': 'a quest reward',
+    'quests/quest_legends/scripts/quest_legends.rs2': "Legends' Quest's own locks", 'quests/quest_upass/scripts/quest_upass.rs2': "the Underground Pass's cages",
+    '_test/scripts/cheats/cheat_maxme.rs2': 'a test cheat', '_test/scripts/debug/debug_quests.rs2': 'a test cheat',
+  };
+  for (const file of await everyScript()) {
+    if (USED.includes(file) || LEFT_OUT[file]) continue;
+    if ((await readFile(scripts(file), 'utf8')).includes('stat_advance(thieving')) throw new Error(`thieving: ${file} gives Thieving XP and isn't accounted for: look at it, then list it`);
+  }
+  for (const file of [...USED, ...Object.keys(LEFT_OUT)]) if (!(await readFile(scripts(file), 'utf8')).includes('stat_advance(thieving')) throw new Error(`thieving: ${file} no longer gives Thieving XP: take it off the list`);
+
+  if (new Set(mine.map(m => m.id)).size !== mine.length) throw new Error('thieving: two rows have the same id');
+  methods.push(...mine);
+  thievingNotes.push(`${mine.length} rows: ${['NPCs', 'Stalls', 'Chests', 'Doors'].map(g => `${mine.filter(m => m.group === g).length} ${g.toLowerCase()}`).join(', ').replace('npcs', 'NPCs')}; ${mine.filter(m => m.tools).length} want a lockpick`);
+  thievingNotes.push(`left out: ${[...new Set(Object.values(LEFT_OUT))].filter(v => !/quest reward|cheat/.test(v)).join(', ')}, and quest rewards`);
+}
+
+await thieving();
+
+// ── Agility ────────────────────────────────────────────────────────────────
+// The rows are LostHQ's Agility calculator (js/calculators/agility.js): its
+// courses and its shortcuts, each checked against the server's scripts. The
+// server's numbers are used where the two differ, and the row says so; what
+// the Yanille Agility dungeon and the Watchtower's wall give is added, since
+// the server has it and the calculator doesn't. Nothing goes in and nothing
+// comes out: no bank, and nothing to price.
+//
+// A course is counted in laps: its obstacles in order, and the bonus the last
+// one gives, summed the way the server gives them.
+//
+// The Agility Arena isn't the calculator's 14 obstacles and five exchanges but
+// one row, a ticket (Ostap's call, v2.8: "the average effort/XP to earn 1
+// ticket", "the XP received when that ticket is eventually exchanged", and the
+// two combined into "a realistic average XP per ticket"):
+//   - on the way: the arena is a grid of platforms with an obstacle between
+//     every two next to each other, and a ticket pillar on each but the one the
+//     ladder comes down to. The server lights a pillar at random, never the
+//     same twice running, and tagging one after another gives a ticket. So a
+//     ticket takes the way from one pillar to another: the shortest one, over
+//     every pair, its XP averaged over the ways that are as short. Which
+//     obstacle lies where is read off the server's map, what it gives off its
+//     scripts. Every obstacle is taken as open (the last ones are from level
+//     40): below that the way round is longer, so it's on the safe side.
+//   - exchanged: what the ticket trader gives for 1, 10, 25, 100 or 1,000 at
+//     once. exchange: { own (the XP on the way), batches: [[size, xp], …] }. A
+//     plan hands its tickets in together, in the biggest batches they fill,
+//     and counts each at the average of that (planner.js: averaged). CHOICES
+//     has the batch to count every ticket at instead.
+const agilityNotes = [];
+async function agility() {
+  const x10 = xp => Math.round(xp * 10);
+  const calc = await calculatorTables('agility.js', ['courses', 'shortcuts', 'arenaObstacles']);
+  // What a block gives: the numbers in its XP calls. Where it gives some twice
+  // the first is for a slip (it returns there), the last for getting across.
+  const XP = /(?:stat_advance\(agility, |~agility_force_move\(|~agility_climb_up\()(\d+)/g;
+  const xpOf = body => [...body.matchAll(XP)].map(m => Number(m[1])).filter(n => n > 0);
+  const levelOf = body => { const m = body.match(/stat\(agility\) < (\d+)/); return m ? Number(m[1]) : 1; };
+  const rollOf = body => { const m = body.match(/stat_random\(agility, (\d+), (\d+)\)/); return m ? [Number(m[1]), Number(m[2])] : null; };
+  // The scripts looked at, and which of their blocks were counted: none that gives XP may be left.
+  const files = new Map(), counted = new Map();
+  const blocksOf = async file => {
+    if (!files.has(file)) { files.set(file, scriptBlocks(await readFile(scripts(file), 'utf8'))); counted.set(file, new Set()); }
+    return files.get(file);
+  };
+  const block = async (file, key) => {
+    const body = (await blocksOf(file)).get(key);
+    if (body == null) throw new Error(`agility: ${file} has no [${key}]`);
+    counted.get(file).add(key);
+    return body;
+  };
+  // Where the calculator and the server differ: the server's number is used.
+  const KNOWN = new Set(['Barbarian Outpost: 114.5 XP, not 139.5', 'Wilderness: 586.4 XP, not 571.4', 'Crumbling wall (Falador): 0.5 XP, not 12.5', 'Stepping stones (Karamja): level 30, not 1']);
+  const differs = (key, row, level, xp) => {
+    const found = { level: row.level !== level ? `${key}: level ${row.level}, not ${level}` : null, xp: x10(row.xp) !== xp ? `${key}: ${row.xp} XP, not ${xp / 10}` : null };
+    for (const k of Object.values(found)) {
+      if (!k) continue;
+      if (!KNOWN.delete(k)) throw new Error(`agility, ${k} on the server: look at it, then list it`);
+      agilityNotes.push(`${k} on the server (the server's is used)`);
+    }
+    return found;
+  };
+  const mine = [];
+
+  // ── Courses ──
+  // An obstacle says which step of its lap it is; the last one gives the bonus.
+  const course = async (name, proc) => {
+    const file = `skill_agility/scripts/${name}`;
+    const blocks = await blocksOf(file);
+    const done = await block(file, `proc,${proc}`);
+    const last = fromScript(done, /_course_progress = (\d+)\) \{/, `${name}'s last obstacle`);
+    const bonus = fromScript(done, /stat_advance\(agility, (\d+)\);/, `${name}'s lap bonus`);
+    const steps = new Map(), extras = {};
+    for (const [key, body] of blocks) {
+      if (key.startsWith('proc,')) continue;
+      const xp = xpOf(body), step = body.match(new RegExp(`~${proc}\\((\\d+)\\)`));
+      if (step) {
+        if (xp.length > 1 || steps.has(Number(step[1]))) throw new Error(`agility: can't read obstacle ${step[1]} of ${name}`);
+        steps.set(Number(step[1]), { xp: xp[0] || 0, body });
+        counted.get(file).add(key);
+      } else if (xp.length) extras[key] = xp[xp.length - 1];
+    }
+    if (steps.size !== last || [...steps.keys()].some(n => n < 1 || n > last)) throw new Error(`agility: ${name} doesn't have its ${last} obstacles`);
+    const text = [...blocks.values()].join('\n');
+    return { file, steps, extras, bonus, level: Math.max(1, ...[...text.matchAll(/stat\(agility\) < (\d+)/g)].map(m => Number(m[1]))) };
+  };
+  // (once a visit, not a lap: the way in. Anything else a course's script gives stops the build.)
+  const extrasAre = (c, expected) => {
+    if (JSON.stringify(Object.entries(c.extras).sort()) !== JSON.stringify(Object.entries(expected).sort())) throw new Error(`agility: ${c.file} gives XP besides its lap that isn't listed: ${JSON.stringify(c.extras)}`);
+    for (const key of Object.keys(expected)) counted.get(c.file).add(key);
+  };
+  const lap = (id, key, name, c, times, notes) => {
+    const obstacles = [...c.steps].reduce((a, [n, s]) => a + s.xp * (times[n] || 1), 0), count = [...c.steps.keys()].reduce((a, n) => a + (times[n] || 1), 0);
+    const d = differs(key, calc.courses[key], c.level, obstacles + c.bonus);
+    mine.push({ id, skill: 'agility', group: 'Courses', kind: 'xp', unit: 'lap', units: 'laps', as: [`lap of the ${name}`, `laps of the ${name}`], name, level: c.level, xp: obstacles + c.bonus,
+      in: {}, out: {}, parts: [['obstacles', obstacles], ['lap bonus', c.bonus]], note: notes(count, d).filter(Boolean).join(' ') });
+    return obstacles + c.bonus;
+  };
+  const inOrder = n => `${n} obstacles in order, and the bonus for finishing the lap.`;
+  if (JSON.stringify(Object.keys(calc.courses)) !== JSON.stringify(['Gnome Stronghold', 'Barbarian Outpost', 'Wilderness'])) throw new Error('agility: the calculator has a course this script has not seen');
+
+  const gnome = await course('gnome_course.rs2', 'update_gnome_varp');
+  extrasAre(gnome, {});
+  lap('ag_gnome', 'Gnome Stronghold', 'Gnome Stronghold course', gnome, {}, n => [inOrder(n)]);
+
+  // The Barbarian Outpost's last obstacle is a crumbling wall, and the lap is
+  // done at the last of them on the map: each one climbed gives its XP.
+  const barb = await course('barbarian_course.rs2', 'update_barbarian_varp');
+  const wall = barb.steps.get(barb.steps.size);
+  const lastWall = wall.body.match(/if\(loc_coord = (\d+)_(\d+)_(\d+)_(\d+)_(\d+)\) \{\s*~update_barbarian_varp\(\d+\);/);
+  if (!lastWall) throw new Error("agility: can't read which wall ends the Barbarian Outpost's lap");
+  const walls = (await locsOn(`${lastWall[2]}_${lastWall[3]}`, ['castlecrumbly1'])).filter(l => l.level === Number(lastWall[1]));
+  if (walls.length < 1 || Math.max(...walls.map(l => l.x)) !== Number(lastWall[4]) || walls.some(l => l.z !== Number(lastWall[5]))) throw new Error("agility: the Barbarian Outpost's walls aren't in a row ending at the lap's last");
+  const PIPE = 'oploc1,barbarian_obstacle_pipe';
+  extrasAre(barb, { [PIPE]: barb.extras[PIPE] });
+  const barbLap = lap('ag_barbarian', 'Barbarian Outpost', 'Barbarian Outpost course', barb, { [barb.steps.size]: walls.length }, (n, d) => [
+    `${n} obstacles in order, ${walls.length} of them crumbling walls, and the bonus for finishing the lap.`,
+    d.xp ? `LostHQ's calculator counts one wall: ${calc.courses['Barbarian Outpost'].xp} XP.` : '',
+    `The pipe into the course is ${barb.extras[PIPE] / 10} XP more, once a visit.`]);
+  // (the difference is the walls, as the row says)
+  if (x10(calc.courses['Barbarian Outpost'].xp) !== barbLap - (walls.length - 1) * wall.xp) throw new Error("agility: the calculator's Barbarian Outpost lap is no longer the server's with one wall");
+
+  const wild = await course('wilderness_course.rs2', 'update_wilderness_varp');
+  const RIDGE = ['oploc1,loc_2309', 'label,open_course_gates'];
+  if (wild.extras[RIDGE[0]] !== wild.extras[RIDGE[1]]) throw new Error("agility: the Wilderness course's ridge no longer gives the same both ways");
+  extrasAre(wild, Object.fromEntries(RIDGE.map(k => [k, wild.extras[k]])));
+  const wildLap = lap('ag_wilderness', 'Wilderness', 'Wilderness course', wild, {}, (n, d) => [inOrder(n),
+    `The ridge at its gate is ${wild.extras[RIDGE[0]] / 10} XP more each way, once a visit${d.xp ? `: LostHQ's calculator counts it in every lap (${calc.courses.Wilderness.xp} XP)` : ''}.`]);
+  if (x10(calc.courses.Wilderness.xp) !== wildLap + wild.extras[RIDGE[0]]) throw new Error("agility: the calculator's Wilderness lap is no longer the server's and the ridge");
+  // (a course's level is the one its way in asks for)
+  for (const [key, c] of [['Gnome Stronghold', gnome], ['Barbarian Outpost', barb], ['Wilderness', wild]]) if (calc.courses[key].level !== c.level) throw new Error(`agility: ${key} is level ${c.level} on the server`);
+
+  // ── Shortcuts ──
+  const SHORT = 'skill_agility/scripts/shortcuts.rs2', DUNGEON = 'areas/area_yanille/scripts/agility_dungeon.rs2', TOWER = 'quests/quest_itwatchtower/scripts/quest_itwatchtower.rs2';
+  const locParam = async (file, loc) => (await readConfig(scripts(file))).get(loc)?.params || (() => { throw new Error(`agility: no ${loc} in ${file}`); })();
+  const edgeville = await locParam('skill_agility/configs/shortcuts.loc', 'loc_2320'), yanille = await locParam('areas/area_yanille/configs/agility_dungeon.loc', 'monkeybars_end2');
+  const bars = await block(SHORT, 'oploc1,_monkeybars');
+  if (!bars.includes('stat(agility) < loc_param(agil_level_req)') || !bars.includes('stat_random(agility, loc_param(obstacle_low_fail), loc_param(obstacle_high_fail))')) throw new Error('agility: monkey bars no longer take their level and chance from the loc');
+  const barsOf = p => ({ level: Number(p.agil_level_req), roll: [Number(p.obstacle_low_fail), Number(p.obstacle_high_fail)] });
+  // The Falador wall is climbed by the Barbarian Outpost's wall's script.
+  const falador = await block(SHORT, 'oploc1,castlecrumbly');
+  if (!/@climb_barbarian_crumblingwall;\s*$/.test(falador)) throw new Error("agility: Falador's wall is no longer climbed like the Barbarian Outpost's");
+  // [the calculator's row or null, id, name, where its numbers are, what else to say]
+  const from = async (file, key, more = {}) => ({ body: await block(file, key), ...more });
+  const SHORTCUTS = [
+    ['A wooden log (Karamja)', 'ag_log_karamja', await from(SHORT, 'oploc1,zq_logbalance')],
+    ['Crumbling wall (Falador)', 'ag_wall_falador', { body: falador, xp: [wall.xp], same: 'the same as a wall of the Barbarian Outpost course' }],
+    ['Climbing rocks (Yanille)', 'ag_rocks_yanille', await from(SHORT, 'oploc1,watchshortcut')],
+    ['Ropeswing (Brimhaven)', 'ag_swing_brimhaven', await from(SHORT, 'oploc1,_island_rope_swing')],
+    ['Monkeybars (Edgeville Dungeon)', 'ag_bars_edgeville', { body: bars, ...barsOf(edgeville) }],
+    ['Log balance (Coal Trucks)', 'ag_log_coal_trucks', await from(SHORT, 'oploc1,mine_log_balance1')],
+    ['Stepping stones (Karamja)', 'ag_stones_karamja', await from(SHORT, 'oploc1,_karamja_stepping_stone')],
+    ['Monkeybars (Yanille Dungeon)', 'ag_bars_yanille', { body: bars, ...barsOf(yanille) }],
+    [null, 'ag_rocks_watchtower', await from(TOWER, 'oploc1,loc_2299', { name: 'Climbing rocks (Watchtower)', where: "Up the Watchtower's wall and in through its window, north of Yanille." })],
+    [null, 'ag_ledge_yanille', await from(DUNGEON, 'oploc1,balancing_ledge3', { name: 'Balancing ledge (Yanille Dungeon)' })],
+    [null, 'ag_pipe_yanille', await from(DUNGEON, 'oploc1,obstical_pipe4', { name: 'Obstacle pipe (Yanille Dungeon)' })],
+    [null, 'ag_rubble_yanille', await from(DUNGEON, 'oploc1,climbingcaverocks1', { name: 'Pile of rubble (Yanille Dungeon)' })],
+  ];
+  if (JSON.stringify(Object.keys(calc.shortcuts)) !== JSON.stringify(SHORTCUTS.map(s => s[0]).filter(Boolean))) throw new Error('agility: the calculator has a shortcut this script has not seen');
+  const never = (roll, level) => Math.floor((roll[0] * (99 - level)) / 98) + Math.floor((roll[1] * (level - 1)) / 98) + 1 >= 256;      // (the server's roll: it can't fail)
+  const shortRows = SHORTCUTS.map(([key, id, s], i) => {
+    const xp = s.xp || xpOf(s.body), level = s.level ?? levelOf(s.body), roll = s.roll || rollOf(s.body);
+    if (!xp.length || xp.length > 2 || (xp.length === 2 && !roll)) throw new Error(`agility: can't read what ${key || s.name} gives`);
+    const d = key ? differs(key, calc.shortcuts[key], level, xp[xp.length - 1]) : {};
+    if (!key) agilityNotes.push(`${s.name}: level ${level}, ${xp[xp.length - 1] / 10} XP on the server; not in LostHQ's calculator (added)`);
+    const notes = [s.where, xp.length === 2 ? `A slip still gives ${xp[0] / 10} XP.` : '',
+      d.level ? `LostHQ's calculator says level ${calc.shortcuts[key].level}; the server asks for ${level === 1 ? 'none' : level}.` : '',
+      d.xp ? `LostHQ's calculator says ${calc.shortcuts[key].xp} XP; the server gives ${xp[xp.length - 1] / 10}${s.same ? `, ${s.same}` : ''}.` : '', key ? '' : ADDED].filter(Boolean).join(' ');
+    return [{ id, skill: 'agility', group: 'Shortcuts', kind: 'xp', name: key || s.name, level, xp: xp[xp.length - 1], in: {}, out: {},
+      ...(roll && !never(roll, level) ? { odds: [roll] } : {}), ...(notes ? { note: notes } : {}) }, i];
+  });
+  for (const [m] of shortRows.sort(([a, i], [b, j]) => a.level - b.level || i - j)) mine.push(m);
+
+  // ── The Agility Arena ──
+  const ARENA = 'minigames/game_agilityarena/', MAIN = `${ARENA}scripts/agilityarena.rs2`, ZONES = `${ARENA}scripts/agilityarena_zones.rs2`;
+  // The ticket pillars, one a platform: the platforms' rows and columns.
+  const pillars = [...(await readFile(scripts(`${ARENA}configs/pillar_coords.enum`), 'utf8')).matchAll(/^val=\d+,(\d+)_(\d+)_(\d+)_(\d+)_(\d+)$/gm)].map(m => m.slice(1).map(Number));
+  const [floor, mx, mz] = pillars[0] || [];
+  const xs = [...new Set(pillars.map(p => p[3]))].sort((a, b) => a - b), zs = [...new Set(pillars.map(p => p[4]))].sort((a, b) => a - b);
+  const platform = (c, r) => r * xs.length + c;
+  const pillarAt = pillars.map(p => platform(xs.indexOf(p[3]), zs.indexOf(p[4])));
+  if (pillars.some(p => p[0] !== floor || p[1] !== mx || p[2] !== mz) || new Set(pillarAt).size !== pillars.length || pillars.length !== xs.length * zs.length - 1) throw new Error("agility: the arena's ticket pillars aren't one a platform, all but one");
+  // The obstacles: the locs that are its ends on the map, and the block with what it gives.
+  const kinds = [
+    ['Rope balance', ['agilityarena_ropebalance'], MAIN, 'oploc1,agilityarena_ropebalance'],
+    ['Rope swing', ['agilityarena_ropeswing'], MAIN, 'aploc1,agilityarena_ropeswing'],
+    ['Pillars', ['agilityarena_pillar_top'], MAIN, 'oploc1,agilityarena_pillar_top'],
+    ['Hand holds', ['agilityarena_handholds'], MAIN, 'oploc1,agilityarena_handholds'],
+    ['Low wall', ['agilityarena_lowwall'], MAIN, 'oploc1,agilityarena_lowwall'],
+    ['Monkey bars', ['agilityarena_monkeybars_end'], MAIN, 'oploc1,agilityarena_monkeybars_end'],
+    ['Ledge', ['agilityarena_ledgebalance', 'agilityarena_ledgebalance2'], MAIN, 'label,agilityarena_ledge'],
+    ['Log balance', ['agilityarena_logbalance1', 'agilityarena_logbalance2', 'agilityarena_logbalance3'], MAIN, 'label,agilityarena_logbalance'],
+    ['Plank balance', ['agilityarena_plank', 'agilityarena_plank2', 'agilityarena_plank3'], MAIN, 'label,agilityarena_plank'],
+    ['Spiked floor', ['agilityarena_floorspikes'], ZONES, 'timer,agilityarena_spikes'],
+    ['Pressure pad', ['agilityarena_pressurepad'], ZONES, 'timer,agilityarena_pressurepad'],
+    ['Spinning blade', ['agilityarena_sawblades'], ZONES, 'timer,agilityarena_sawblades'],
+    ['Darts', [], ZONES, 'timer,agilityarena_poisondarts'],          // (no loc of their own: the tiles their script names)
+    ['Sawblade', ['agilityarena_timedblade2_floor', 'agilityarena_timedblade2_floorl'], null, null],      // (a blade to time your way past: no XP)
+  ];
+  const obstacles = new Map();           // name -> { xp, level }
+  for (const [name, locs, file, key] of kinds) {
+    const body = file ? await block(file, key) : '';
+    const xp = xpOf(body);
+    if (xp.length > 1) throw new Error(`agility: can't read what the arena's ${name} gives`);
+    // (the block is this obstacle's: named after its loc, jumped to from it, or looking for it)
+    for (const loc of locs) {
+      const its = !file || key.endsWith(`,${loc}`) || (key.startsWith('label,') ? (await blocksOf(file)).get(`oploc1,${loc}`)?.includes(`@${key.slice(6)};`) : body.includes(loc));
+      if (!its) throw new Error(`agility: ${loc} is no longer a ${name}`);
+    }
+    obstacles.set(name, { xp: xp[0] || 0, level: levelOf(body) });
+    // the calculator's own rows for them: the same numbers
+    const row = calc.arenaObstacles[name];
+    if (!row || x10(row.xp) !== obstacles.get(name).xp || row.level !== obstacles.get(name).level) throw new Error(`agility: the arena's ${name} is ${obstacles.get(name).xp / 10} XP at level ${obstacles.get(name).level} on the server; the calculator says otherwise`);
+  }
+  // Which lies between which two platforms. A piece of one stands off a
+  // platform's middle toward the next platform: that way is its edge. (As far
+  // both ways, it's by the wall: the way that has a platform.)
+  const nearest = (v, list) => list.reduce((best, c, i) => (Math.abs(v - c) < Math.abs(v - list[best]) ? i : best), 0);
+  const edgeOf = (x, z) => {
+    const c = nearest(x, xs), r = nearest(z, zs), dx = x - xs[c], dz = z - zs[r];
+    const across = dx && xs[c + Math.sign(dx)] != null ? `x${Math.min(c, c + Math.sign(dx))},${r}` : null;
+    const along = dz && zs[r + Math.sign(dz)] != null ? `z${c},${Math.min(r, r + Math.sign(dz))}` : null;
+    if (Math.abs(dx) !== Math.abs(dz)) return Math.abs(dx) > Math.abs(dz) ? across : along;
+    return across && along ? null : across || along;
+  };
+  const layout = new Map();              // edge -> the obstacle on it
+  const put = (x, z, name) => {
+    const edge = edgeOf(x, z);
+    if (!edge || (layout.has(edge) && layout.get(edge) !== name)) throw new Error(`agility: can't place the arena's ${name} at ${x},${z}`);
+    layout.set(edge, name);
+  };
+  const kindOf = new Map(kinds.flatMap(([name, locs]) => locs.map(l => [l, name])));
+  for (const l of await locsOn(`${mx}_${mz}`, [...kindOf.keys()])) if (l.level === floor) put(l.x, l.z, kindOf.get(l.name));
+  const dartTiles = [...(await block(ZONES, 'proc,get_poisondart_vals')).matchAll(/case (\d+)_(\d+)_(\d+)_(\d+)_(\d+) :/g)].map(m => m.slice(1).map(Number));
+  if (!dartTiles.length || dartTiles.some(t => t[0] !== floor || t[1] !== mx || t[2] !== mz)) throw new Error("agility: can't read where the arena's darts are");
+  for (const t of dartTiles) put(t[3], t[4], 'Darts');
+  const edges = [...layout].map(([edge, name]) => {
+    const [c, r] = edge.slice(1).split(',').map(Number);
+    return [platform(c, r), edge[0] === 'x' ? platform(c + 1, r) : platform(c, r + 1), name];
+  });
+  if (edges.length !== (xs.length - 1) * zs.length + xs.length * (zs.length - 1)) throw new Error(`agility: the arena has ${edges.length} obstacles between its platforms, not one for every two next to each other`);
+  // From one pillar to another by the shortest way: how many obstacles, and
+  // their XP averaged over every way that short (with the obstacles of `level`).
+  const between = level => {
+    const next = Array.from({ length: xs.length * zs.length }, () => []);
+    for (const [a, b, name] of edges) if (obstacles.get(name).level <= level) { next[a].push([b, name]); next[b].push([a, name]); }
+    let pairs = 0, count = 0, xp = 0;
+    for (const start of pillarAt) {
+      const dist = next.map(() => Infinity), ways = next.map(() => 0), sum = next.map(() => 0);
+      dist[start] = 0; ways[start] = 1;
+      const queue = [start];
+      for (let i = 0; i < queue.length; i++) {
+        const u = queue[i];
+        for (const [v, name] of next[u]) {
+          if (dist[v] === Infinity) { dist[v] = dist[u] + 1; queue.push(v); }
+          if (dist[v] === dist[u] + 1) { ways[v] += ways[u]; sum[v] += sum[u] + ways[u] * obstacles.get(name).xp; }
+        }
+      }
+      for (const end of pillarAt) {
+        if (end === start) continue;
+        if (dist[end] === Infinity) throw new Error(`agility: at level ${level} a ticket pillar can't be reached`);
+        pairs++; count += dist[end]; xp += sum[end] / ways[end];
+      }
+    }
+    return { count: count / pairs, xp: xp / pairs };
+  };
+  const levels = [...new Set([...obstacles.values()].map(o => o.level))].sort((a, b) => a - b);      // 1, 20, 40
+  const way = levels.map(l => ({ from: l, ...between(l) }));
+  const open = way[way.length - 1];
+  const own = Math.round(open.xp);
+  if (way.some(w => w.xp < open.xp)) throw new Error('agility: with fewer obstacles open the way between pillars gives less XP: the average is no longer on the safe side');
+  // The pillar: when it moves, what it gives, what going in costs.
+  const clerk = await readFile(scripts(`${ARENA}scripts/agilityarena_clerk.rs2`), 'utf8');
+  const moves = fromScript(clerk, /%agilityarena_next_pillar_time = add\(map_clock, (\d+)\);/, 'how long the arena keeps a pillar lit');
+  const fee = fromScript(clerk, /inv_del\(inv, coins, (\d+)\);/, "the arena's entrance fee");
+  const ticket = need(fromScriptText(await block(MAIN, 'label,agilityarena_tag_pillar'), /inv_add\(inv, (\w+), 1\);/, 'what a pillar gives'));
+  if (!new RegExp(`def_int \\$new_pillar = random\\(${pillars.length}\\);\\s*while \\(\\$new_pillar = %agilityarena_pillar_index\\)`).test(clerk)) throw new Error('agility: the arena no longer picks its next pillar from all the others');
+  // What the trader gives for them.
+  const trader = await blocksOf(`${ARENA}scripts/agilityarena_tickettrader.rs2`);
+  const buy = await block(`${ARENA}scripts/agilityarena_tickettrader.rs2`, 'label,agilityarena_buy_xp');
+  if (!buy.includes(`inv_del(inv, ${ticket}, $cost);`) || !buy.includes('stat_advance(agility, $xp);')) throw new Error("agility: can't read how tickets are exchanged");
+  const batches = [...new Map([...trader.values()].flatMap(body => [...body.matchAll(/@agilityarena_buy_xp\((\d+), (\d+)\);/g)].map(m => [Number(m[1]), Number(m[2])])))].sort((a, b) => b[0] - a[0]);
+  if (batches.length < 2 || batches[batches.length - 1][0] !== 1 || batches.some(([n, xp], i) => i && xp / n >= batches[i - 1][1] / batches[i - 1][0])) throw new Error("agility: tickets aren't worth more in bigger batches, down to one");
+  for (const [n, xp] of batches) if (x10(calc.arenaObstacles[`Arena Tickets (x${n})`]?.xp) !== xp) throw new Error(`agility: ${n} tickets give ${xp / 10} XP on the server; the calculator says otherwise`);
+  if (Object.keys(calc.arenaObstacles).length !== kinds.length + batches.length) throw new Error('agility: the calculator has an arena row this script has not seen');
+
+  const each = ([n, xp]) => xp / n;
+  if (batches.some(b => !Number.isInteger(each(b)))) throw new Error("agility: a ticket's share of a batch isn't a whole number of tenths");
+  const fmt = n => n.toLocaleString('en-US');
+  const at = n => (n === 1 ? 'One at a time' : `${fmt(n)} at a time`);
+  const exchange = { batches };
+  // (pinned to a batch by a goal's choice: every ticket at its rate, and no pooling)
+  const pinned = base => Object.fromEntries(batches.map(b => [`x${b[0]}`, { xp: base + each(b), parts: base ? [['on the way', base], ['exchanged', each(b)]] : undefined, exchange: null }]));
+  const least = each(batches[batches.length - 1]);
+  mine.push({
+    id: 'ag_ticket', skill: 'agility', group: 'Agility Arena', kind: 'xp', name: 'Agility Arena ticket', level: 1, xp: own + least, in: {}, out: {}, icon: ticket,
+    parts: [['on the way', own], ['exchanged', least]], exchange: { own, ...exchange }, opt: pinned(own),
+    note: `On average ${open.count.toFixed(1)} obstacles lie between one ticket pillar and the next: ${own / 10} XP on the way. Below level ${levels[levels.length - 1]} some are shut and the way round is longer, so it's a little more. `
+      + `A pillar ${ticksText(moves) === '1 minute' ? 'a minute' : `every ${ticksText(moves)}`} at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss. Going in costs ${fmt(fee)} coins.`,
+  });
+  mine.push({
+    id: 'ag_ticket_held', skill: 'agility', group: 'Agility Arena', kind: 'xp', name: 'Arena ticket you already have', level: 1, xp: least, in: {}, out: {}, icon: ticket, aside: 1,
+    exchange: { own: 0, ...exchange }, opt: pinned(0),
+    note: "For tickets you've saved up: only what they're exchanged for counts. Type how many you have under Plan to make.",
+  });
+  for (const m of mine) for (const v of Object.values(m.opt || {})) if (v.parts === undefined) delete v.parts;
+  choices.agility = [
+    { id: 'tickets', label: 'Tickets exchanged', options: [{ id: 'best', name: 'In the biggest batches' }, ...batches.map(([n]) => ({ id: `x${n}`, name: at(n) }))],
+      tip: `What an Agility Arena ticket gives depends on how many you exchange at once: ${batches.map(b => `${each(b) / 10} XP${b[0] === 1 ? ' for one' : ` each for ${fmt(b[0])}`}`).reverse().join(', ')}. `
+        + `In the biggest batches: a plan's tickets are exchanged together, as many ${fmt(batches[0][0])}s as they make, then ${fmt(batches[1][0])}s and so on, and each counts as the average of that. `
+        + `Or pick a batch to count every ticket at its rate, whatever the plan's size: ${at(batches[0][0]).toLowerCase()}, if you're saving up.` },
+  ];
+
+  // Every block of these scripts that gives XP is a row or part of one; every
+  // other script that gives Agility XP is one of these, looked at and left out.
+  for (const [file, blocks] of files) {
+    if (file === TOWER) continue;                 // (the rest of the Watchtower's is its quest's: below)
+    for (const [key, body] of blocks) if (xpOf(body).length && !counted.get(file).has(key)) throw new Error(`agility: [${key}] in ${file} gives XP and isn't counted: look at it, then list it`);
+  }
+  const LEFT_OUT = {
+    [TOWER]: "the Watchtower's ogres and tunnel", 'minigames/game_gnomeball/scripts/gnomeball_shoot.rs2': 'a game of gnomeball won',
+    'quests/quest_troll/scripts/quest_troll.rs2': "Trollheim's rocks", 'quests/quest_horror/scripts/basalt_rocks.rs2': "the lighthouse's basalt rocks", 'quests/quest_horror/scripts/quest_horror.rs2': "the lighthouse's basalt rocks",
+    'quests/quest_zombiequeen/scripts/quest_zombiequeen.rs2': "Shilo Village's own obstacles", 'quests/quest_upass/scripts/upass_obstacles.rs2': "the Underground Pass's obstacles",
+    'quests/quest_itexam/scripts/area_digsite.rs2': "the Digsite's winches", 'quests/quest_druidspirit/scripts/quest_druidspirit.rs2': "the jump to the Nature Spirit's grotto",
+    'quests/quest_viking/scripts/quest_viking.rs2': 'a quest reward', 'quests/quest_desertrescue/scripts/irena.rs2': 'a quest reward', 'quests/quest_grandtree/scripts/quest_grandtree.rs2': 'a quest reward',
+    'quests/quest_regicide/scripts/quest_regicide.rs2': 'a quest reward', 'quests/quest_upass/scripts/quest_upass.rs2': 'a quest reward',
+    '_test/scripts/cheats/cheat_maxme.rs2': 'a test cheat', '_test/scripts/debug/debug_quests.rs2': 'a test cheat',
+  };
+  const HELPERS = ['skill_agility/scripts/agility.rs2'];      // (what the obstacles call to move you and give their XP)
+  const gives = text => /stat_advance\(agility, (?!0\))|~agility_force_move\([1-9]|~agility_climb_up\([1-9]/.test(text);
+  for (const file of await everyScript()) {
+    if ((files.has(file) && file !== TOWER) || LEFT_OUT[file] || HELPERS.includes(file)) continue;
+    if (gives(await readFile(scripts(file), 'utf8'))) throw new Error(`agility: ${file} gives Agility XP and isn't accounted for: look at it, then list it`);
+  }
+  for (const file of Object.keys(LEFT_OUT)) if (!gives(await readFile(scripts(file), 'utf8'))) throw new Error(`agility: ${file} no longer gives Agility XP: take it off the list`);
+  if (KNOWN.size) throw new Error(`agility: no longer different on the server: ${[...KNOWN].join('; ')}`);
+
+  if (new Set(mine.map(m => m.id)).size !== mine.length) throw new Error('agility: two rows have the same id');
+  methods.push(...mine);
+  agilityNotes.push(`${mine.length} rows: ${['Courses', 'Shortcuts', 'Agility Arena'].map(g => `${mine.filter(m => m.group === g).length} ${g === 'Agility Arena' ? 'for the arena' : g.toLowerCase()}`).join(', ')}`);
+  agilityNotes.push(`the arena: ${xs.length * zs.length} platforms, ${edges.length} obstacles, ${pillars.length} ticket pillars; from one pillar to the next ${way.map(w => `${w.count.toFixed(3)} obstacles and ${(w.xp / 10).toFixed(2)} XP from level ${w.from}`).join(', ')} (the last is used: ${own / 10} XP); a pillar every ${moves} ticks`);
+  agilityNotes.push(`tickets: ${batches.map(([n, xp]) => `${n} for ${xp / 10} XP`).join(', ')}`);
+  agilityNotes.push(`left out: ${[...new Set(Object.values(LEFT_OUT))].filter(v => !/quest reward|cheat/.test(v)).join(', ')}, and quest rewards`);
+}
+
+await agility();
+
 // ── Catalog of every item the data mentions ───────────────────────────────
 const used = new Set();
+// banked: what a bank screenshot is read for. Not what only Thieving and Agility
+// name (loot, a lockpick, an Agility Arena ticket): no plan takes those from a
+// bank, so reading them would only add lines to check.
+const banked = new Set();
+const NO_BANK = new Set(['thieving', 'agility']);
 for (const m of methods) {
-  for (const k of Object.keys(m.in)) used.add(k);
-  for (const k of Object.keys(m.out)) used.add(k);
-  for (const k of m.tools || []) used.add(k);
+  // (icon: what a row is shown as, when that's nothing it takes or makes: a door's lockpick)
+  for (const k of [...Object.keys(m.in), ...Object.keys(m.out), ...(m.tools || []), ...(m.icon ? [m.icon] : [])]) {
+    used.add(k);
+    if (!NO_BANK.has(m.skill)) banked.add(k);
+  }
 }
-for (const groups of Object.values(bankGroups)) for (const g of groups) for (const k of g.items) used.add(k);
+for (const groups of Object.values(bankGroups)) for (const g of groups) for (const k of g.items) { used.add(k); banked.add(k); }
 // Potions are made as 3 doses but often traded as 4; keep the 4-dose items so a
 // price can be scaled from them when the 3-dose has no trades.
 for (const k of [...used]) {
   const m = k.match(/^3dose(.+)$/);
-  if (m && ITEM.has('4dose' + m[1])) used.add('4dose' + m[1]);
+  if (m && ITEM.has('4dose' + m[1])) { used.add('4dose' + m[1]); banked.add('4dose' + m[1]); }
 }
 
 const names = [...used].filter(k => !virtualItems[k] && !chargeItems[k]).map(need).sort((a, b) => ITEM.get(a).id - ITEM.get(b).id);
@@ -1775,8 +2541,9 @@ for (const [slug, v] of Object.entries(chargeItems)) {
 const out = `// Generated by build-data.mjs. Do not edit by hand; change the script and re-run it.
 // Levels and XP come from Lost City's server content (LostCityRS/Content, rev 274, MIT);
 // XP is in tenths, like the server keeps it. Item names, ids and shop values are from
-// LostHQ's item database (GPL-3.0). The rows of Crafting, Mining and Smithing are those
-// of LostHQ's calculators (GPL-3.0), checked against the server. RuneScape is (c) Jagex Ltd.
+// LostHQ's item database (GPL-3.0). From Crafting on (Mining, Smithing, Fishing, Cooking,
+// Thieving, Agility) the rows are those of LostHQ's calculators (GPL-3.0), checked against
+// the server. RuneScape is (c) Jagex Ltd.
 //
 // A method turns "in" items into "out" items (no "in" at all: gathering, like
 // Woodcutting). unit/units, when set, is what one action uses (one essence, one
@@ -1806,6 +2573,8 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // thing it makes (a gem rock; the bar a Mining row mines the ore for).
 // lead and as: a row counted in what its output is for, with the words to say so
 // (lead "Ore for", as ["steel bar", "steel bars"]: "Ore for 400 steel bars: …").
+// as on its own: a row counted in its unit, said in full ("450 laps of the Gnome
+// Stronghold course").
 // after: methods that share an ingredient with this one and get it first when a
 // bank can make either (Herblore: super attacks before superantipoisons).
 // aside: not what a plan trains with unless you pick it or your bank holds it
@@ -1814,6 +2583,14 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // level (Cooking: food burns), and plans count the tries it takes. A goal's
 // choices can set chanceAt (another fire) and chanceWorn (cooking gauntlets),
 // which go before it.
+// odds: how often a try works, as the rolls the server makes for it ([[low,
+// high], …]: every one has to go your way). Only said, never counted: a try that
+// fails takes nothing (a pocket picked, a lock, a shortcut you can slip on).
+// exchange: a method that earns something handed in for XP later, in batches
+// worth more the bigger they are (an Agility Arena ticket): { own: its XP before
+// that, batches: [[size, xp], …], biggest first }. Its xp here is own + the
+// smallest batch's rate; a plan hands its tickets in together and counts each
+// at the average of the biggest batches they fill (planner.js: averaged).
 // An item with gp is always worth that (a coin is 1 gp): no market price. One
 // with charge is what a worn item gives while it lasts (a ring of forging's 140
 // bars): a step on the way turns the item into them, so plans count whole rings.
@@ -1860,6 +2637,8 @@ for (const note of miningNotes) console.log(`  mining: ${note}`);
 for (const note of smithingNotes) console.log(`  smithing: ${note}`);
 for (const note of fishingNotes) console.log(`  fishing: ${note}`);
 for (const note of cookingNotes) console.log(`  cooking: ${note}`);
+for (const note of thievingNotes) console.log(`  thieving: ${note}`);
+for (const note of agilityNotes) console.log(`  agility: ${note}`);
 
 // ── Bank screenshots ───────────────────────────────────────────────────────
 // What bankread.js needs to read a bank from a screenshot, loaded only when one
@@ -1919,7 +2698,7 @@ async function bankScreenshots() {
   const objFiles = (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.obj'));
   for (const f of objFiles) {
     for (const block of (await readConfig(scripts(f))).values()) {
-      if (!items[block.name] || fixedPrices[block.name] != null) continue;      // (coins aren't read: they're a fee here, not a bank item)
+      if (!banked.has(block.name) || fixedPrices[block.name] != null) continue;      // (coins aren't read: they're a fee or loot here, not a bank item)
       for (const [k, v] of Object.entries(block.props)) if (/^count\d+$/.test(k)) variants.set(need(v.split(',')[0]), block.name);
     }
   }
@@ -1962,8 +2741,8 @@ async function bankScreenshots() {
     if (!outlineOf(px)) return;
     if (seen.has(key)) {
       const kept = seen.get(key);
-      if (items[slug] && slug !== kept.slug && !kept.also?.includes(slug)) (kept.also ||= []).push(slug);
-      else if (!items[slug] && items[kept.slug] && !kept.of && kept.slug !== unidHerbs.item && !slug.startsWith('cert_')
+      if (banked.has(slug) && slug !== kept.slug && !kept.also?.includes(slug)) (kept.also ||= []).push(slug);
+      else if (!banked.has(slug) && banked.has(kept.slug) && !kept.of && kept.slug !== unidHerbs.item && !slug.startsWith('cert_')
         && (ITEM.get(slug).tradeable === true || KEEPSAKES.has(slug))) {
         // "Ring of dueling(7)" … "(1)" are one name; beside the (8) they're the same ring, part used
         const bare = n => n.replace(/\s*\(\d+\)$/, '');
@@ -1986,7 +2765,7 @@ async function bankScreenshots() {
   // An amulet of glory with no charges left looks the same again: it's the next
   // guess, before the plain dragonstone amulet.
   const enchantedFirst = methods.filter(m => m.id.startsWith('cr_ench_')).map(m => Object.keys(m.out)[0]).flatMap(k => (unchargedOf[k] ? [k, unchargedOf[k]] : [k]));
-  for (const name of [...enchantedFirst, ...names]) if (fixedPrices[name] == null) add(name);
+  for (const name of [...enchantedFirst, ...names]) if (fixedPrices[name] == null && banked.has(name)) add(name);
   for (const [v, base] of variants) add(v, { of: base });
   const ours = new Set(entries.map(x => x.e.slug));
   for (const { px } of [...entries]) {

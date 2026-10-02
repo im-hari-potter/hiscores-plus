@@ -13,7 +13,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.7.0';
+const VERSION = '2.8.0';
 const MAX_COMPARE = 5;
 
 // How to reach the API:

@@ -13,7 +13,10 @@ import { xpForLevel, levelForXp } from './skills.js';
 const BASE = process.env.BASE || 'http://localhost:8787';
 const SHOTS = process.env.SHOTS || '/tmp';
 const results = [];
+// ONLY=<pattern>: run just the checks whose name matches (while writing one; the full run is what counts).
+const ONLY = process.env.ONLY ? new RegExp(process.env.ONLY, 'i') : null;
 const check = async (name, fn) => {
+  if (ONLY && !ONLY.test(name)) { results.push(['skip', name]); return; }
   try { await fn(); results.push(['ok', name]); }
   catch (e) {
     // (with the line of this file it happened on)
@@ -99,7 +102,7 @@ await check('unranked combat skills give a combat range and bounded tiles', asyn
   assert.ok(await page.locator('.tile.unranked').count() >= 3);
 });
 await page.screenshot({ path: `${SHOTS}/3-lowbie-combat.png`, fullPage: true });
-await page.click('#filter-seg [data-filter="all"]');
+if (!ONLY) await page.click('#filter-seg [data-filter="all"]');
 
 await check('compare 5 players with leaders highlighted', async () => {
   await page.click('.tab[data-tab="compare"]');
@@ -159,9 +162,9 @@ await check('compare sorts skills by a player, keeping Combat and Overall on top
   assert.equal((await skillNames())[2], 'Attack');
   assert.equal(await page.locator('.sort-note').count(), 0);
 });
-await page.click('[data-csort="p:demo_main"]');
+if (!ONLY) await page.click('[data-csort="p:demo_main"]');
 await page.screenshot({ path: `${SHOTS}/4b-compare-sorted.png` });
-await page.click('[data-csort-reset]');
+if (!ONLY) await page.click('[data-csort-reset]');
 
 await check('gains shows XP gained after the player trains', async () => {
   await fetch(BASE + '/__mock/bump?name=demo_main&type=1&xp=12345', { method: 'POST' });
@@ -1277,8 +1280,16 @@ const planLines = sec => sec.locator('.steps > .step').evaluateAll(els => els.ma
 async function dragLine(sec, from, to) {
   // (scrolled to by hand: the plan is redrawn as prices arrive, and a redraw mid-wait would lose the element)
   await sec.locator('.steps').first().evaluate(el => el.scrollIntoView({ block: 'center' }));
-  const a = await sec.locator(`.steps.movable > .step[data-step="${from}"]`).first().boundingBox();
-  const b = await sec.locator(`.steps.movable > .step[data-step="${to}"]`).first().boundingBox();
+  // (and looked for again when a redraw took the line away just then)
+  const box = async id => {
+    for (let tries = 0; tries < 30; tries++) {
+      const found = await sec.locator(`.steps.movable > .step[data-step="${id}"]`).first().boundingBox().catch(() => null);
+      if (found) return found;
+      await page.waitForTimeout(100);
+    }
+    throw new Error(`no line of ${id} to drag`);
+  };
+  const a = await box(from), b = await box(to);
   await page.mouse.move(a.x + 40, a.y + a.height / 2);
   await page.mouse.down();
   await page.mouse.move(a.x + 60, a.y + a.height / 2, { steps: 4 });
@@ -1536,7 +1547,7 @@ await check("fishing: no bank, the gear to bring and the bait or feathers to buy
     await card.locator('[data-mix="fi_raw_bass"]').fill('500');
     await card.locator('[data-mix="fi_raw_bass"]').press('Tab');
     await card.locator('.plan-sec', { hasText: 'Your mix +50,000 XP' }).waitFor();
-    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Your mix' }).locator('.step').innerText()), /^500 × Raw bass \+50,000 XP/);
+    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Your mix +50,000 XP' }).locator('.step').innerText()), /^500 × Raw bass \+50,000 XP/);
     assert.equal(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).locator('.step').innerText()), '1,456 × Raw trout +72,800 XP');
     assert.match(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).innerText()), /To collect or buy: 1,456 Feather/);
     await page.screenshot({ path: `${SHOTS}/10n-fishing.png`, fullPage: true });
@@ -1768,6 +1779,221 @@ await check('cooking: a pie is put together on the way and every one goes in the
   }
 });
 
+await check("thieving: no bank; pockets, stalls, chests and doors with the server's numbers, how often a theft works, and loot worth its coins", async () => {
+  await planAs('old badger', 'Old Badger');
+  await addGoal('thieving', 60);
+  const card = goalCard('Thieving');
+  try {
+    await card.locator('.plan').waitFor();
+    const t = flat(await card.innerText());
+    assert.match(t, /Level 54 → 60/);
+    assert.match(t, /Thieving takes nothing but a lockpick for some locks, so this plan doesn't use your bank\. Counts are thefts that work: one that fails gives no XP\./);
+    assert.doesNotMatch(t, /From your bank|Use my bank|Round up|To collect or buy|Buying it all|Tickets exchanged/);
+    assert.match(t, /To reach your goal: 122,770 XP/);
+    // nothing picked: a pocket, the best one at level 54. (A chest is more XP and empty for minutes after;
+    // Fremennik citizens, 65 XP at level 45, wait for a quest.) 30 coins a guard, and coins are worth what they are
+    const plan = card.locator('.plan-sec', { hasText: 'To reach your goal' });
+    assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'th_guard');
+    assert.equal(flat(await plan.locator('.step').innerText()), '2,624 × Guard +122,803.2 XP');
+    assert.match(flat(await plan.innerText()), /Loot: 30 coins\. Caught: stunned for 5 seconds, hit for 2\. Your loot is worth: 78,720 gp$/);
+    assert.equal(await plan.locator('.step .item').getAttribute('title'), 'Coins', 'the pile a stack of 30 coins is in the game');
+    // the calculator's four tabs, a group at a time
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Target', 'XP', 'Net/item', 'gp/XP', 'To goal', 'Plan to make']);
+    assert.deepEqual((await card.locator('.group-pick .chip').allInnerTexts()).map(flat), ['NPCs', 'Stalls', 'Chests', 'Doors', 'All']);
+    assert.equal(flat(await card.locator('.group-pick .chip.on').innerText()), 'NPCs');
+    const names = async () => (await card.locator('tr[data-method] td:nth-child(2)').allInnerTexts()).map(flat);
+    assert.deepEqual(await names(), ['Man or woman', 'Farmer', 'Digsite workman', 'Warrior', 'Rogue', 'Guard', 'Fremennik citizen', 'Knight of Ardougne', 'Yanille watchman', 'Paladin', 'Gnome', 'Hero']);
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+    const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
+    assert.deepEqual(await cells('th_knight'), ['55', 'Knight of Ardougne', '84.3', '+50', '−0.59', '1,457', ''], '50 coins a pocket: 0.59 gp made for every XP');
+    assert.deepEqual((await cells('th_man')).slice(0, 5), ['1', 'Man or woman', '8', '+3', '−0.38']);
+    assert.match(await card.locator('tr[data-method="th_knight"]').getAttribute('class'), /\bdim\b/, 'above level 54');
+    // the server's level where it isn't the calculator's, and the rows only the server has
+    assert.deepEqual((await cells('th_digworkman')).slice(0, 3), ['25', 'Digsite workman', '10.4']);
+    assert.match(await tip('th_digworkman'), /A specimen brush can't be traded, so it isn't counted in what a theft is worth\. Caught: stunned for 5 seconds, hit for 1\. LostHQ's calculator says level 10; the server asks for 25\./);
+    assert.match(await tip('th_fremennik'), /^Fremennik citizen: level 45, 65 XP each\nWorks about 58 in 100 tries at level 54; 94 in 100 at level 99\.\nLoot: 40 coins\. Caught: stunned for 5 seconds, hit for 2\. Once The Fremennik Trials is done\. Not on LostHQ's calculator: the server's own level and XP\./);
+    // how often a pocket is picked at your level, by the server's roll; and its loot, as the server hands it out
+    assert.match(await tip('th_rogue'),
+      /^Rogue: level 32, 36\.5 XP each\nWorks about 64 in 100 tries at level 54; 94 in 100 at level 99\.\nLoot: 25 to 40 coins every time; now and then on top of that, 8 air runes \(8 in 116\), jug of wine \(6 in 122\), lockpick \(5 in 127\), iron dagger\(p\) \(1 in 128\)\. Caught: stunned for 5 seconds, hit for 2\./);
+    assert.match(await tip('th_hero'), /^Hero: level 80, 273\.3 XP each\nWorks about 32 in 100 tries at level 80; 39 in 100 at level 99\.\nLoot: 200 to 300 coins every time/);
+    assert.equal(await card.locator('tr[data-method="th_gnome"] .item').first().getAttribute('title'), 'King worm', 'what a gnome gives every time');
+    // stalls: one thing by its weight, and how long one stays empty
+    await card.locator('[data-tgroup="Stalls"]').click();
+    await card.locator('tr[data-method="th_stall_gem"]').waitFor();
+    assert.deepEqual(await names(), ['Bakery stall', 'Tea stall', 'Rock cake stall', 'Silk stall', 'Fur stall', 'Fur stall (Rellekka)', 'Fish stall (Rellekka)', 'Silver stall', 'Spice stall', 'Gem stall']);
+    assert.match(await tip('th_stall_gem'), /^Gem stall: level 75, 16 XP each\nLoot: one of uncut sapphire \(105 in 128\), uncut emerald \(17 in 128\), uncut ruby \(5 in 128\) or uncut diamond \(1 in 128\)\. Empty for about 6 minutes after a theft\./);
+    assert.match(await tip('th_stall_rockcake'), /^Rock cake stall: level 15, 6\.5 XP each\nLoot: rock cake\. A rock cake can't be traded.*In Gu'Tanoth, the ogres' city\. Not on LostHQ's calculator/);
+    assert.deepEqual((await cells('th_stall_rockcake')).slice(2, 5), ['6.5', '+0', '0']);
+    assert.equal(await card.locator('tr[data-method="th_stall_fish_rellekka"] .item').first().getAttribute('title'), 'Raw salmon', '14 times in 20');
+    // chests: everything in them, every time
+    await card.locator('[data-tgroup="Chests"]').click();
+    await card.locator('tr[data-method="th_chest_castle"]').waitFor();
+    assert.deepEqual(await names(), ['10 coin chest', 'Nature rune chest', '50 coin chest', 'Steel arrowtips chest', 'Blood rune chest', 'Ardougne castle chest']);
+    assert.deepEqual((await cells('th_chest_10_coins')).slice(0, 5), ['13', '10 coin chest', '7.8', '+10', '−1.28']);
+    assert.match(await tip('th_chest_10_coins'), /Empty for about 9 seconds after it's looted\. LostHQ's calculator says level 1; the server asks for 13\./);
+    assert.match(await tip('th_chest_castle'), /^Ardougne castle chest: level 72, 500 XP each\nLoot: 1,000 coins, raw shark, adamantite ore and uncut sapphire\. Empty for about 8 minutes after it's looted\. A second trap then teleports you away\./);
+    assert.match(await tip('th_chest_arrowtips'), /^Steel arrowtips chest: level 47, 150 XP each\nTools: Lockpick\nLoot: 5 steel arrowtips and 20 coins\./);
+    // doors: a lock gives nothing but XP; some want a lockpick, some have a trap to get past first
+    await card.locator('[data-tgroup="Doors"]').click();
+    await card.locator('tr[data-method="th_door_yanille"]').waitFor();
+    assert.deepEqual(await names(), ['Ardougne house door (10 coin chest)', 'Ross house door', 'Ardougne house door (nature rune chest)', 'Magic axe hut door', 'Ardougne sewer gate',
+      'Pirate hideout door', 'Chaos Druid Tower door', 'Ardougne castle door', 'Yanille dungeon door']);
+    assert.match(await tip('th_door_druid_tower'), /^Chaos Druid Tower door: level 46, 37\.5 XP each\nWorks about 17 in 100 tries at level 54; 30 in 100 at level 99\.\nThe lock has a trap that can go off first\./);
+    assert.match(await tip('th_door_axe_hut'), /^Magic axe hut door: level 23, 25 XP each\nWorks about 41 in 100 tries at level 54; 69 in 100 at level 99\.\nTools: Lockpick\nLostHQ's calculator says 22\.5 XP; the server gives 25\./);
+    assert.match(await tip('th_door_house_10'), /East of the market in East Ardougne: the house with a 10 coin chest\. Not on LostHQ's calculator/);
+    await card.locator('tr[data-method="th_door_axe_hut"] td:nth-child(2)').click();
+    await plan.locator('.step', { hasText: 'Magic axe hut door' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '4,911 × Magic axe hut door +122,775 XP');
+    assert.equal(flat(await plan.locator('.collect', { hasText: 'Also bring' }).innerText()), 'Also bring: Lockpick');
+    assert.doesNotMatch(flat(await plan.innerText()), /is worth|Net:/, 'nothing comes of a lock but XP');
+    // a mix of your own: 500 pieces of silk first, then guards for the rest
+    await card.locator('select[data-gopt="fill"]').selectOption('th_guard');
+    await plan.locator('.step', { hasText: 'Guard' }).waitFor();
+    await card.locator('[data-tgroup="Stalls"]').click();
+    await card.locator('[data-mix="th_stall_silk"]').fill('500');
+    await card.locator('[data-mix="th_stall_silk"]').press('Tab');
+    await card.locator('.plan-sec', { hasText: 'Your mix +12,000 XP' }).waitFor();
+    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Your mix +12,000 XP' }).locator('.step').innerText()), /^500 × Silk stall \+12,000 XP/);
+    assert.equal(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).locator('.step').innerText()), '2,367 × Guard +110,775.6 XP');
+    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).innerText()), /Your loot is worth: 71,010 gp/);
+    await page.screenshot({ path: `${SHOTS}/10p-thieving.png`, fullPage: true });
+    await card.locator('[data-act="mix-clear"]').click();
+    // its prices: the loot, but for coins. No bank of its own
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="thieving"]');
+    await page.waitForSelector('[data-price="silk"]');
+    assert.match(flat(await text('#prices-body')), /^Loot .*Spade.*Lockpick.*King worm.*Silk.*Grey wolf fur.*Uncut diamond.*Adamantite ore/);
+    assert.equal(await page.locator('[data-price="coins"], [data-price="coins_25"], [data-price="rockcake"]').count(), 0, 'coins are 1 gp each, and a rock cake can\'t be traded');
+    await page.click('.tab[data-tab="bank"]');
+    assert.equal(await page.locator('#bank-head [data-bskill="thieving"]').count(), 0);
+  } finally {
+    await removeGoal(card);
+    await noGoalFor('Thieving');
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="herblore"]');
+    await page.click('.tab[data-tab="goals"]');
+  }
+});
+
+await check('agility: no bank and nothing to price; laps of a course; an Agility Arena ticket at the average of the batches a plan exchanges, or pinned to one', async () => {
+  await planAs('old badger', 'Old Badger');
+  await addGoal('agility', 70);
+  const card = goalCard('Agility');
+  try {
+    await card.locator('.plan').waitFor();
+    const t = flat(await card.innerText());
+    assert.match(t, /Level 53 → 70/);
+    assert.match(t, /Agility takes nothing and makes nothing to sell, so this plan doesn't use your bank or any prices\./);
+    assert.doesNotMatch(t, /From your bank|Use my bank|Round up|To collect or buy|Buying it all|is worth|Net\/item|gp\/XP|Cheapest XP/);
+    assert.match(t, /To reach your goal: 600,933 XP/);
+    // nothing picked: laps of the best course at level 53
+    const plan = card.locator('.plan-sec', { hasText: /reach your goal|fill the batch/ });
+    assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'ag_wilderness');
+    assert.equal(flat(await plan.locator('.step').innerText()), '1,052 laps of the Wilderness course +601,112.8 XP');
+    assert.equal(flat(await card.locator('select[data-gopt="fill"] option:checked').innerText()), 'Wilderness course (lvl 52, 571.4 XP per lap)');
+    assert.match(flat(await plan.innerText()), /5 obstacles in order, and the bonus for finishing the lap\. The ridge at its gate is 15 XP more each way, once a visit: LostHQ's calculator counts it in every lap \(586\.4 XP\)\.$/);
+    assert.equal(await plan.locator('.money').count(), 0, 'no money to speak of');
+    assert.equal(await plan.locator('.step .item.blank .ico-agility').count(), 1, 'no item to show: the skill\'s icon in its place');
+    // courses, shortcuts and the arena, with no money columns
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Course or obstacle', 'XP', 'To goal', 'Plan to make']);
+    assert.deepEqual((await card.locator('.bar .seg button').allInnerTexts()).map(flat), ['Level', 'XP each']);
+    assert.deepEqual((await card.locator('.group-pick .chip').allInnerTexts()).map(flat), ['Courses', 'Shortcuts', 'Agility Arena', 'All']);
+    const names = async () => (await card.locator('tr[data-method] td:nth-child(2)').allInnerTexts()).map(flat);
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => flat(c));
+    const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
+    assert.deepEqual(await names(), ['Gnome Stronghold course per lap', 'Barbarian Outpost course per lap', 'Wilderness course per lap']);
+    assert.deepEqual(await cells('ag_barbarian'), ['35', 'Barbarian Outpost course per lap', '139.5', '4,308', ''], 'three crumbling walls a lap, where the calculator counts one (114.5)');
+    assert.equal(await tip('ag_barbarian'), 'Barbarian Outpost course: level 35, 139.5 XP per lap (obstacles 97.5 + lap bonus 42)\n7 obstacles in order, 3 of them crumbling walls, and the bonus for finishing the lap. '
+      + "LostHQ's calculator counts one wall: 114.5 XP. The pipe into the course is 10 XP more, once a visit.");
+    assert.equal(await tip('ag_gnome'), 'Gnome Stronghold course: level 1, 86.5 XP per lap (obstacles 47.5 + lap bonus 39)\n7 obstacles in order, and the bonus for finishing the lap.');
+    assert.match(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()), /^To goal = how many on their own · Plan to make = your mix of ways to train\. A row marked "per lap" counts laps\.$/);
+    await card.locator('[data-tgroup="Shortcuts"]').click();
+    await card.locator('tr[data-method="ag_rubble_yanille"]').waitFor();
+    assert.deepEqual(await names(), ['A wooden log (Karamja)', 'Stepping stones (Karamja)', 'Crumbling wall (Falador)', 'Climbing rocks (Yanille)', 'Ropeswing (Brimhaven)', 'Monkeybars (Edgeville Dungeon)',
+      'Climbing rocks (Watchtower)', 'Log balance (Coal Trucks)', 'Balancing ledge (Yanille Dungeon)', 'Obstacle pipe (Yanille Dungeon)', 'Monkeybars (Yanille Dungeon)', 'Pile of rubble (Yanille Dungeon)']);
+    assert.deepEqual((await cells('ag_wall_falador')).slice(0, 3), ['5', 'Crumbling wall (Falador)', '12.5']);
+    assert.equal(await tip('ag_wall_falador'), "Crumbling wall (Falador): level 5, 12.5 XP each\nLostHQ's calculator says 0.5 XP; the server gives 12.5, the same as a wall of the Barbarian Outpost course.");
+    assert.equal(await tip('ag_stones_karamja'), "Stepping stones (Karamja): level 1, 3 XP each\nWorks about 62 in 100 tries at level 53; 99 in 100 at level 99.\nA slip still gives 1 XP. LostHQ's calculator says level 30; the server asks for none.");
+    assert.equal(await tip('ag_ledge_yanille'), "Balancing ledge (Yanille Dungeon): level 40, 22.5 XP each\nWorks about 86 in 100 tries at level 53; every time from level 66.\nNot on LostHQ's calculator: the server's own level and XP.");
+    assert.match(await card.locator('tr[data-method="ag_bars_yanille"]').getAttribute('class'), /\bdim\b/, 'level 57');
+    // the Agility Arena: one row, a ticket. Its XP on the way, and what the tickets of this goal are exchanged for on average
+    await card.locator('[data-tgroup="Agility Arena"]').click();
+    await card.locator('tr[data-method="ag_ticket"]').waitFor();
+    assert.deepEqual(await names(), ['Agility Arena ticket', 'Arena ticket you already have']);
+    assert.deepEqual(await cells('ag_ticket'), ['1', 'Agility Arena ticket', '360.9', '1,666', '']);
+    assert.match(await tip('ag_ticket'), /^Agility Arena ticket: level 1, 360\.9 XP each \(on the way 57\.8 \+ exchanged 303\.1\)\nOn average 3\.3 obstacles lie between one ticket pillar and the next: 57\.8 XP on the way\. Below level 40 some are shut and the way round is longer, so it's a little more\. A pillar a minute at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss\. Going in costs 200 coins\.$/);
+    assert.equal(await card.locator('.tip', { hasText: 'Arena tickets' }).count(), 0, 'no tickets in the plan yet');
+    await card.locator('tr[data-method="ag_ticket"] td:nth-child(2)').click();
+    await plan.locator('.step', { hasText: 'Agility Arena ticket' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '1,666 × Agility Arena ticket +601,259.4 XP');
+    const tickets = plan.locator('.tip', { hasText: 'Arena tickets' });
+    assert.equal(flat(await tickets.innerText()), 'Arena tickets: the 1,666 in this plan are exchanged together, as 1 × 1,000, 6 × 100, 2 × 25, 1 × 10 and 6 on their own: 303.1 XP each on average.');
+    assert.equal(await plan.locator('.step .item').getAttribute('title'), 'Agility arena ticket');
+    // the batch is a choice on the goal: pinned to 1,000 at a time, every ticket is 377.8 XP whatever the plan's size
+    const batch = card.locator('select[data-opt="tickets"]');
+    assert.deepEqual((await batch.locator('option').allInnerTexts()).map(flat), ['In the biggest batches', '1,000 at a time', '100 at a time', '25 at a time', '10 at a time', 'One at a time']);
+    assert.match(await card.locator('label:has(select[data-opt="tickets"])').getAttribute('title'), /240 XP for one, 248 XP each for 10, 260 XP each for 25, 280 XP each for 100, 320 XP each for 1,000\./);
+    await batch.selectOption('x1000');
+    await plan.locator('.step', { hasText: '1,591' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '1,591 × Agility Arena ticket +601,079.8 XP');
+    assert.equal(flat(await tickets.innerText()), 'Arena tickets: counted at 320 XP each, as exchanged 1,000 at a time. This plan has 1,591: the last 591 give theirs with the next full 1,000.');
+    assert.deepEqual((await cells('ag_ticket')).slice(2, 4), ['377.8', '1,591']);
+    assert.deepEqual((await goalOf('old_badger', 'agility')).opts, { tickets: 'x1000' });
+    await batch.selectOption('x1');
+    await plan.locator('.step', { hasText: '2,018' }).waitFor();
+    assert.equal(flat(await tickets.innerText()), 'Arena tickets: counted at 240 XP each, as exchanged one at a time.');
+    await batch.selectOption('best');
+    await plan.locator('.step', { hasText: '1,666' }).waitFor();
+    assert.equal((await goalOf('old_badger', 'agility')).opts, undefined, 'the first of the list is how it starts: nothing to keep');
+    // tickets you've saved are typed in under Plan to make, and exchanged with the ones still to earn: 600 saved and
+    // 100 laps of the Wilderness course leave 1,000 to earn, one batch of 1,000 and six of 100 in all
+    await card.locator('[data-mix="ag_ticket_held"]').fill('600');
+    await card.locator('[data-mix="ag_ticket_held"]').press('Tab');
+    await card.locator('.plan-sec', { hasText: 'Your mix' }).locator('.step').first().waitFor();
+    await card.locator('[data-tgroup="Courses"]').click();
+    await card.locator('[data-mix="ag_wilderness"]').fill('100');
+    await card.locator('[data-mix="ag_wilderness"]').press('Tab');
+    await card.locator('.plan-sec', { hasText: 'Your mix +240,140 XP' }).waitFor();
+    assert.deepEqual((await card.locator('.plan-sec', { hasText: 'Your mix' }).locator('.step').allInnerTexts()).map(flat), ['600 × Arena ticket you already have +183,000 XP', '100 laps of the Wilderness course +57,140 XP']);
+    assert.match(flat(await plan.locator('h4').innerText()), /^Then, to reach your goal: 360,793 XP$/);
+    assert.equal(flat(await plan.locator('.step').innerText()), '1,000 × Agility Arena ticket +362,800 XP');
+    assert.equal(flat(await tickets.innerText()), "Arena tickets: the 1,600 in this plan are exchanged together, as 1 × 1,000 and 6 × 100: 305 XP each on average. That's 2,007 XP more than your goal needs: the batch has to be whole.");
+    await page.screenshot({ path: `${SHOTS}/10q-agility.png`, fullPage: true });
+    // 1,950 saved: at 320 each they'd cover the goal, but only as two whole thousands. The 50 that fill the batch are planned
+    await card.locator('[data-act="mix-clear"]').click();
+    await card.locator('[data-tgroup="Agility Arena"]').click();
+    await card.locator('[data-mix="ag_ticket_held"]').fill('1950');
+    await card.locator('[data-mix="ag_ticket_held"]').press('Tab');
+    await card.locator('.plan-sec', { hasText: 'Your mix +624,000 XP' }).waitFor();
+    assert.doesNotMatch(flat(await card.locator('.plan-sec', { hasText: 'Your mix +624,000 XP' }).locator('h4').innerText()), /That reaches your goal/);
+    assert.match(flat(await plan.locator('h4').innerText()), /^Then, to fill the batch$/);
+    assert.equal(flat(await plan.locator('.step').innerText()), '50 × Agility Arena ticket +18,890 XP');
+    assert.equal(flat(await tickets.innerText()), "Arena tickets: the 2,000 in this plan are exchanged together, as 2 × 1,000: 320 XP each. That's 41,957 XP more than your goal needs: the batch has to be whole.");
+    assert.deepEqual([(await cells('ag_ticket'))[5], (await cells('ag_ticket_held'))[5]], ['50', '–']);
+    // only what's in the mix when the rest is laps: 250 tickets are two batches of 100 and two of 25
+    await card.locator('[data-act="mix-clear"]').click();
+    await card.locator('select[data-gopt="fill"]').selectOption('ag_wilderness');
+    await card.locator('[data-tgroup="Agility Arena"]').click();
+    await card.locator('[data-mix="ag_ticket"]').fill('250');
+    await card.locator('[data-mix="ag_ticket"]').press('Tab');
+    const mix = card.locator('.plan-sec', { hasText: 'Your mix +83,450 XP' });
+    await mix.waitFor();
+    assert.equal(flat(await mix.locator('.tip', { hasText: 'Arena tickets' }).innerText()), 'Arena tickets: the 250 in this plan are exchanged together, as 2 × 100 and 2 × 25: 276 XP each on average.');
+    assert.equal(flat(await plan.locator('.step').innerText()), '906 laps of the Wilderness course +517,688.4 XP');
+    assert.equal(await plan.locator('.tip', { hasText: 'Arena tickets' }).count(), 0, 'said once, where the tickets are');
+    await card.locator('[data-act="mix-clear"]').click();
+    // nothing to price: no Prices tab, and no bank of its own
+    await page.click('.tab[data-tab="prices"]');
+    assert.equal(await page.locator('#prices-head [data-bskill="agility"]').count(), 0);
+    assert.equal(await page.locator('#prices-head [data-bskill="thieving"]').count(), 1);
+    await page.click('.tab[data-tab="bank"]');
+    assert.equal(await page.locator('#bank-head [data-bskill="agility"]').count(), 0);
+  } finally {
+    await removeGoal(card);
+    await noGoalFor('Agility');
+  }
+});
+
 // (back to Demo Main for the checks that follow, whatever happened above)
 try { await planAs('demo main', 'Demo Main'); } catch (e) { results.push(['FAIL', 'back to Demo Main after the Old Badger checks', e.message.split('\n')[0]]); }
 
@@ -1825,7 +2051,8 @@ await check('mining: no bank, rocks to mine and what they are worth; limestone, 
     await card.locator('[data-mix="mi_bar_steel_bar"]').fill('1000');
     await card.locator('[data-mix="mi_bar_steel_bar"]').press('Tab');
     await card.locator('.plan-sec', { hasText: 'Your mix +135,000 XP' }).waitFor();
-    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Your mix' }).locator('.step').innerText()), /^Ore for 1,000 steel bars: 1,000 Iron ore \+ 2,000 Coal \+135,000 XP/);
+    // (by its XP: once ore and coal have a price, the section after it says "With your mix" too)
+    assert.match(flat(await card.locator('.plan-sec', { hasText: 'Your mix +135,000 XP' }).locator('.step').innerText()), /^Ore for 1,000 steel bars: 1,000 Iron ore \+ 2,000 Coal \+135,000 XP/);
     assert.equal(flat(await card.locator('.plan-sec', { hasText: 'Then, to reach your goal' }).locator('.step').innerText()),
       'Ore for 9,635 steel bars: 9,635 Iron ore + 19,270 Coal +1,300,725 XP');
     await page.screenshot({ path: `${SHOTS}/10k-mining-bars.png`, fullPage: true });
@@ -2320,7 +2547,7 @@ await check('settings shows totals and makes a backup that restores', async () =
   assert.match(await text('#settings-msg'), /Restored/);
 });
 await page.screenshot({ path: `${SHOTS}/7-settings.png` });
-await page.click('#settings-close');
+if (!ONLY) await page.click('#settings-close');
 
 await check('narrow window still works', async () => {
   await page.setViewportSize({ width: 340, height: 800 });

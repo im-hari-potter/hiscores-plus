@@ -36,8 +36,8 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 The planner works out what it takes to reach a goal, from your XP on the hiscores, what's in your bank
 and the prices you set. Any skill can have a goal. A skill with its full planner (marked with a dot
 when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woodcutting**,
-**Firemaking**, **Fletching**, **Crafting**, **Mining**, **Smithing**, **Fishing** and **Cooking**,
-with the other skills to follow.
+**Firemaking**, **Fletching**, **Crafting**, **Mining**, **Smithing**, **Fishing**, **Cooking**,
+**Thieving** and **Agility**, with the other skills to follow.
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
@@ -50,12 +50,14 @@ with the other skills to follow.
 
 - Every number comes from the game itself (Lost City's server content): the level each way to train
   needs, the XP it gives, and what it takes and makes. The maths is done in tenths of XP, like the
-  game does. The rows of Crafting, Mining, Smithing, Fishing and Cooking are those of LostHQ's
-  calculators ([Crafting](https://2004.losthq.rs/?p=calculators&calc=crafting),
+  game does. From Crafting on, the rows are those of LostHQ's calculators
+  ([Crafting](https://2004.losthq.rs/?p=calculators&calc=crafting),
   [Mining](https://2004.losthq.rs/?p=calculators&calc=mining),
   [Smithing](https://2004.losthq.rs/?p=calculators&calc=smithing),
   [Fishing](https://2004.losthq.rs/?p=calculators&calc=fishing),
-  [Cooking](https://2004.losthq.rs/?p=calculators&calc=cooking)), each one checked against the
+  [Cooking](https://2004.losthq.rs/?p=calculators&calc=cooking),
+  [Thieving](https://2004.losthq.rs/?p=calculators&calc=thieving),
+  [Agility](https://2004.losthq.rs/?p=calculators&calc=agility)), each one checked against the
   server; where the two differ, the server's number is used.
 - How many you need = the XP still to go ÷ the XP each one gives, rounded up.
 - **Gross** is what something is worth, with nothing taken off. **Net** takes off what you pay for its
@@ -216,6 +218,56 @@ with the other skills to follow.
     - Dough takes a bucket of water here; in the game a jug of water does too.
     - Quest food (karambwan, slimey eel, lava eel) and the two fish only the trawler gives (sea
       turtle, manta ray) aren't what a plan picks by itself: click one to train with it.
+  - Thieving has every row of LostHQ's Thieving calculator, in its tabs: **NPCs**, **Stalls**,
+    **Chests** and **Doors**. It never uses your bank, like Mining and Fishing.
+    - A plan counts **thefts that work**: one that fails gives no XP. Hover over a row for how often
+      it works at your level, by the server's own roll (a guard: 59 in 100 at level 54).
+    - With nothing picked, a plan picks pockets, the best one at your level. A chest is more XP, and
+      empty for minutes after.
+    - **Net/item** is what one theft brings in on average: its coins, and its loot at the price it
+      sells for, handed out the way the server does it. A rogue's 25 to 40 coins come every time and
+      a lockpick on top 5 times in 127; a stall gives one thing, by its weight.
+    - Three doors and the steel arrowtips chest want a **lockpick** (Also bring).
+    - Where the calculator and the server differ, the server is followed: a Digsite workman takes
+      level 25 (the calculator says 10), the 10 coin chest level 13 (1), and the Magic axe hut door
+      gives 25 XP (22.5). Added, since the server has them: Fremennik citizens (level 45, 65 XP), the
+      rock cake stall in Gu'Tanoth, and two house doors in East Ardougne.
+    - Fremennik citizens and Rellekka's stalls wait for The Fremennik Trials, so a plan doesn't pick
+      them by itself.
+  - Agility has the courses and shortcuts of LostHQ's Agility calculator. Nothing goes in and nothing
+    comes out, so its plans have no bank and no money columns, and the Prices tab leaves it out.
+    - A course is counted in **laps**: its obstacles in order, and the bonus for the lap.
+      - A Barbarian Outpost lap is 139.5 XP: it climbs three crumbling walls. (The calculator counts
+        one: 114.5.)
+      - A Wilderness lap is 571.4 XP. The ridge at its gate is once a visit, not a lap. (The
+        calculator's 586.4 has it in.)
+    - Shortcuts are as the server has them: the Falador wall gives 12.5 XP (the calculator says 0.5),
+      and the Karamja stepping stones ask for no level (30). Added: the Yanille Agility dungeon's
+      ledge, pipe and rubble, and the climbing rocks on the Watchtower.
+    - **The Agility Arena is one row, a ticket**, in place of the calculator's 14 obstacles and five
+      exchanges. A ticket is worth the XP on the way to it, plus what it's exchanged for:
+      - **On the way: 57.8 XP.** The arena is 25 platforms with an obstacle between every two next to
+        each other, and a ticket pillar on all but one. The server lights a pillar at random, and a
+        ticket takes the way from one pillar to the next. Read off the server's map, the shortest way
+        is 3.3 obstacles on average over every pair of pillars, worth 57.8 XP. (Below level 40 some
+        obstacles are shut and the way round is longer, so it's a little more.)
+      - **Exchanged: 240 to 320 XP**, by the batch: 240 for one ticket, 248 each for 10, 260 for 25,
+        280 for 100, 320 for 1,000.
+      - **Together**: a plan exchanges its tickets together, in the biggest batches they fill, and
+        counts each at the average. 1,666 tickets are 1 × 1,000, 6 × 100, 2 × 25, 1 × 10 and 6 single
+        ones: 303.1 XP each, 360.9 with the way there. A batch has to be whole, so a goal just past
+        what 999 tickets give takes 1,000, and the plan says how much that is over.
+      - **Tickets exchanged**, on the goal, pins a batch instead: every ticket at 320 XP, say, when
+        you're saving up for 1,000 at a time, whatever the plan's size.
+      - **Arena ticket you already have** is for the ones you've saved: type how many under Plan to
+        make. They're exchanged with the ones still to earn (950 saved: 50 more fill the 1,000).
+      - The count is exact: the fewest tickets that reach the goal once they're exchanged. The average
+        is to a tenth of an XP. Saved tickets finished with something else, laps say, are rounded
+        down, so the laps never come out short.
+      - It counts a ticket for every pillar, one a minute at best. Miss a pillar and the next one
+        gives no ticket, so it takes more obstacles than this.
+    - Left out: obstacles that belong to a quest's own area (Trollheim, the lighthouse, Shilo Village,
+      the Underground Pass), and gnomeball.
 - Click an item a plan says to collect, buy or bring to open its page on the market.
 
 #### Check your prices first
@@ -283,7 +335,7 @@ the table's **Plan to make** column (1,000 prayer potions, then 2,000 super atta
 | **Total net gp toward goal** | Gross from banked supplies + net after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy. Net after rounding up my supplies isn't part of it, since rounding up would count those supplies twice | not shown |
 
 Sort the table by level, XP each, cheapest XP, or (with your bank in use) **Total net**, most gp toward
-your goal first.
+your goal first. Agility has nothing to price, so its table has no Net/item and gp/XP.
 
 For example, Herblore 74 → 78 with Super attack: with the bank off, **4,328** to the goal. With it on,
 **2,305** still needed after everything the bank makes, and the supplies those need. And with
@@ -395,6 +447,8 @@ supplies** looks past that (see above): it uses up your herbs and lists the vial
     - Tools (a chisel, a hammer, moulds, a needle) and thread are left out: a plan names the tools a
       row needs, it never counts them. Thread can still be typed in on the Crafting tab if you count
       yours.
+    - What only Thieving and Agility name isn't read either (silk, a lockpick, an Agility Arena
+      ticket): no plan takes it from a bank.
     - Items cut off at the top or bottom edge of the bank are skipped, so let screenshots overlap.
     - Where each item sits is kept too, for All. If you've dragged items around since, you can choose
       to put them back in your bank's order.
@@ -431,7 +485,8 @@ restore.
   from the market's JSON API.
 - The numbers are the game's own (Lost City's server content), so a few may surprise you: achey tree
   logs give no Firemaking XP in this version, any axe can be used at any Woodcutting level, a
-  steel bar makes 2 nails, and a cooked chompy is 14 Cooking XP.
+  steel bar makes 2 nails, a cooked chompy is 14 Cooking XP, a gnome's pocket always has a king worm
+  in it, and Falador's crumbling wall gives 12.5 Agility XP.
 - After an update, press Ctrl+R once if something looks off: a browser can hold on to the last
   version's files for a few minutes. (Item icons name their own sheet since v2.7, so they can't end
   up mixed with an older one.)
@@ -451,9 +506,11 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
     two always have to be from the same build: upload them together.
   - Content is [LostCityRS/Content](https://github.com/LostCityRS/Content), branch 274.
   - The LostHQ checkout is [LostHQ/2004](https://github.com/LostHQ/2004).
-  - The rows of Crafting, Mining, Smithing, Fishing and Cooking are read from LostHQ's
-    `js/calculators/` and checked against Content one by one. The build stops at any difference it
-    hasn't been told about.
+  - From Crafting on, a skill's rows are read from LostHQ's `js/calculators/` and checked against
+    Content one by one. The build stops at any difference it hasn't been told about, and at any
+    script that gives a skill XP without being listed.
+  - The Agility Arena's layout comes from Content's map (`maps/m43_149.jm2`), and the average way
+    between two ticket pillars is worked out from it.
 - Planner files:
   - `planner.js` holds the maths, all in tenths of XP like the game.
   - `planner-ui.js` builds the Goals, Bank and Prices views.
@@ -469,8 +526,8 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
 - Hiscores come from the Lost City hiscores API.
 - Levels and XP for the planner, and the bank layout and font the screenshot reader uses, come from
   Lost City's server content and client (MIT).
-- Item names and icons, and the rows of the Crafting, Mining, Smithing, Fishing and Cooking
-  calculators, come from [LostHQ](https://2004.losthq.rs) (GPL-3.0).
+- Item names and icons, and the rows of the Crafting, Mining, Smithing, Fishing, Cooking, Thieving
+  and Agility calculators, come from [LostHQ](https://2004.losthq.rs) (GPL-3.0).
 - Prices come from [markets.lostcity.rs](https://markets.lostcity.rs). How they're read follows
   LostKit's own price check.
 - Skill icons and RuneScape fonts come from [LostKit](https://github.com/LostHQ/LostKit-Electron)

@@ -9,6 +9,7 @@ import { mergeUnids, minorOf, choicesInUse, amountText } from './planner-ui.js';
 import {
   xp10ForLevel, levelForXp10, goalTargetXp10, rankForTop, indexMethods, planBank, planGoal, planMix,
   methodEconomics, maxRuns, Stock, bankValue, outAt, madeOver, gathers, castsIn, xpEach, chanceUnits, sureLevel, chanceOf, WHOLE,
+  averaged, exchangeXp, exchangeBatches,
 } from './planner.js';
 
 const ix = indexMethods(METHODS.filter(m => m.skill === 'herblore'));
@@ -2106,4 +2107,321 @@ test('crafting: an amulet of glory with no charges left is an item of its own (v
   assert.ok(!METHODS.some(m => m.in.amulet_of_glory || m.out.amulet_of_glory), 'banked and priced, not made: the row makes the charged one');
   // it's worth its own price in a bank
   assert.deepEqual(bankValue({ amulet_of_glory: 7, amulet_of_glory_4: 19 }, k => ({ amulet_of_glory: 100_000, amulet_of_glory_4: 110_000 })[k] ?? null), { total: 7 * 100_000 + 19 * 110_000, missing: [] });
+});
+
+// ── Thieving (v2.8) ───────────────────────────────────────────────────────
+// The rows are LostHQ's Thieving calculator, checked against the server's
+// tables and scripts when the data is built. Nothing goes in: no bank.
+const th = indexMethods(METHODS.filter(m => m.skill === 'thieving'));
+const rowsOf = (index, group) => index.train.filter(m => m.group === group).map(m => [m.name, m.level, m.xp / 10]);
+// (coins are worth what they are: in the app the prices know, here the test says so)
+const withCoins = gp => k => (k === 'coins' ? 1 : gp[k] ?? null);
+
+test("thieving: LostHQ's NPCs, stalls, chests and doors, with the server's own where they differ (v2.8)", () => {
+  assert.deepEqual([...new Set(th.train.map(m => m.group))], ['NPCs', 'Stalls', 'Chests', 'Doors']);
+  assert.deepEqual(rowsOf(th, 'NPCs'), [['Man or woman', 1, 8], ['Farmer', 10, 14.5], ['Digsite workman', 25, 10.4], ['Warrior', 25, 26], ['Rogue', 32, 36.5], ['Guard', 40, 46.8],
+    ['Fremennik citizen', 45, 65], ['Knight of Ardougne', 55, 84.3], ['Yanille watchman', 65, 137.5], ['Paladin', 70, 151.8], ['Gnome', 75, 198.3], ['Hero', 80, 273.3]]);
+  assert.deepEqual(rowsOf(th, 'Stalls'), [['Bakery stall', 5, 16], ['Tea stall', 5, 16], ['Rock cake stall', 15, 6.5], ['Silk stall', 20, 24], ['Fur stall', 35, 36], ['Fur stall (Rellekka)', 35, 36],
+    ['Fish stall (Rellekka)', 42, 42], ['Silver stall', 50, 54], ['Spice stall', 65, 81], ['Gem stall', 75, 16]]);
+  assert.deepEqual(rowsOf(th, 'Chests'), [['10 coin chest', 13, 7.8], ['Nature rune chest', 28, 25], ['50 coin chest', 43, 125], ['Steel arrowtips chest', 47, 150], ['Blood rune chest', 59, 250], ['Ardougne castle chest', 72, 500]]);
+  assert.deepEqual(rowsOf(th, 'Doors'), [['Ardougne house door (10 coin chest)', 1, 3.8], ['Ross house door', 13, 15], ['Ardougne house door (nature rune chest)', 16, 15], ['Magic axe hut door', 23, 25],
+    ['Ardougne sewer gate', 31, 25], ['Pirate hideout door', 39, 35], ['Chaos Druid Tower door', 46, 37.5], ['Ardougne castle door', 61, 50], ['Yanille dungeon door', 82, 50]]);
+  assert.equal(th.methods.length, 37, 'rows only: nothing is made on the way');
+  assert.equal(BANK_GROUPS.thieving, undefined, 'no bank tab');
+  assert.ok(th.train.every(m => Object.keys(m.in).length === 0 && m.kind === 'xp' && !m.chance), 'nothing goes in, and a failed theft is never counted as a try');
+  // a lockpick for three doors and one chest: named, never used up
+  assert.deepEqual(th.train.filter(m => m.tools).map(m => [m.id, ...m.tools]), [['th_chest_arrowtips', 'lockpick'], ['th_door_axe_hut', 'lockpick'], ['th_door_pirates', 'lockpick'], ['th_door_yanille', 'lockpick']]);
+  // where the server and the calculator differ, the row says so
+  const note = id => th.byId.get(id).note;
+  assert.match(note('th_digworkman'), /LostHQ's calculator says level 10; the server asks for 25\.$/);
+  assert.match(note('th_chest_10_coins'), /LostHQ's calculator says level 1; the server asks for 13\.$/);
+  assert.equal(note('th_door_axe_hut'), "LostHQ's calculator says 22.5 XP; the server gives 25.");
+  // and what only the server has
+  const added = th.train.filter(m => /Not on LostHQ's calculator: the server's own level and XP\.$/.test(m.note || '')).map(m => m.id);
+  assert.deepEqual(added, ['th_fremennik', 'th_stall_rockcake', 'th_door_house_10', 'th_door_house_nature']);
+  // what waits for a quest isn't a plan's own pick
+  assert.deepEqual(th.train.filter(m => m.aside).map(m => m.id), ['th_fremennik', 'th_stall_fur_rellekka', 'th_stall_fish_rellekka']);
+  for (const m of th.train.filter(x => x.aside)) assert.match(m.note, /Once The Fremennik Trials is done\./, m.id);
+  assert.match(note('th_door_ross'), /^In East Ardougne: the house north of the church/);
+});
+
+test('thieving: loot comes the way the server rolls for it, and a row is worth it (v2.8)', () => {
+  const out = id => th.byId.get(id).out;
+  // a pocket: every line rolled for on its own, from the last to the first, each out of what the ones before left of 128
+  assert.deepEqual(out('th_man'), { coins: 3 });
+  assert.deepEqual(out('th_farmer'), { coins: 9 * 123 / 128 }, '123 times in 128');
+  const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} is not ${b}`);
+  const rogue = out('th_rogue');
+  assert.deepEqual(Object.keys(rogue), ['coins', 'airrune', 'jug_wine', 'lockpick', 'iron_dagger_p']);
+  close(rogue.coins, 32.5);                     // 25 to 40, every time: its chance is all that's left
+  close(rogue.airrune, 8 * 8 / 116); close(rogue.jug_wine, 6 / 122); close(rogue.lockpick, 5 / 127); close(rogue.iron_dagger_p, 1 / 128);
+  const gnome = out('th_gnome');
+  assert.equal(gnome.king_worm, 1, 'the first line is given every time');
+  close(gnome.coins, 300 * 30 / 85); close(gnome.swamp_toad, 28 / 113); close(gnome.fire_orb, 2 / 128);
+  assert.deepEqual(out('th_watchman'), { coins: 60, bread: 1 }, 'two lines of 128: both, always');
+  assert.deepEqual(out('th_chest_castle'), { coins: 1000, raw_shark: 1, adamantite_ore: 1, uncut_sapphire: 1 });
+  // a stall: one thing, by its weight
+  assert.deepEqual(out('th_stall_bakery'), { cake: 0.65, bread: 0.25, chocolate_slice: 0.1 });
+  assert.deepEqual(out('th_stall_fish_rellekka'), { raw_lobster: 0.05, raw_tuna: 0.25, raw_salmon: 0.7 });
+  close(Object.values(out('th_stall_gem')).reduce((a, n) => a + n, 0), 1);
+  // the Digsite workman has his own roll, out of 11; a specimen brush can't be traded, so it's not in what a theft is worth
+  const dig = out('th_digworkman');
+  close(dig.coins, 10 * 4 / 11); close(dig.rope, 1 / 11);
+  assert.equal(dig.specimen_brush, undefined);
+  assert.match(th.byId.get('th_digworkman').note, /specimen brush \(3 in 11\).*A specimen brush can't be traded/);
+  assert.deepEqual(out('th_stall_rockcake'), {});
+  assert.deepEqual(out('th_door_sewer'), {}, 'a lock gives nothing but XP');
+  // said in words on the row
+  assert.match(th.byId.get('th_rogue').note, /^Loot: 25 to 40 coins every time; now and then on top of that, 8 air runes \(8 in 116\), jug of wine \(6 in 122\), lockpick \(5 in 127\), iron dagger\(p\) \(1 in 128\)\. Caught: stunned for 5 seconds, hit for 2\.$/);
+  assert.match(th.byId.get('th_farmer').note, /^Loot: 9 coins \(123 in 128\); otherwise nothing\./);
+  assert.match(th.byId.get('th_chest_blood').note, /^Loot: 2 blood runes and 500 coins\. Empty for about 4 minutes after it's looted\. A second trap then teleports you away\.$/);
+  assert.match(th.byId.get('th_stall_gem').note, /Empty for about 6 minutes after a theft\.$/);
+  // what one is worth: coins as they are, the rest at its price
+  const gp = withCoins({ airrune: 10, jug_wine: 50, lockpick: 100, iron_dagger_p: 300 });
+  const e = methodEconomics(th, th.byId.get('th_rogue'), gp);
+  assert.deepEqual([e.cost, e.inputs, e.missing], [0, {}, []]);
+  close(e.value, 32.5 + 10 * 64 / 116 + 50 * 6 / 122 + 100 * 5 / 127 + 300 / 128);
+  close(e.gpPerXp, -e.value / 36.5);
+  assert.deepEqual(methodEconomics(th, th.byId.get('th_stall_gem'), gp).missing, ['uncut_sapphire', 'uncut_emerald', 'uncut_ruby', 'uncut_diamond'], 'no price yet: no guess');
+  // coins are shown as the pile a stack that size is in the game, and are always worth 1 gp
+  assert.deepEqual(['th_man', 'th_guard', 'th_hero', 'th_chest_castle', 'th_gnome', 'th_chest_nature'].map(id => th.byId.get(id).icon || null), ['coins_3', 'coins_25', 'coins_250', 'coins_1000', null, null]);
+  assert.deepEqual([ITEMS.coins_25.name, ITEMS.coins.gp, ITEMS.coins_25.gp], ['Coins', 1, undefined]);
+  assert.equal(th.byId.get('th_stall_fish_rellekka').icon, 'raw_salmon', 'a stall is shown as the likeliest thing it gives');
+  assert.ok(th.train.filter(m => m.group === 'Doors').every(m => m.icon === 'lockpick'));
+  for (const m of METHODS) if (m.icon) assert.ok(ITEMS[m.icon], `${m.id}: its icon ${m.icon}`);
+});
+
+test('thieving: how often a try works is the server\'s rolls, said and never counted (v2.8)', () => {
+  // odds: [[low, high], …] as stat_random is given them; a trapped lock has two rolls to get past
+  assert.deepEqual(th.byId.get('th_man').odds, [[180, 240]]);
+  assert.deepEqual(th.byId.get('th_door_druid_tower').odds, [[220, 280], [8, 75]]);
+  assert.deepEqual(th.train.filter(m => m.odds?.length === 2).map(m => m.id), ['th_door_ross', 'th_door_druid_tower', 'th_door_castle']);
+  for (const m of th.train.filter(x => x.odds?.length === 2)) assert.match(m.note, /The lock has a trap that can go off first\./, m.id);
+  assert.ok(th.train.filter(m => m.group === 'NPCs' || m.group === 'Doors').every(m => m.odds), 'pockets and locks can fail');
+  assert.ok(th.train.filter(m => m.group === 'Stalls' || m.group === 'Chests').every(m => !m.odds), 'stalls and chests can\'t');
+  assert.equal(chanceUnits([180, 240], 1), 181, 'a man at level 1: 181 times in 256');
+  // a plan counts thefts that work: the XP to go over the XP of one, whatever the odds
+  const plan = planGoal(th, { currentXp10: xp10ForLevel(55), targetXp10: xp10ForLevel(60), useBank: false, fillGroup: 'NPCs' });
+  const toGo = xp10ForLevel(60) - xp10ForLevel(55);
+  assert.deepEqual(plan.fill.segments, [{ id: 'th_knight', runs: Math.ceil(toGo / 843), xp10: Math.ceil(toGo / 843) * 843, made: { coins: 50 * Math.ceil(toGo / 843) } }]);
+  assert.deepEqual(plan.fill.buy, {}, 'nothing to buy');
+  assert.equal(th.byLevel, false);
+});
+
+test('thieving: nothing picked, a plan picks pockets, the best at each level; a mix and your own pick work as for Mining (v2.8)', () => {
+  const at = (level, more = {}) => planGoal(th, { currentXp10: xp10ForLevel(level), targetXp10: xp10ForLevel(level) + 1000, useBank: false, fillGroup: 'NPCs', ...more });
+  const picks = [];
+  for (let l = 1; l <= 99; l++) { const id = at(l).fill.id; if (picks[picks.length - 1]?.[1] !== id) picks.push([l, id]); }
+  assert.deepEqual(picks, [[1, 'th_man'], [10, 'th_farmer'], [25, 'th_warrior'], [32, 'th_rogue'], [40, 'th_guard'], [55, 'th_knight'], [65, 'th_watchman'], [70, 'th_paladin'], [75, 'th_gnome'], [80, 'th_hero']]);
+  // (a chest is the most XP there is, and empty for minutes after: the app's fillGroup keeps a plan to pockets)
+  assert.equal(planGoal(th, { currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(76), useBank: false }).fill.id, 'th_chest_castle');
+  // one you pick is yours: a quest's, a stall, a door
+  assert.equal(at(50, { fillId: 'th_fremennik' }).fill.id, 'th_fremennik');
+  assert.equal(at(50, { fillId: 'th_stall_silver' }).fill.segments[0].id, 'th_stall_silver');
+  // one you can't do yet: the best pocket at each level on the way, the quest's left aside
+  const low = planGoal(th, { currentXp10: xp10ForLevel(38), targetXp10: xp10ForLevel(60), useBank: false, fillGroup: 'NPCs', fillId: 'th_knight' });
+  assert.deepEqual(low.fill.segments.map(s => [s.id, s.toLevel]), [['th_rogue', 40], ['th_guard', 55], ['th_knight', undefined]]);
+  // a mix: 500 silk stalls, then guards for the rest; what it all brings in
+  const gp = withCoins({ silk: 40 });
+  const mix = planGoal(th, { currentXp10: xp10ForLevel(50), targetXp10: xp10ForLevel(55), useBank: false, fillGroup: 'NPCs', mix: { th_stall_silk: 500 }, priceOf: gp });
+  assert.deepEqual(mix.fromMix.steps.map(s => [s.id, s.runs, s.xp10, s.gain.total]), [['th_stall_silk', 500, 120_000, 20_000]]);
+  const rest = xp10ForLevel(55) - xp10ForLevel(50) - 120_000;
+  assert.deepEqual([mix.fill.id, mix.fill.segments[0].runs], ['th_guard', Math.ceil(rest / 468)]);
+  assert.deepEqual([row(mix, 'th_guard').needed, row(mix, 'th_guard').toMake], [Math.ceil((xp10ForLevel(55) - xp10ForLevel(50)) / 468), Math.ceil(rest / 468)]);
+  assert.deepEqual([row(mix, 'th_guard').econ.net, row(mix, 'th_stall_silk').econ.net], [30, 40]);
+  // a bank is never looked at
+  assert.equal(planGoal(th, { bank: { lockpick: 5, coins: 100000 }, currentXp10: 0, targetXp10: 1000, fillGroup: 'NPCs' }).fromBank.steps.length, 0);
+});
+
+// ── Agility (v2.8) ────────────────────────────────────────────────────────
+// Courses and shortcuts are LostHQ's Agility calculator's, checked against the
+// server's scripts when the data is built. The Agility Arena is one row, a
+// ticket: the XP on the way to it, and what it's exchanged for.
+const agAll = METHODS.filter(m => m.skill === 'agility');
+const ag = indexMethods(agAll);
+const TIERS = [[1000, 3_200_000], [100, 280_000], [25, 65_000], [10, 24_800], [1, 2_400]];
+
+test("agility: LostHQ's courses and shortcuts, with the server's own where they differ (v2.8)", () => {
+  assert.deepEqual([...new Set(ag.train.map(m => m.group))], ['Courses', 'Shortcuts', 'Agility Arena']);
+  assert.deepEqual(rowsOf(ag, 'Courses'), [['Gnome Stronghold course', 1, 86.5], ['Barbarian Outpost course', 35, 139.5], ['Wilderness course', 52, 571.4]]);
+  assert.deepEqual(rowsOf(ag, 'Shortcuts'), [['A wooden log (Karamja)', 1, 4], ['Stepping stones (Karamja)', 1, 3], ['Crumbling wall (Falador)', 5, 12.5], ['Climbing rocks (Yanille)', 5, 25],
+    ['Ropeswing (Brimhaven)', 10, 3], ['Monkeybars (Edgeville Dungeon)', 15, 20], ['Climbing rocks (Watchtower)', 18, 31], ['Log balance (Coal Trucks)', 20, 8.5],
+    ['Balancing ledge (Yanille Dungeon)', 40, 22.5], ['Obstacle pipe (Yanille Dungeon)', 49, 7.5], ['Monkeybars (Yanille Dungeon)', 57, 20], ['Pile of rubble (Yanille Dungeon)', 67, 5.5]]);
+  assert.equal(ag.methods.length, 17);
+  assert.equal(BANK_GROUPS.agility, undefined, 'no bank tab');
+  assert.ok(agAll.every(m => Object.keys(m.in).length === 0 && Object.keys(m.out).length === 0), 'nothing goes in and nothing comes out: nothing to price');
+  // a course is counted in laps: its obstacles in order and the bonus for the lap
+  const lap = id => ag.byId.get(id);
+  assert.deepEqual(lap('ag_gnome').parts, [['obstacles', 475], ['lap bonus', 390]]);
+  assert.deepEqual(lap('ag_barbarian').parts, [['obstacles', 975], ['lap bonus', 420]], 'three crumbling walls, 12.5 XP each');
+  assert.deepEqual(lap('ag_wilderness').parts, [['obstacles', 725], ['lap bonus', 4989]]);
+  for (const m of ag.train.filter(x => x.group === 'Courses')) {
+    assert.equal(m.parts.reduce((a, [, xp]) => a + xp, 0), m.xp, m.id);
+    assert.deepEqual([m.unit, m.units, m.as], ['lap', 'laps', [`lap of the ${m.name}`, `laps of the ${m.name}`]], m.id);
+  }
+  // where the server and the calculator differ, the row says so
+  assert.match(lap('ag_barbarian').note, /^7 obstacles in order, 3 of them crumbling walls, and the bonus for finishing the lap\. LostHQ's calculator counts one wall: 114\.5 XP\. The pipe into the course is 10 XP more, once a visit\.$/);
+  assert.match(lap('ag_wilderness').note, /The ridge at its gate is 15 XP more each way, once a visit: LostHQ's calculator counts it in every lap \(586\.4 XP\)\.$/);
+  assert.equal(lap('ag_wall_falador').note, "LostHQ's calculator says 0.5 XP; the server gives 12.5, the same as a wall of the Barbarian Outpost course.");
+  assert.match(lap('ag_stones_karamja').note, /LostHQ's calculator says level 30; the server asks for none\.$/);
+  // and what only the server has
+  assert.deepEqual(ag.train.filter(m => /Not on LostHQ's calculator/.test(m.note || '')).map(m => m.id), ['ag_rocks_watchtower', 'ag_ledge_yanille', 'ag_pipe_yanille', 'ag_rubble_yanille']);
+  // the ones you can slip on say how often they work; a slip can still give a little
+  assert.deepEqual(ag.train.filter(m => m.odds).map(m => [m.id, ...m.odds[0]]), [['ag_log_karamja', 90, 250], ['ag_stones_karamja', 50, 253], ['ag_ledge_yanille', 65, 355], ['ag_bars_yanille', 36, 330]]);
+  assert.match(lap('ag_log_karamja').note, /^A slip still gives 2 XP\./);
+  assert.equal(sureLevel([65, 355], 40), 66, 'the Yanille ledge never fails from 66');
+});
+
+test('agility: nothing picked, a plan runs laps of the best course; the others are yours to pick (v2.8)', () => {
+  const at = (level, more = {}) => planGoal(ag, { currentXp10: xp10ForLevel(level), targetXp10: xp10ForLevel(level) + 1000, useBank: false, fillGroup: 'Courses', ...more });
+  const picks = [];
+  for (let l = 1; l <= 99; l++) { const id = at(l).fill.id; if (picks[picks.length - 1]?.[1] !== id) picks.push([l, id]); }
+  assert.deepEqual(picks, [[1, 'ag_gnome'], [35, 'ag_barbarian'], [52, 'ag_wilderness']]);
+  // from level 30 to 60, picking the Wilderness course: the courses below it on the way
+  const plan = planGoal(ag, { currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(60), useBank: false, fillGroup: 'Courses', fillId: 'ag_wilderness' });
+  assert.deepEqual(plan.fill.segments.map(s => [s.id, s.toLevel]), [['ag_gnome', 35], ['ag_barbarian', 52], ['ag_wilderness', undefined]]);
+  const gnome = Math.ceil((xp10ForLevel(35) - xp10ForLevel(30)) / 865);
+  assert.deepEqual([plan.fill.segments[0].runs, plan.fill.segments[0].made, plan.fill.buy], [gnome, {}, {}]);
+  // a shortcut is counted one at a time
+  assert.deepEqual(at(20, { fillId: 'ag_rocks_watchtower' }).fill.segments.map(s => [s.id, s.runs]), [['ag_rocks_watchtower', 4]]);
+  // nothing has a price: every row nets nothing, whatever the prices say
+  for (const r of at(60, { priceOf: () => 1000 }).table) assert.deepEqual([r.econ.net, r.econ.cost, r.econ.value], [0, 0, 0], r.id);
+});
+
+test('agility: Arena tickets are exchanged in batches, worth more the bigger they are (v2.8)', () => {
+  const ticket = ag.byId.get('ag_ticket'), held = ag.byId.get('ag_ticket_held');
+  assert.deepEqual(ticket.exchange, { own: 578, batches: TIERS });
+  assert.deepEqual(held.exchange, { own: 0, batches: TIERS });
+  assert.deepEqual([ticket.xp, ticket.parts, held.xp, held.aside, ticket.icon, ITEMS.agilityarena_ticket.untradeable], [2978, [['on the way', 578], ['exchanged', 2400]], 2400, 1, 'agilityarena_ticket', 1]);
+  assert.match(ticket.note, /^On average 3\.3 obstacles lie between one ticket pillar and the next: 57\.8 XP on the way\..*A pillar a minute at best.*Going in costs 200 coins\.$/);
+  // the biggest batches they fill
+  assert.deepEqual([1, 9, 10, 24, 25, 99, 100, 999, 1000, 1666, 2000].map(n => exchangeXp(TIERS, n)), [2400, 21_600, 24_800, 59_200, 65_000, 254_200, 280_000, 2_774_200, 3_200_000, 5_049_200, 6_400_000]);
+  assert.deepEqual(exchangeBatches(TIERS, 1666), [[1000, 1], [100, 6], [25, 2], [10, 1], [1, 6]]);
+  assert.deepEqual(exchangeBatches(TIERS, 0), []);
+  assert.deepEqual([exchangeXp(TIERS, 0), exchangeXp(TIERS, -5), exchangeXp(TIERS, 10.9)], [0, 0, 24_800]);
+  // that is the most any way of splitting them gives, and one more ticket never gives less
+  const best = [0];
+  for (let n = 1; n <= 2600; n++) best[n] = Math.max(...TIERS.filter(([size]) => size <= n).map(([size, xp]) => best[n - size] + xp));
+  for (let n = 1; n <= 2600; n++) {
+    assert.equal(exchangeXp(TIERS, n), best[n], `${n} tickets`);
+    assert.ok(best[n] >= best[n - 1] + 2400, `${n} tickets`);
+  }
+  // 999 fall well short of what 1,000 give
+  assert.equal(exchangeXp(TIERS, 1000) - exchangeXp(TIERS, 999), 425_800);
+});
+
+test('agility: a plan exchanges its tickets together, and counts each at the average of that (v2.8)', () => {
+  const cur = 1_366_940, lvl70 = xp10ForLevel(70);            // level 53, as Old Badger is in the browser checks
+  const plan = (goal, more = {}) => {
+    const av = averaged(ag, { currentXp10: cur, targetXp10: lvl70, ...goal });
+    const index = indexMethods(agAll, { set: av.set });
+    return { av, index, plan: planGoal(index, { currentXp10: cur, targetXp10: lvl70, useBank: false, fillGroup: 'Courses', least: av.least, ...goal, ...more }) };
+  };
+  // the whole goal in tickets: the fewest that reach it, exchanged as 1 × 1,000, 6 × 100, 2 × 25, 1 × 10 and 6 singly
+  const toGo = lvl70 - cur;
+  const all = plan({ fillId: 'ag_ticket' });
+  assert.deepEqual(all.av.pool, { tickets: 1666, each: 3031, batches: [[1000, 1], [100, 6], [25, 2], [10, 1], [1, 6]], counted: true, spare: 1666 * 578 + 5_049_200 - toGo });
+  assert.ok(1666 * 578 + exchangeXp(TIERS, 1666) >= toGo && 1665 * 578 + exchangeXp(TIERS, 1665) < toGo, '1,666 is the fewest');
+  assert.deepEqual(all.av.set, { ag_ticket: { xp: 3609, parts: [['on the way', 578], ['exchanged', 3031]] }, ag_ticket_held: { xp: 3031 } });
+  assert.deepEqual(all.plan.fill.segments, [{ id: 'ag_ticket', runs: 1666, xp10: 1666 * 3609, made: {} }]);
+  assert.ok(all.plan.fill.segments[0].xp10 >= toGo, 'rounded up to a tenth: never short of the goal');
+  assert.equal(row(all.plan, 'ag_ticket').needed, 1666);
+  assert.equal(all.index.exchanges, true);
+  // not picked: its row in the table says what picking it would come to
+  const none = plan({});
+  assert.deepEqual([none.av.pool.counted, none.av.set.ag_ticket.xp, none.plan.fill.id, row(none.plan, 'ag_ticket').needed], [false, 3609, 'ag_wilderness', 1666]);
+  // a goal just past what 999 tickets give takes the whole 1,000, and says how much that is over
+  const edge = { targetXp10: cur + 999 * 578 + exchangeXp(TIERS, 999) + 10 };
+  const whole = averaged(ag, { currentXp10: cur, fillId: 'ag_ticket', ...edge });
+  assert.deepEqual([whole.pool.tickets, whole.pool.each, whole.pool.batches, whole.least, whole.pool.spare], [1000, 3200, [[1000, 1]], { ag_ticket: 1000 }, 1000 * 578 + 3_200_000 - (edge.targetXp10 - cur)]);
+  const wholePlan = planGoal(indexMethods(agAll, { set: whole.set }), { currentXp10: cur, ...edge, useBank: false, fillGroup: 'Courses', fillId: 'ag_ticket', least: whole.least });
+  assert.deepEqual([wholePlan.fill.segments[0].runs, wholePlan.fill.segments[0].xp10], [1000, 3_778_000], 'the average alone would say 888');
+  assert.equal(Math.ceil((edge.targetXp10 - cur) / 3778), 888);
+  // tickets you already have are in your mix, and are exchanged with the ones still to earn
+  const saved = plan({ fillId: 'ag_ticket', mix: { ag_ticket_held: 600, ag_wilderness: 100 } });
+  assert.deepEqual([saved.av.pool.tickets, saved.av.pool.batches, saved.av.pool.each, saved.av.least], [1600, [[1000, 1], [100, 6]], 3050, { ag_ticket: 1000 }]);
+  assert.deepEqual(saved.plan.fromMix.steps.map(s => [s.id, s.runs, s.xp10]), [['ag_ticket_held', 600, 600 * 3050], ['ag_wilderness', 100, 571_400]]);
+  assert.deepEqual([saved.plan.fill.segments[0].runs, saved.plan.fill.segments[0].xp10, row(saved.plan, 'ag_ticket').toMake], [1000, 1000 * 3628, 1000]);
+  assert.ok(saved.plan.afterXp10 + saved.plan.fill.segments[0].xp10 >= lvl70);
+  // tickets in a mix that's finished with a course: only those are exchanged
+  const some = plan({ mix: { ag_ticket: 250 } });
+  assert.deepEqual([some.av.pool.tickets, some.av.pool.batches, some.av.pool.each, some.av.least, some.av.pool.counted], [250, [[100, 2], [25, 2]], 2760, {}, true]);
+  assert.deepEqual([some.plan.fromMix.steps[0].xp10, some.plan.fill.id], [250 * (578 + 2760), 'ag_wilderness']);
+  // their average is rounded down to a tenth there, never up: 1,666 give 303.07 XP each, and counted at 303.1 the
+  // laps after them could come out one short
+  const just = { currentXp10: cur, targetXp10: cur + exchangeXp(TIERS, 1666) + 10 * 5714 + 100, mix: { ag_ticket_held: 1666 } };
+  const under = averaged(ag, just);
+  assert.deepEqual([under.pool.each, under.least, under.pool.spare, under.pool.counted], [3030, {}, 0, true]);
+  const laps = planGoal(indexMethods(agAll, { set: under.set }), { ...just, useBank: false, fillGroup: 'Courses', least: under.least });
+  assert.deepEqual([laps.fromMix.xp10, laps.fill.segments.map(s => [s.id, s.runs])], [1666 * 3030, [['ag_wilderness', 11]]], '10 laps would leave it 10 XP short');
+  // 950 saved and a goal the 1,000 they'll make covers: at 320 each the mix alone looks like enough, and the
+  // 50 that fill the batch are planned all the same (999 would be exchanged for far less)
+  const near = { currentXp10: cur, targetXp10: cur + 3_000_000, fillId: 'ag_ticket', mix: { ag_ticket_held: 950 } };
+  const fillUp = averaged(ag, near);
+  assert.deepEqual([fillUp.pool.tickets, fillUp.pool.each, fillUp.least], [1000, 3200, { ag_ticket: 50 }]);
+  assert.ok(exchangeXp(TIERS, 950) < 3_000_000 && 49 * 578 + exchangeXp(TIERS, 999) < 3_000_000);
+  const fillPlan = planGoal(indexMethods(agAll, { set: fillUp.set }), { ...near, useBank: false, fillGroup: 'Courses', least: fillUp.least });
+  assert.deepEqual([fillPlan.fromMix.xp10, fillPlan.fromMix.reached, fillPlan.remaining], [950 * 3200, true, 0]);
+  assert.deepEqual(fillPlan.fill.segments, [{ id: 'ag_ticket', runs: 50, xp10: 50 * 3778, made: {} }]);
+  assert.deepEqual([row(fillPlan, 'ag_ticket').toMake, row(fillPlan, 'ag_wilderness').toMake], [50, 0]);
+  // (without tickets nothing is ever added to a goal the XP so far reaches)
+  assert.equal(planGoal(ag, { currentXp10: cur, targetXp10: cur + 1000, useBank: false, fillGroup: 'Courses', mix: { ag_wilderness: 1 } }).fill, null);
+  // a mix that already reaches the goal leaves nothing to add
+  const done = averaged(ag, { currentXp10: cur, targetXp10: cur + 100_000, fillId: 'ag_ticket', mix: { ag_ticket: 40 } });
+  assert.deepEqual([done.pool.tickets, done.least, done.pool.spare], [40, {}, 0]);
+  // a goal already reached, and a skill with no tickets
+  assert.deepEqual(averaged(ag, { currentXp10: cur, targetXp10: cur }).pool, { tickets: 0, each: 2400, batches: [], counted: false, spare: 0 });
+  assert.equal(averaged(th, { currentXp10: 0, targetXp10: 1000 }), null);
+  assert.equal(th.exchanges, false);
+  // whatever the goal, the fewest tickets are exactly the ones that reach it
+  let seed = 28;
+  const rand = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  for (let i = 0; i < 400; i++) {
+    const need = 1 + rand(i % 4 ? 1_500_000 : 40_000_000), have = i % 3 ? 0 : rand(1500);
+    const av = averaged(ag, { currentXp10: 0, targetXp10: need, fillId: 'ag_ticket', mix: have ? { ag_ticket_held: have } : null });
+    const n = av.least.ag_ticket || 0, total = k => k * 578 + exchangeXp(TIERS, have + k);
+    assert.ok(total(n) >= need && (n === 0 || total(n - 1) < need), `${need} XP with ${have} saved: ${n} more`);
+    const p = planGoal(indexMethods(agAll, { set: av.set }), { currentXp10: 0, targetXp10: need, useBank: false, fillId: 'ag_ticket', mix: have ? { ag_ticket_held: have } : null, least: av.least });
+    assert.equal(p.fill ? p.fill.segments[0].runs : 0, n, `${need} XP with ${have} saved`);
+    assert.ok((p.fromMix?.xp10 || 0) + (p.fill?.segments[0].xp10 || 0) >= need);
+  }
+  // and with saved tickets finished with laps, what the tickets really give and the laps come to the goal
+  for (let i = 0; i < 300; i++) {
+    const have = 1 + rand(2600), given = exchangeXp(TIERS, have), goal = { currentXp10: cur, targetXp10: cur + given + 1 + rand(400_000), mix: { ag_ticket_held: have } };
+    const av = averaged(ag, goal);
+    const p = planGoal(indexMethods(agAll, { set: av.set }), { ...goal, useBank: false, fillGroup: 'Courses', least: av.least });
+    assert.deepEqual([av.least, p.fill.id], [{}, 'ag_wilderness']);
+    assert.ok(p.fromMix.xp10 <= given && given - p.fromMix.xp10 < have, `${have} saved: counted at no more than they give`);
+    assert.ok(cur + given + p.fill.segments[0].xp10 >= goal.targetXp10, `${have} saved: the laps make up the rest`);
+  }
+});
+
+test('agility: or every ticket at one batch\'s rate, a choice on the goal (v2.8)', () => {
+  assert.deepEqual(CHOICES.agility.map(c => [c.id, c.label, c.options.map(o => [o.id, o.name])]), [['tickets', 'Tickets exchanged',
+    [['best', 'In the biggest batches'], ['x1000', '1,000 at a time'], ['x100', '100 at a time'], ['x25', '25 at a time'], ['x10', '10 at a time'], ['x1', 'One at a time']]]]);
+  assert.match(CHOICES.agility[0].tip, /240 XP for one, 248 XP each for 10, 260 XP each for 25, 280 XP each for 100, 320 XP each for 1,000\./);
+  assert.deepEqual(choicesInUse({ skill: 'agility', opts: { tickets: 'x1000' } }), ['x1000']);
+  assert.deepEqual(choicesInUse({ skill: 'agility', opts: { tickets: 'best' } }), [], 'the first is how it starts');
+  assert.deepEqual(choicesInUse({ skill: 'agility' }), []);
+  const rate = { x1000: 3200, x100: 2800, x25: 2600, x10: 2480, x1: 2400 };
+  for (const [id, each] of Object.entries(rate)) {
+    const pinned = indexMethods(agAll, { opts: [id] });
+    assert.deepEqual([pinned.byId.get('ag_ticket').xp, pinned.byId.get('ag_ticket').parts, pinned.byId.get('ag_ticket_held').xp], [578 + each, [['on the way', 578], ['exchanged', each]], each], id);
+    assert.equal(pinned.exchanges, false, 'nothing is pooled');
+    assert.equal(averaged(pinned, { currentXp10: 0, targetXp10: 1_000_000, fillId: 'ag_ticket' }), null);
+  }
+  // saving up for 1,000: every ticket at 377.8 XP, the goal's size aside
+  const pinned = indexMethods(agAll, { opts: ['x1000'] });
+  const plan = planGoal(pinned, { currentXp10: 1_366_940, targetXp10: xp10ForLevel(70), useBank: false, fillGroup: 'Courses', fillId: 'ag_ticket' });
+  assert.deepEqual(plan.fill.segments, [{ id: 'ag_ticket', runs: 1591, xp10: 1591 * 3778, made: {} }]);
+  // the other rows are what they were
+  assert.deepEqual(pinned.train.filter(m => !m.opt).map(m => m.xp), ag.train.filter(m => !m.opt).map(m => m.xp));
+});
+
+test('what only Thieving and Agility name is not what a bank is for (v2.8)', () => {
+  // every item of the ten skills before them is still in the catalog, with the bank tabs as they were
+  assert.deepEqual(Object.keys(BANK_GROUPS), ['herblore', 'runecraft', 'firemaking', 'fletching', 'crafting', 'smithing', 'cooking']);
+  const banked = new Set(Object.values(BANK_GROUPS).flatMap(gs => gs.flatMap(g => g.items)));
+  for (const k of ['silk', 'grey_wolf_fur', 'king_worm', 'lockpick', 'agilityarena_ticket', 'coins_25', 'rockcake']) assert.ok(ITEMS[k] && !banked.has(k), k);
+  assert.ok(ITEMS.agilityarena_ticket.untradeable && ITEMS.rockcake.untradeable);
 });
