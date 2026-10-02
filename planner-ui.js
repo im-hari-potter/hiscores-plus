@@ -5,8 +5,8 @@
 // file only turns it into LostKit-style panels.
 
 import { SKILLS, SKILL_BY_KEY, SKILL_IDS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels } from './skills.js';
-import { ITEMS, METHODS, BANK_GROUPS, SALE_GROUPS, PLACES, ICONS_PER_ROW, ICON_SIZE, UNID_HERBS } from './gamedata.js';
-import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, minorLast, castsIn, MAX_XP10 } from './planner.js';
+import { ITEMS, METHODS, BANK_GROUPS, SALE_GROUPS, PLACES, CHOICES, ICONS_PER_ROW, ICON_SIZE, UNID_HERBS } from './gamedata.js';
+import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, minorLast, castsIn, xpEach, MAX_XP10 } from './planner.js';
 import { store, players } from './store.js';
 import { toSafeName, toDisplayName, checkName } from './api.js';
 import { topPercent, formatPercent } from './totals.js';
@@ -23,11 +23,24 @@ const placeOf = goal => {
   const options = PLACES[goal.skill]?.options || [];
   return options.find(o => o.id === goal.place) || options[0] || null;
 };
+// The choices a skill's goals have (Smithing: where your bars come from, a ring
+// of forging, goldsmith gauntlets), and the ones a goal has in use, in the order
+// they apply: the tick boxes, then what was picked from a list. A choice another
+// one makes pointless is left out (a ring of forging, when you superheat).
+export function choicesInUse(goal) {
+  const all = CHOICES[goal.skill] || [];
+  const set = goal.opts || {};
+  const lists = all.filter(c => c.options).map(c => (c.options.slice(1).some(o => o.id === set[c.id]) ? set[c.id] : null)).filter(Boolean);
+  const ticks = all.filter(c => !c.options && set[c.id] && !(c.unless && lists.includes(c.unless))).map(c => c.id);
+  return [...ticks, ...lists];
+}
 const PLACED = {};
 function indexFor(goal) {
   const place = placeOf(goal);
-  if (!place || place === PLACES[goal.skill].options[0]) return INDEX[goal.skill];
-  return (PLACED[`${goal.skill}|${place.id}`] ||= indexMethods(METHODS.filter(m => m.skill === goal.skill), { at: place.id }));
+  const at = place && place !== PLACES[goal.skill].options[0] ? place.id : null;
+  const opts = choicesInUse(goal);
+  if (!at && !opts.length) return INDEX[goal.skill];
+  return (PLACED[`${goal.skill}|${at || ''}|${opts.join('+')}`] ||= indexMethods(METHODS.filter(m => m.skill === goal.skill), { at, opts }));
 }
 // Skills whose plans start from the bank (Woodcutting only needs an axe).
 const usesBank = key => !!BANK_GROUPS[key];
@@ -40,6 +53,9 @@ const SKILL_TEXT = {
   firemaking: { what: 'Logs', each: 'log', bankHint: 'logs' },
   fletching: { what: 'Item', each: 'action', bankHint: 'logs, bow strings, feathers and arrowtips' },
   crafting: { what: 'Item', each: 'item', bankHint: 'leather, gems, bars, glass or whatever else you craft with' },
+  // (made: what the Prices tab calls the things a skill with no bank makes, when it isn't `what`)
+  mining: { what: 'Rock', each: 'ore', made: 'Ores and gems', noBank: 'Mining only needs a pickaxe you have the level for (bronze and iron from level 1, steel 6, mithril 21, adamant 31, rune 41), so this plan doesn\'t use your bank.' },
+  smithing: { what: 'Item', each: 'item', bankHint: 'ore, coal or bars' },
 };
 const textFor = key => SKILL_TEXT[key] || { what: 'Make', each: 'action', bankHint: 'the items it uses' };
 
@@ -48,11 +64,18 @@ const DEFAULT_ASSUME = { herblore: ['vial_water'], crafting: ['thread'] };
 const ASSUME_LABEL = { herblore: 'vials of water', crafting: 'thread' };
 // "Vials of water are", "thread is"
 const ASSUME_ONE = { crafting: true };
-// Runes the spells on the way take (enchanting jewellery, charging orbs).
+// Runes the spells on the way take (enchanting jewellery, charging orbs, and
+// Superheat Item when that's how you make your bars: a choice, so it's in opt).
 const SPELL_RUNES = {};
-for (const m of METHODS) if (m.magic) for (const k of Object.keys(m.in)) if (/rune$/.test(k)) (SPELL_RUNES[m.skill] ||= new Set()).add(k);
-// What an item is finished with, rather than made of: the wool an amulet is strung with.
-const FINISHING = { crafting: ['ball_of_wool'] };
+for (const m of METHODS) {
+  for (const v of [m, ...Object.values(m.opt || {})]) {
+    if (!v.magic) continue;
+    for (const k of Object.keys({ ...(v.in || m.in), ...(v.add || {}) })) if (/rune$/.test(k)) (SPELL_RUNES[m.skill] ||= new Set()).add(k);
+  }
+}
+// What an item is finished with, rather than made of: the wool an amulet is
+// strung with. And what's worn while you work: a ring of forging.
+const FINISHING = { crafting: ['ball_of_wool'], smithing: ['ring_of_forging'] };
 // Round up my supplies never lets these hold it back, and never rounds up to
 // them: the supplies above (bought as you go or not), those runes and the
 // finishing. Herbs with no vials left are still made into potions, emeralds
@@ -61,7 +84,7 @@ const FINISHING = { crafting: ['ball_of_wool'] };
 // of wool don't call for 60 more dragonstones.
 export const minorOf = key => new Set([...(DEFAULT_ASSUME[key] || []), ...(SPELL_RUNES[key] || []), ...(FINISHING[key] || [])]);
 // "Vials of water never hold it back", for the tooltip
-const MINOR_TEXT = { herblore: 'Vials of water never hold', crafting: 'Thread, runes and balls of wool never hold' };
+const MINOR_TEXT = { herblore: 'Vials of water never hold', crafting: 'Thread, runes and balls of wool never hold', smithing: 'Rings of forging and runes never hold' };
 // Read from a screenshot but not added to your bank: tools (a plan names them,
 // it never counts them), and thread.
 const TOOLS = new Set(METHODS.flatMap(m => m.tools || []));
@@ -117,6 +140,15 @@ const trim = (v, d) => v.toLocaleString(undefined, { maximumFractionDigits: d })
 // What to collect is whole items: thread goes 0.2 at a time (a reel lasts five
 // items), and 13.2 reels to collect is 14.
 const whole = n => (Number.isInteger(n) ? n : Math.ceil(n - 1e-9));
+
+// An amount one item takes, for a tooltip: 5, 0.2 (thread), or a share of
+// something that lasts many (a ring of forging: 1/140 a bar, 1/28 a platebody).
+export function amountText(n) {
+  if (Number.isInteger(n) || Math.abs(n * 1000 - Math.round(n * 1000)) < 1e-9) return String(n);
+  const d = 1 / n;
+  if (n < 1 && Math.abs(d - Math.round(d)) < 1e-6) return `1/${Math.round(d)}`;
+  return String(Math.round(n * 1000) / 1000);
+}
 
 // XP in tenths, shown the way the game does (a decimal only when there is one).
 export const xpText = x10 => (x10 % 10
@@ -340,7 +372,7 @@ export function createPlanner(ctx) {
   function priceGroups(key) {
     if (BANK_GROUPS[key]) return [...BANK_GROUPS[key], ...(SALE_GROUPS[key] || [])];
     const made = [...new Set(METHODS.filter(m => m.skill === key).flatMap(m => Object.keys(m.out)))];
-    return [{ name: textFor(key).what, items: made }];
+    return [{ name: textFor(key).made || textFor(key).what, items: made }];
   }
   function wantPrices(keys, opts) {
     const items = new Set();
@@ -361,8 +393,9 @@ export function createPlanner(ctx) {
   // An item's page on the market. LostKit opens it right in this tab (its ◀
   // button comes back here); a browser opens a new tab.
   const marketLink = slug => `href="${esc(`${LIVE_MARKET}/items/${encodeURIComponent(slug)}`)}"${ctx.inLostKit ? '' : ' target="_blank" rel="noopener"'}`;
-  // The item that stands for a method: what it makes, or for burning logs, the logs.
-  const methodItem = m => Object.keys(m.out)[0] || Object.keys(m.in)[0];
+  // The item that stands for a method: what it makes (a gem rock says which of
+  // its gems), or for burning logs, the logs.
+  const methodItem = m => m.icon || Object.keys(m.out)[0] || Object.keys(m.in)[0];
   const plural = (name, n) => (n === 1 || /s$/i.test(name) ? name : name + 's');
   function priceTip(slug) {
     const i = prices.info(slug);
@@ -652,7 +685,7 @@ export function createPlanner(ctx) {
       <label class="check"><input type="checkbox" data-gopt="useBank" ${useBank ? 'checked' : ''}> Use my bank</label>
       ${useBank && hasEven(ix) ? `<label class="check" title="${esc(roundUpTip(goal.skill))}"><input type="checkbox" data-gopt="roundUp" ${goal.roundUp ? 'checked' : ''}> Round up my supplies</label>` : ''}
       ${ASSUME_LABEL[goal.skill] ? `<label class="check" title="${ASSUME_ONE[goal.skill] ? "When on, it never holds a plan back, and it's left out of what to collect and of costs." : "When on, these never hold a plan back, and they're left out of what to collect and of costs."}"><input type="checkbox" data-gopt="assume" ${assume.size ? 'checked' : ''}> I'll buy ${ASSUME_LABEL[goal.skill]} as I go</label>` : ''}
-      ${placeHtml(goal)}
+      ${placeHtml(goal)}${choicesHtml(goal)}
       <span class="c-faint">${bankCount ? `${bankCount} kinds of item in your bank, updated ${ago(b.updated)}` : 'Your bank is empty'} ·</span>
       <button type="button" class="linkish" data-act="to-bank" data-skill="${goal.skill}">Edit bank</button>
     </div>`;
@@ -687,6 +720,21 @@ export function createPlanner(ctx) {
     const tip = `Whose fee is counted where hides are tanned on the way. ${choice.options.map(o => `${o.name}: ${o.note}.`).join(' ')}`;
     return `<label class="check" title="${esc(tip)}">${esc(choice.label)} <select class="input small" data-gopt="place" aria-label="${esc(choice.label)}">${choice.options.map(o =>
       `<option value="${o.id}"${o === mine ? ' selected' : ''}>${esc(o.name)} (${esc(o.short)})</option>`).join('')}</select></label>`;
+  }
+
+  // The choices a skill's goals have: a list to pick from, or a tick box.
+  function choicesHtml(goal) {
+    const set = goal.opts || {};
+    const inUse = choicesInUse(goal);
+    return (CHOICES[goal.skill] || []).map(c => {
+      if (c.options) {
+        const mine = c.options.find(o => o.id === set[c.id]) || c.options[0];
+        return `<label class="check" title="${esc(c.tip)}">${esc(c.label)} <select class="input small" data-gopt="opt" data-opt="${c.id}" aria-label="${esc(c.label)}">${c.options.map(o =>
+          `<option value="${o.id}"${o === mine ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
+      }
+      if (c.unless && inUse.includes(c.unless)) return '';
+      return `<label class="check" title="${esc(c.tip)}"><input type="checkbox" data-gopt="opt" data-opt="${c.id}" ${set[c.id] ? 'checked' : ''}> ${esc(c.label)}</label>`;
+    }).join('');
   }
 
   // "Round up my supplies": the plan with what your bank leaves over used up too.
@@ -741,6 +789,12 @@ export function createPlanner(ctx) {
     return lines;
   }
 
+  // "500 × Runite bar +25,000 XP": what was made on the way to a step
+  const subsOf = (ix, sub) => Object.entries(sub || {}).map(([id, n]) => {
+    const sm = ix.byId.get(id);
+    return `${fmt(n)} × ${esc(sm.name)}${sm.xp > 0 ? ` <span class="c-level">+${xpText(n * sm.xp)} XP</span>` : ''}`;
+  });
+
   function bankHtml(goal, plan, ix) {
     const fb = plan.fromBank;
     const rounded = !!plan.bankNow;             // Round up my supplies is on
@@ -761,10 +815,7 @@ export function createPlanner(ctx) {
     }
     const rows = steps.map((s, i) => {
       const m = ix.byId.get(s.id);
-      const subs = Object.entries(s.sub).map(([id, n]) => {
-        const sm = ix.byId.get(id);
-        return `${fmt(n)} × ${esc(sm.name)}${sm.xp > 0 ? ` <span class="c-level">+${xpText(n * sm.xp)} XP</span>` : ''}`;
-      });
+      const subs = subsOf(ix, s.sub);
       const goalHere = goalAt && goalAt.index === i
         ? `<span class="goal-flag" title="Your goal is reached during this step">Goal after ${fmt(goalAt.runs)}</span>` : '';
       const collect = s.collect && Object.keys(s.collect).length
@@ -818,8 +869,10 @@ export function createPlanner(ctx) {
     const rows = mx.steps.map(st => {
       const m = ix.byId.get(st.id);
       const lock = st.locked ? ` <span class="c-lose small-note" title="Made in level order, you'd only be level ${st.levelAt} when you get to these">needs level ${m.level}</span>` : '';
+      const subs = subsOf(ix, st.sub);
       return `<div class="step">${itemIcon(methodItem(m))}<div class="step-main">
           <div>${actionText(m, st.runs, st.made)} <span class="c-level">+${xpText(st.xp10)} XP</span> <span class="c-faint">·</span> net ${gp(st.gain)} gp${lock}</div>
+          ${subs.length ? `<div class="c-faint small-note">incl. ${subs.join(', ')}</div>` : ''}
         </div></div>`;
     }).join('');
     const g = mx.gain;
@@ -843,12 +896,15 @@ export function createPlanner(ctx) {
     const bankShown = usesBank(goal.skill) && goal.useBank !== false;
     const choices = ix.train.filter(m => !(goal.excluded || []).includes(m.id));
     const sel = `<select class="input small" data-gopt="fill" aria-label="Train with">${groupsOf(choices).map(([name, list]) =>
-      `<optgroup label="${esc(name)}">${list.map(m => `<option value="${m.id}"${m.id === f.id ? ' selected' : ''}>${esc(m.name)} (lvl ${m.level}, ${xpText(m.xp)} XP${m.unit ? ` per ${esc(m.unit)}` : ''})</option>`).join('')}</optgroup>`).join('')}</select>`;
+      `<optgroup label="${esc(name)}">${list.map(m => `<option value="${m.id}"${m.id === f.id ? ' selected' : ''}>${esc(m.name)} (lvl ${m.level}, ${xpText(xpEach(ix, m))} XP${m.unit ? ` per ${esc(m.unit)}` : ''})</option>`).join('')}</optgroup>`).join('')}</select>`;
     // "First 1,234 × Willow logs to reach level 45", "Then …"
     const segs = f.segments.map((s, i) => {
       const m = ix.byId.get(s.id);
       const lead = f.segments.length > 1 ? (i === 0 ? 'First ' : 'Then ') : '';
-      return `<div class="step">${itemIcon(methodItem(m))}<div class="step-main"><div>${lead}${actionText(m, s.runs, s.made)} <span class="c-level">+${xpText(s.xp10)} XP</span>${s.bridge && s.toLevel ? ` <span class="c-faint">to reach level ${s.toLevel}</span>` : ''}</div></div></div>`;
+      // (your own bars, made on the way: their XP is part of the stretch's)
+      const subs = subsOf(ix, s.sub);
+      return `<div class="step">${itemIcon(methodItem(m))}<div class="step-main"><div>${lead}${actionText(m, s.runs, s.made)} <span class="c-level">+${xpText(s.xp10)} XP</span>${s.bridge && s.toLevel ? ` <span class="c-faint">to reach level ${s.toLevel}</span>` : ''}</div>
+        ${subs.length ? `<div class="c-faint small-note">incl. ${subs.join(', ')}</div>` : ''}</div></div>`;
     }).join('');
     // Money: buying what's missing, and what the made items are worth.
     const made = {};
@@ -885,10 +941,14 @@ export function createPlanner(ctx) {
     const each = textFor(key).each;
     if (!usesBank(key)) return `To goal = how many on their own · Plan to make = your mix of ways to train${mix ? ' · Still needed to goal = after your mix' : ''} · Net/item is what one ${each} sells for.`;
     const units = [...new Set(ix.train.map(m => m.units || ''))];
-    const counted = units.length === 1 && units[0] ? ` Counts are in ${units[0]}.` : mixed ? ' A row marked "per log" counts logs.' : '';
-    const left = !assumed ? '' : ASSUME_ONE[key]
+    // (some rows counted in what they use: logs for arrows, bars for arrowtips)
+    const [unit, many] = ix.train.filter(m => m.unit).map(m => [m.unit, m.units || m.unit + 's'])[0] || [];
+    const counted = units.length === 1 && units[0] ? ` Counts are in ${units[0]}.` : mixed ? ` A row marked "per ${unit}" counts ${many}.` : '';
+    // (bars you make yourself: their XP is in the XP column and in every count)
+    const own = ix.through ? ' XP and counts include the bars you make on the way.' : '';
+    const left = (!assumed ? '' : ASSUME_ONE[key]
       ? ` ${assumed[0].toUpperCase() + assumed.slice(1)} is left out: you'll buy it as you go.`
-      : ` ${assumed[0].toUpperCase() + assumed.slice(1)} are left out: you'll buy them as you go.`;
+      : ` ${assumed[0].toUpperCase() + assumed.slice(1)} are left out: you'll buy them as you go.`) + own;
     if (!bankOn) return `To goal = how many on their own, from your XP now · Plan to make = your mix of ways to train${mix ? ' · Still needed to goal = after your mix' : ''} · Net/item is per ${each}, bought from scratch.${counted}${left}`;
     // Round up my supplies is on
     if (whatIf) return `Round up my supplies is on: the plan above is your bank with its supplies rounded up · From bank, Round up my supplies and Net after rounding up my supplies = each on its own, from your bank as it is · Still needed to goal and Supplies needed = after everything your bank makes, supplies rounded up · Total net = net from bank, supplies rounded up (what your bank plan makes of it then, less what that takes to collect) + net after buying supplies · Net/item is per ${each}, bought from scratch.${counted}${left}`;
@@ -935,7 +995,7 @@ export function createPlanner(ctx) {
     // Sorting by total net needs the bank's columns; without them it's by level.
     const sort = S.sort === 'net' && !bankOn ? 'level' : S.sort;
     const net = r => (r.gains.net && !r.gains.net.missing.length ? r.gains.net.total : -Infinity);
-    if (sort === 'xp') rows.sort((a, b) => b.m.xp - a.m.xp);
+    if (sort === 'xp') rows.sort((a, b) => (b.r.xpAll ?? b.m.xp) - (a.r.xpAll ?? a.m.xp));
     else if (sort === 'cheap') rows.sort((a, b) => (a.r.econ.gpPerXp ?? Infinity) - (b.r.econ.gpPerXp ?? Infinity));
     else if (sort === 'net') rows.sort((a, b) => net(b.r) - net(a.r));
     // Many groups (Fletching): show one at a time, the one you train with unless you pick.
@@ -952,7 +1012,8 @@ export function createPlanner(ctx) {
     const columns = [
       ['<th>Lvl</th>', (r, m) => `<td>${m.level}</td>`],
       [`<th class="l">${textFor(goal.skill).what}</th>`, (r, m) => `<td class="l"><span class="sk-cell">${itemIcon(methodItem(m), true)} ${esc(m.name)}${multipleBadge(m, Math.max(cur1, m.level))}${mixed && m.unit ? ` <span class="per">per ${esc(m.unit)}</span>` : ''}</span></td>`],
-      ['<th>XP</th>', (r, m) => `<td>${xpText(m.xp)}</td>`],
+      // (with your own bars made on the way, their XP is in it)
+      ['<th>XP</th>', (r, m) => `<td>${xpText(r.xpAll ?? m.xp)}</td>`],
       ['<th title="What one sells for, less what it takes, bought from scratch">Net/item</th>', r => {
         const e = r.econ;
         return `<td>${e.net == null ? '<span class="c-faint">?</span>' : `<span class="${e.net >= 0 ? 'c-win' : 'c-lose'}">${signed(e.net)}</span>`}</td>`;
@@ -1011,8 +1072,9 @@ export function createPlanner(ctx) {
         const e = r.econ;
         const chosen = plan.fill?.id === m.id;
         const per = m.unit ? ` per ${m.unit}` : ' each';
-        const needs = Object.entries(e.inputs).map(([k, n]) => `${n} ${ITEMS[k]?.name || k}`).join(', ');
+        const needs = Object.entries(e.inputs).map(([k, n]) => `${amountText(n)} ${ITEMS[k]?.name || k}`).join(', ');
         const title = `${m.name}: level ${m.level}, ${xpText(m.xp)} XP${per}${m.parts ? ` (${partsText(m)})` : ''}` +
+          (r.xpAll ? `\nWith what's made on the way: ${xpText(r.xpAll)} XP${per} (${xpText(r.xpAll - m.xp)} of it from your own bars)` : '') +
           (needs ? `\nNeeds (from scratch): ${needs}` : '') +
           (m.tools?.length ? `\nTools: ${m.tools.map(t => ITEMS[t]?.name || t).join(', ')}` : '') +
           (m.note ? `\n${m.note}` : '') +
@@ -1648,6 +1710,14 @@ export function createPlanner(ctx) {
         if (t.dataset.gopt === 'fill') g.fillId = t.value;
         if (t.dataset.gopt === 'roundUp') g.roundUp = t.checked;
         if (t.dataset.gopt === 'place') g.place = t.value;
+        if (t.dataset.gopt === 'opt') {
+          // a tick box that's on, or anything but the first of a list; the rest isn't kept
+          const c = (CHOICES[g.skill] || []).find(x => x.id === t.dataset.opt);
+          const v = !c ? null : c.options ? (c.options.slice(1).some(o => o.id === t.value) ? t.value : null) : (t.checked || null);
+          const opts = { ...(g.opts || {}) };
+          if (v) opts[t.dataset.opt] = v; else delete opts[t.dataset.opt];
+          if (Object.keys(opts).length) g.opts = opts; else delete g.opts;
+        }
       });
       renderGoals();
       return;

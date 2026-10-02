@@ -24,6 +24,12 @@
 // magic: the Magic XP (in tenths) of the spell a method casts each time: an
 // enchanted ring's row, or charging an orb on the way to a battlestaff. It isn't
 // the skill's XP, so plans only report it (castsIn).
+// opt: what a choice on the goal changes about a method (Smithing: a ring of
+// forging, goldsmith gauntlets, where your bars come from). indexMethods applies
+// the ones in use.
+// through: a method that feeds, planned through from scratch as well, like a
+// prep step, with its XP counted: the bars you smelt yourself on the way to a
+// platebody. Then what's still to buy is ore, and it takes fewer platebodies.
 
 import { XP_TABLE, MAX_LEVEL } from './skills.js';
 
@@ -110,9 +116,29 @@ export function madeOver(m, runs, startXp10) {
 // Gathering takes nothing in (chopping a tree), so it never comes out of a bank.
 export const gathers = m => Object.keys(m.in).length === 0;
 
+// What the choices in use make of a method: each one's opt entry, in order. in:
+// what it takes instead; add: what it takes besides; note: said in place of the
+// method's own (several are joined); anything else (xp, through, magic…) is set.
+function withOptions(m, opts) {
+  if (!m.opt) return m;
+  let out = m;
+  const notes = [];
+  for (const key of opts) {
+    const v = m.opt[key];
+    if (!v) continue;
+    const { in: instead, add, note, ...rest } = v;
+    out = { ...out, ...rest, in: { ...(instead || out.in), ...(add || {}) } };
+    if (note) notes.push(note);
+  }
+  return out === m || !notes.length ? out : { ...out, note: notes.join(' ') };
+}
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+
 // at: a place whose prices to use where a step has a choice (the Canifis tanner).
-export function indexMethods(methods, { at = null } = {}) {
+// opts: the choices in use ([ids], in the order they apply: see a method's opt).
+export function indexMethods(methods, { at = null, opts = null } = {}) {
   if (at) methods = methods.map(m => (m.at?.[at] ? { ...m, in: { ...m.in, ...m.at[at] } } : m));
+  if (opts && opts.length) methods = methods.map(m => withOptions(m, opts));
   const byId = new Map(methods.map(m => [m.id, m]));
   const producers = new Map();        // item -> prep/source methods that make it, and xp ones that feed
   for (const m of methods) {
@@ -124,7 +150,11 @@ export function indexMethods(methods, { at = null } = {}) {
   }
   const train = methods.filter(m => m.xp > 0);
   const fees = new Set(methods.flatMap(m => m.pays || []));
-  return { methods, byId, producers, train, feeds: methods.some(m => m.feeds), fees };
+  // batch: a step on the way that makes several at once (a ring of forging is
+  // 140 bars' worth) is costed over that many, so its share per item comes out right.
+  let batch = 1;
+  for (const list of producers.values()) for (const p of list) for (const n of Object.values(p.out)) if (Number.isInteger(n) && n > 1) batch = (batch * n) / gcd(batch, n);
+  return { methods, byId, producers, train, feeds: methods.some(m => m.feeds), fees, through: methods.some(m => m.through), batch };
 }
 // A fee is worth what it is: a coin is 1 gp.
 const priced = (ix, priceOf) => (ix.fees.size ? item => (ix.fees.has(item) ? 1 : priceOf(item)) : priceOf);
@@ -137,7 +167,8 @@ const feesOnly = (ix, items) => Object.fromEntries(Object.entries(items).filter(
 // to make it for its own sake, and what a ticked row needs is still made on the
 // way. (Up to v2.5.1 unticking stopped that too, so unticking Sapphire (cut)
 // left uncut sapphires out of the rings as well.)
-const producerKind = p => (p.feeds ? 'source' : p.kind);
+// (through: planned through from scratch too, so it counts as a prep step)
+const producerKind = p => (p.through ? 'prep' : p.feeds ? 'source' : p.kind);
 const allowed = (p, ctx) => ctx.kinds.has(producerKind(p)) && p.level <= ctx.level;
 
 // How many of `item` the stock can provide, making more with allowed producers.
@@ -179,7 +210,7 @@ function availMost(ix, item, stock, ctx, depth = 0) {
   let n = stock.have(item);
   if (depth > 6) return n;
   for (const p of ix.producers.get(item) || []) {
-    if (allowed(p, ctx)) n += (producerKind(p) === 'source' ? mostRuns : maxRuns)(ix, p, stock, ctx, depth + 1) * p.out[item];
+    if (allowed(p, ctx)) n += (producerKind(p) === 'source' || p.through ? mostRuns : maxRuns)(ix, p, stock, ctx, depth + 1) * p.out[item];
   }
   return n;
 }
@@ -234,7 +265,7 @@ export function expand(ix, m, runs, stock, ctx) {
         go(p, done, depth + 1);
         missing = tidy(missing - stock.take(item, missing));
       }
-      const prep = depth <= 6 && makers.find(p => p.kind === 'prep');
+      const prep = depth <= 6 && makers.find(p => producerKind(p) === 'prep');
       if (missing > EPS && prep) {
         go(prep, Math.ceil(missing / prep.out[item]), depth + 1);
         missing = tidy(missing - stock.take(item, missing));
@@ -247,6 +278,33 @@ export function expand(ix, m, runs, stock, ctx) {
   return out;
 }
 const BANK_KINDS = new Set(['prep', 'source']);
+
+// The XP one action of m gives from scratch, with what's planned through on the
+// way counted: a rune platebody and the five bars smelted for it. It's the
+// method's own XP unless the index plans its feeders through (ix.through).
+const EACH = new WeakMap();
+const NONE = new Set();
+export function xpEach(ix, m) {
+  if (!ix.through) return m.xp;
+  let memo = EACH.get(ix);
+  if (!memo) EACH.set(ix, memo = new Map());
+  if (!memo.has(m.id)) memo.set(m.id, expand(ix, m, 1, new Stock(), { level: MAX_LEVEL, unlimited: NONE }).xp);
+  return memo.get(m.id);
+}
+// The fewest actions of m that give `need` XP, made from the stock (left as it
+// is) and planned through beyond it. Bars already in the stock aren't smelted,
+// so they add nothing: it can take more than from scratch, never more than the
+// method's own XP asks for.
+function fewest(ix, m, need, stock, ctx) {
+  let hi = Math.max(1, Math.ceil(need / m.xp));
+  if (!ix.through) return hi;
+  let lo = Math.max(1, Math.ceil(need / xpEach(ix, m)));
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (expand(ix, m, mid, stock.clone(), ctx).xp >= need) hi = mid; else lo = mid + 1;
+  }
+  return lo;
+}
 
 // ── Using the bank ────────────────────────────────────────────────────────
 // Trains with what the bank holds until nothing more can be made.
@@ -485,16 +543,21 @@ export const minorLast = (items, minor) => (!minor || !minor.size ? items
 // per XP (negative = you make money).
 export function methodEconomics(ix, m, priceOf, { level = MAX_LEVEL, unlimited = new Set() } = {}) {
   priceOf = priced(ix, priceOf);
-  const need = without(expand(ix, m, 1, new Stock(), { level, unlimited }).buy, unlimited);
+  // (over a batch where a step on the way makes several at once: a ring of
+  // forging's share of one bar is a 140th of a ring, not a whole one)
+  const n = ix.batch || 1;
+  const all = without(expand(ix, m, n, new Stock(), { level, unlimited }).buy, unlimited);
+  const need = n === 1 ? all : Object.fromEntries(Object.entries(all).map(([item, q]) => [item, q / n]));
   const cost = valueOf(need, priceOf);
   const value = valueOf(outAt(m, level), priceOf);
   const known = !cost.missing.length && !value.missing.length;
   const net = value.total - cost.total;
+  const xp = xpEach(ix, m);
   return {
     inputs: need,
     cost: cost.total, value: value.total, missing: [...cost.missing, ...value.missing],
     net: known ? net : null,
-    gpPerXp: known && m.xp > 0 ? -net / (m.xp / 10) : null,
+    gpPerXp: known && xp > 0 ? -net / (xp / 10) : null,
   };
 }
 
@@ -518,9 +581,11 @@ export function planMix(ix, mix, { startXp10, targetXp10 = null, unlimited = new
     for (const [k, n] of Object.entries(need)) buy[k] = (buy[k] || 0) + n;
     for (const [k, n] of Object.entries(out)) made[k] = (made[k] || 0) + n;
     const casts = castsIn(ix, Object.entries(e.steps));
-    const step = { id: m.id, runs, xp10: runs * m.xp, made: out, buy: need, gain: gainOf(out, need, priceOf), levelAt: level, locked: m.level > level,
-      ...(casts ? { casts: casts.by } : {}) };
-    xp += runs * m.xp;
+    // (bars smelted on the way count, when you make your own)
+    const gained = ix.through ? e.xp : runs * m.xp;
+    const step = { id: m.id, runs, xp10: gained, made: out, buy: need, gain: gainOf(out, need, priceOf), levelAt: level, locked: m.level > level,
+      ...(casts ? { casts: casts.by } : {}), ...(ix.through ? subOf(e.steps, m.id) : {}) };
+    xp += gained;
     return step;
   });
   // What one row of your mix makes for another (sapphires you cut, then set in
@@ -615,35 +680,40 @@ export function planGoal(ix, opts) {
       const stock = fromBank.leftover.clone();
       const segments = [];
       let xp = afterXp;
+      const all = {}, steps = {};
+      const scratch = { level: MAX_LEVEL, unlimited, excluded };
+      // One stretch: the fewest of m that give `need` XP, made from what's left
+      // over and bought beyond it. When you make your own bars (ix.through) the
+      // ones smelted on the way count, so it takes fewer, and the stretch says so.
+      const stretch = (m, need, bridge) => {
+        const runs = fewest(ix, m, need, stock, scratch);
+        const e = expand(ix, m, runs, stock, scratch);
+        for (const [k, n] of Object.entries(e.buy)) all[k] = (all[k] || 0) + n;
+        for (const [k, n] of Object.entries(e.steps)) steps[k] = (steps[k] || 0) + n;
+        const gained = ix.through ? e.xp : runs * m.xp;
+        segments.push({ id: m.id, runs, xp10: gained, ...(bridge ? { bridge: true, toLevel: levelForXp10(xp + gained) } : {}), made: madeOver(m, runs, xp),
+          ...(ix.through ? subOf(e.steps, m.id) : {}) });
+        xp += gained;
+      };
       // A method you can't do yet needs others to get you to its level first: the
       // best one at each level on the way (willows to 45, maples to 60, then
       // yews), of the same sort where there is one (bows before bows).
+      const each = m => xpEach(ix, m);
       if (method.level > afterLevel) {
         const others = choices.filter(m => m.id !== method.id);
         const same = others.filter(m => m.group === method.group);
-        const pool = bestAt(same, afterLevel) ? same : others;
+        const pool = bestAt(same, afterLevel, each) ? same : others;
         const upTo = Math.min(targetXp10, xp10ForLevel(method.level));
         while (xp < upTo) {
           const lv = levelForXp10(xp);
-          const bridge = bestAt(pool, lv);
+          const bridge = bestAt(pool, lv, each);
           if (!bridge) break;
-          const better = pool.filter(m => m.level > lv && m.xp > bridge.xp).map(m => m.level);
+          const better = pool.filter(m => m.level > lv && each(m) > each(bridge)).map(m => m.level);
           const stop = Math.min(upTo, better.length ? xp10ForLevel(Math.min(...better)) : upTo);
-          const runs = Math.ceil((stop - xp) / bridge.xp);
-          segments.push({ id: bridge.id, runs, xp10: runs * bridge.xp, bridge: true, toLevel: levelForXp10(xp + runs * bridge.xp), made: madeOver(bridge, runs, xp) });
-          xp += runs * bridge.xp;
+          stretch(bridge, stop - xp, true);
         }
       }
-      if (xp < targetXp10) {
-        const runs = Math.ceil((targetXp10 - xp) / method.xp);
-        segments.push({ id: method.id, runs, xp10: runs * method.xp, made: madeOver(method, runs, xp) });
-      }
-      const all = {}, steps = {};
-      for (const s of segments) {
-        const e = expand(ix, ix.byId.get(s.id), s.runs, stock, { level: MAX_LEVEL, unlimited, excluded });
-        for (const [k, n] of Object.entries(e.buy)) all[k] = (all[k] || 0) + n;
-        for (const [k, n] of Object.entries(e.steps)) steps[k] = (steps[k] || 0) + n;
-      }
+      if (xp < targetXp10) stretch(method, targetXp10 - xp, false);
       const buy = without(all, unlimited);
       const cost = valueOf(buy, priceOf);
       fill = { id: method.id, locked: method.level > afterLevel, segments, buy, steps, cost: cost.total, costMissing: cost.missing };
@@ -675,12 +745,14 @@ export function planGoal(ix, opts) {
     }
   }
   const table = ix.train.map(m => {
-    const needed = toGo > 0 ? Math.ceil(toGo / m.xp) : 0;
+    // (from scratch, with the bars smelted on the way counted when you make your own)
+    const each = xpEach(ix, m);
+    const needed = toGo > 0 ? Math.ceil(toGo / each) : 0;
     const lvl = Math.max(level, m.level);
     const ctx = { level: lvl, kinds: BANK_KINDS, unlimited, excluded };
     const have = useBank && !gathers(m) ? maxRuns(ix, m, bankStock, ctx) : 0;
     // Still needed: after everything the bank (or your mix) makes; with neither, all of them.
-    const still = !useBank && !fromMix ? needed : remaining > 0 ? Math.ceil(remaining / m.xp) : 0;
+    const still = !useBank && !fromMix ? needed : remaining > 0 ? fewest(ix, m, remaining, after, { level: MAX_LEVEL, unlimited, excluded }) : 0;
     const collect = without(expand(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited, excluded }).buy, unlimited);
     // Balance: the most you could make if every ingredient matched your most
     // plentiful one, and what that would take. (In actions: a log of arrows
@@ -719,7 +791,7 @@ export function planGoal(ix, opts) {
       missing: [...(gains.before?.missing || []), ...(gains.collect?.missing || [])],
     } : null;
     return {
-      id: m.id, level: m.level, xp10: m.xp, locked: m.level > level,
+      id: m.id, level: m.level, xp10: m.xp, ...(each !== m.xp ? { xpAll: each } : {}), locked: m.level > level,
       needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), fromPlan: bankRuns.get(m.id) || 0, toMake: still,
       planned: !useBank ? Math.max(0, Math.floor(Number(mix?.[m.id]) || 0)) : 0,
       collect, balance, gains,
@@ -734,11 +806,17 @@ export function planGoal(ix, opts) {
   };
 }
 
-// Highest XP per action among methods you can do at `level`.
-function bestAt(methods, level) {
+// Highest XP per action among methods you can do at `level` (xpOf: the XP that
+// counts, when it isn't just the method's own).
+function bestAt(methods, level, xpOf = m => m.xp) {
   let best = null;
-  for (const m of methods) if (m.level <= level && m.xp > 0 && (!best || m.xp > best.xp)) best = m;
+  for (const m of methods) if (m.level <= level && m.xp > 0 && (!best || xpOf(m) > xpOf(best))) best = m;
   return best;
+}
+// What was made on the way to a step: { sub: { method id: runs } }, or nothing.
+function subOf(steps, id) {
+  const sub = Object.fromEntries(Object.entries(steps).filter(([k]) => k !== id));
+  return Object.keys(sub).length ? { sub } : {};
 }
 
 // Total value of a bank (items with no known price are listed separately).

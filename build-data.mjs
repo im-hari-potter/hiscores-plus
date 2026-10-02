@@ -7,8 +7,9 @@
 //     XP come straight from the configs the game server runs, so the numbers are the
 //     game's own. XP is kept in tenths, the way the server stores it.
 //   - LostHQ/2004 (GPL-3.0): item_data.json for names, ids and shop values,
-//     item_spritesheet.png for the 32x32 item icons, and for Crafting the rows of
-//     its calculator (js/calculators/crafting.js), checked against the server.
+//     item_spritesheet.png for the 32x32 item icons, and for Crafting, Mining and
+//     Smithing the rows of its calculators (js/calculators/), checked against
+//     the server.
 // The output is committed, so the site itself never needs either checkout.
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -808,6 +809,322 @@ async function crafting() {
 
 await crafting();
 
+// A LostHQ calculator's tables: the part of its script before runCalc, which
+// only sets them up (what else is there are functions for its own page).
+async function calculatorTables(file, names) {
+  const src = await readFile(join(LOSTHQ, 'js/calculators', file), 'utf8');
+  const end = src.indexOf('function runCalc');
+  if (end < 0) throw new Error(`${file}: can't find where its tables end`);
+  return new Function(`${src.slice(0, end)}\nreturn { ${names.join(', ')} };`)();
+}
+
+// ── Mining ─────────────────────────────────────────────────────────────────
+// One method per rock, XP per ore. Nothing goes in (only a pickaxe you have the
+// level for), so these plans don't use the bank. The rows are LostHQ's Mining
+// calculator (js/calculators/mining.js), each checked against the server's
+// mining table, plus the one rock that table has and the calculator leaves
+// out: limestone (it's on the map, at level 10). A gem rock gives one gem by
+// chance, so what it makes is the server's chances for each.
+const miningNotes = [];
+async function mining() {
+  const dir = p => scripts('skill_mining/' + p);
+  const x10 = xp => Math.round(xp * 10);
+  const { ores: calc } = await calculatorTables('mining.js', ['ores']);
+
+  // The server's rocks: what each gives, the level it takes, the XP an ore.
+  // (Not a way to train: the rocks of the Tourist Trap's mining camp.)
+  const SKIP = new Set(['desertrescue_rock']);
+  const GEM_ROCK = 'gemrock';                 // the calculator's key for it, and the server's name for the rock
+  const rocks = new Map();                    // what comes out (or gemrock) -> { level, xp }
+  for (const row of (await readConfig(dir('configs/mine.dbrow'))).values()) {
+    if (SKIP.has(row.name)) continue;
+    const d = fields(row);
+    const key = d.rock_output ? d.rock_output[0] : d.rock[0];
+    const r = { level: Number(d.rock_level[0]), xp: Number(d.rock_exp[0]) };
+    const seen = rocks.get(key);
+    if (seen && (seen.level !== r.level || seen.xp !== r.xp)) throw new Error(`mining: two rocks give ${key}, with different levels or XP`);
+    rocks.set(key, r);
+  }
+  if (!rocks.has(GEM_ROCK)) throw new Error('mining: no gem rock on the server');
+  // A gem rock: one roll on the gem rock table.
+  const table = (await readConfig(dir('configs/gem_rock_table.dbrow'))).get('gem_rock_table');
+  const total = Number(table.data.find(([k]) => k === 'total')[1]);
+  const gems = table.data.filter(([k]) => k === 'drop').map(([, item, count, weight]) => ({ item: need(item), count: Number(count), weight: Number(weight) }));
+  if (!gems.length || gems.reduce((a, g) => a + g.weight, 0) !== total) throw new Error("mining: the gem rock table's chances don't add up");
+
+  // The calculator's rows, checked; a rock only the server has stops the build
+  // until it's been looked at and listed here.
+  const SERVER_ONLY = new Set(['limestone']);
+  for (const [key, row] of Object.entries(calc)) {
+    const r = rocks.get(key);
+    if (!r) throw new Error(`mining: the server has no rock for the calculator's ${key}`);
+    if (r.level !== row.level || r.xp !== x10(row.xp)) throw new Error(`mining ${key}: the calculator says level ${row.level}, ${row.xp} XP; the server level ${r.level}, ${r.xp / 10} XP`);
+  }
+  const order = Object.keys(calc);
+  for (const key of rocks.keys()) {
+    if (key in calc) continue;
+    if (!SERVER_ONLY.has(key)) throw new Error(`mining: the server has a rock the calculator doesn't (${key}): look at it, then list it`);
+    // by level, after the calculator's rows of that level
+    const at = order.findIndex(o => rocks.get(o).level > rocks.get(key).level);
+    order.splice(at < 0 ? order.length : at, 0, key);
+    miningNotes.push(`${ITEM.get(need(key)).name}: level ${rocks.get(key).level}, ${rocks.get(key).xp / 10} XP on the server; not in LostHQ's calculator (added)`);
+  }
+
+  // Pickaxes: the app says which level each takes, so the build checks it still holds.
+  const PICKS = { bronze_pickaxe: 0, iron_pickaxe: 0, steel_pickaxe: 6, mithril_pickaxe: 21, adamant_pickaxe: 31, rune_pickaxe: 41 };
+  const picks = await readConfig(dir('configs/pickaxes.obj'));
+  for (const [pick, level] of Object.entries(PICKS)) {
+    if (Number(picks.get(pick)?.params.levelrequire) !== level) throw new Error(`mining: the ${pick} no longer takes level ${level}; the app's wording says it does`);
+  }
+  if ([...picks.values()].filter(b => b.params.mining_rate).length !== Object.keys(PICKS).length) throw new Error('mining: the server has a pickaxe the app does not name');
+
+  const chance = g => `${ITEM.get(g.item).name.replace(/^Uncut /, '').toLowerCase()} ${g.weight}`;
+  const NOTES = {
+    [GEM_ROCK]: `In Shilo Village. One gem a rock, by chance (out of ${total}): ${gems.map(chance).join(', ')}.`,
+    limestone: "Not on LostHQ's calculator: the server's own level and XP.",
+  };
+  for (const key of order) {
+    const r = rocks.get(key);
+    const gem = key === GEM_ROCK;
+    methods.push({
+      id: `mi_${key}`, skill: 'mining', group: 'Rocks', kind: 'xp',
+      name: gem ? 'Gem rock' : ITEM.get(need(key)).name, level: r.level, xp: r.xp, in: {},
+      out: gem ? Object.fromEntries(gems.map(g => [g.item, (g.count * g.weight) / total])) : { [key]: 1 },
+      // (the calculator shows a gem rock as an uncut red topaz)
+      ...(gem ? { icon: need('uncut_red_topaz') } : {}),
+      ...(NOTES[key] ? { note: NOTES[key] } : {}),
+    });
+  }
+}
+
+await mining();
+
+// ── Smithing ───────────────────────────────────────────────────────────────
+// The rows are LostHQ's Smithing calculator (js/calculators/smithing.js): its
+// smelting list, and its anvil table for each metal, in its order. Every row is
+// checked against the server's own tables; a difference stops the build.
+//
+// A bar you smelt feeds the anvil rows, the way a cut gem feeds a ring: with ore
+// in your bank a plan smelts it on the way, and that XP counts.
+//
+// Three things the calculator has as extra rows or modes are a choice on the
+// goal here (CHOICES), since you either do the thing or you don't:
+//   bars      - where your bars come from. Buy them: what's still to buy is
+//               bars (the calculator's Smithing mode). Smelt them: it's ore and
+//               coal, and the smelting XP counts (its Smelting + smithing
+//               mode). Superheat them: the same, made with the Superheat Item
+//               spell: its runes a bar, Magic XP on top, and iron never fails.
+//   ring      - a ring of forging: every iron ore becomes a bar, and a ring
+//               lasts 140 bars. Without one half the ore is lost in a furnace,
+//               so a bar takes 2 ore on average (the calculator's "No Ring of
+//               Forging" row).
+//   gauntlets - goldsmith gauntlets: 2.5 times the XP for a gold bar (the
+//               calculator's "Gauntlets" row).
+// A method's opt says what each choice changes about it.
+const smithingNotes = [];
+const choices = {};          // skill -> the choices a goal has: [{ id, label, tip }]
+const chargeItems = {};      // what a worn item gives while it lasts: slug -> { id, name, of, per }
+async function smithing() {
+  const dir = p => scripts('skill_smithing/' + p);
+  const x10 = xp => Math.round(xp * 10);
+  const name = k => nameOverride[k] || ITEM.get(need(k)).name;
+  const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+  const { smithingXP: calc, smeltingXP: calcSmelt } = await calculatorTables('smithing.js', ['smithingXP', 'smeltingXP']);
+  // (objects are compared whatever order their keys come in)
+  const text = v => JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort()) : x));
+  const differ = (what, calcValue, serverValue) => {
+    if (text(calcValue) !== text(serverValue)) throw new Error(`smithing ${what}: the calculator says ${text(calcValue)}, the server ${text(serverValue)}`);
+  };
+
+  // ── The server's side ──
+  // Smelting: a bar from its ore, some with coal, at a furnace.
+  const smelts = new Map();                   // bar -> { level, xp, in }
+  for (const b of (await readConfig(dir('configs/smelting/smelting.struct'))).values()) {
+    const p = b.params;
+    smelts.set(need(p.product), { level: Number(p.levelrequired), xp: Number(p.productexp),
+      in: { [need(p.ingredient)]: Number(p.bar_count), ...(p.ingredient_secondary ? { [need(p.ingredient_secondary)]: Number(p.ingredient_secondary_count) } : {}) } });
+  }
+  const smeltScript = await readFile(dir('scripts/smelting/smelting.rs2'), 'utf8');
+  // Iron: with a ring of forging worn it always works (and the ring loses a
+  // charge); without, one try in two fails and the ore is gone.
+  const iron = smeltScript.match(/if \(\$product = (\w+)\) \{[^}]*?inv_total\(worn, (\w+)\) > 0[^}]*?~lose_charge_ring_of_forging;\s*\} else if \(randominc\((\d+)\) = 1\)/);
+  if (!iron || iron[1] !== 'iron_bar') throw new Error("smithing: can't read how iron ore fails in the furnace");
+  const ring = need(iron[2]);
+  if (Number(iron[3]) !== 1) throw new Error('smithing: iron no longer fails one try in two');
+  const orePerBar = 2;                        // on average, with one try in two failing
+  const ringBars = fromScript(await readFile(scripts('general/scripts/enchanted_jewellry/ring_of_forging.rs2'), 'utf8'),
+    /%ring_of_forging >= (\d+)/, 'how many bars a ring of forging lasts');
+  // Gold: goldsmith gauntlets scale the XP.
+  const gold = smeltScript.match(/if \(\$product = (\w+) & inv_total\(worn, (\w+)\) > 0\) \{\s*\$xp = scale\((\d+), (\d+), \$xp\)/);
+  if (!gold || gold[1] !== 'gold_bar') throw new Error("smithing: can't read what the goldsmith gauntlets do");
+  const gauntlets = need(gold[2]);
+  const gauntletXp = Math.floor((smelts.get('gold_bar').xp * Number(gold[3])) / Number(gold[4]));      // the engine's scale(): whole tenths
+
+  // Superheat Item: smelts one bar anywhere, for its runes. The same Smithing XP
+  // (gauntlets and all), Magic XP on top, and no furnace for the iron to fail in.
+  const spell = fields((await readConfig(scripts('skill_magic/configs/magic_spells.dbrow'))).get('magic_spell_superheat') || {});
+  if (!spell.runesrequired) throw new Error("smithing: can't find the Superheat Item spell");
+  const superheat = { spell: 'Superheat Item', magic: Number(spell.experience[0]), magicLevel: Number(spell.levelrequired[0]), runes: {} };
+  for (let i = 0; i + 1 < spell.runesrequired.length; i += 2) if (spell.runesrequired[i] !== 'null') superheat.runes[need(spell.runesrequired[i])] = Number(spell.runesrequired[i + 1]);
+  if (!(superheat.magic > 0) || !(superheat.magicLevel > 0) || !Object.keys(superheat.runes).length) throw new Error("smithing: can't read the Superheat Item spell");
+  const heatScript = await readFile(scripts('skill_magic/scripts/spells/superheat.rs2'), 'utf8');
+  if (/randominc/.test(heatScript)) throw new Error('smithing: Superheat Item can fail now; the data says it never does');
+  if (!/\$smith_xp = struct_param\(\$bar_struct, productexp\)/.test(heatScript)) throw new Error("smithing: Superheat Item no longer gives the bar's own Smithing XP");
+  if (!new RegExp(`\\$bar = gold_bar & inv_total\\(worn, ${gold[2]}\\) > 0\\) \\{\\s*\\$smith_xp = scale\\(${gold[3]}, ${gold[4]}, \\$smith_xp\\)`).test(heatScript)) throw new Error("smithing: the gauntlets no longer count for Superheat Item");
+  const noHeat = [...heatScript.matchAll(/if\(\$ore1 = (\w+)\) \{\s*mes\("Even this spell is not hot enough/g)].map(m => m[1]);   // ores it won't melt
+
+  // Cannonballs: a steel bar poured into an ammo mould at a furnace.
+  const ballScript = await readFile(dir('scripts/smelting/cannonballs.rs2'), 'utf8');
+  const ballMade = ballScript.match(/inv_del\(inv, (\w+), (\d+)\);\s*inv_add\(inv, (\w+), (\d+)\);/);
+  if (!ballMade) throw new Error("smithing: can't read what a cannonball takes");
+  const ball = {
+    item: need(ballMade[3]), count: Number(ballMade[4]), bar: need(ballMade[1]), bars: Number(ballMade[2]),
+    level: fromScript(ballScript, /stat\(smithing\) < (\d+)/, 'the level for cannonballs'),
+    xp: fromScript(ballScript, /stat_advance\(smithing, (\d+)\)/, 'the XP for cannonballs'),
+    mould: need(fromScriptText(ballScript, /inv_total\(inv, (\w+)\) < 1\) \{\s*mes\("You need a cannonball mould/, 'the mould for cannonballs')),
+  };
+
+  // The elemental bar: smelted at the Elemental Workshop's own furnace. The
+  // server asks for a Smithing level only to work the bars (the calculator's 20).
+  const ew = await readFile(scripts('quests/quest_elemental_workshop/scripts/quest_elemental_workshop.rs2'), 'utf8');
+  const furnace = ew.slice(ew.indexOf('[oplocu,elemental_workshop_furnace]')).split(/\n\[/)[0];
+  const smeltPart = furnace.slice(furnace.indexOf('if($last_useitem = elemental_workshop_ore)'));
+  const elemental = {
+    bar: need(fromScriptText(smeltPart, /inv_add\(inv, (\w+), 1\)/, 'the elemental bar')),
+    in: Object.fromEntries([...smeltPart.matchAll(/inv_del\(inv, (\w+), (\d+)\)/g)].map(m => [need(m[1]), Number(m[2])])),
+    xp: fromScript(smeltPart, /stat_advance\(smithing, (\d+)\)/, 'the XP for an elemental bar'),
+    level: fromScript(ew, /stat\(smithing\) < (\d+)\) \{\s*~mesbox\("You need a Smithing level of at least \d+ to work elemental bars/, 'the level for elemental bars'),
+  };
+
+  // The anvil: what each bar makes, how many bars it takes and how many come
+  // out. XP is per bar, the same for everything a metal makes.
+  const perBar = new Map([...(await readConfig(dir('configs/smithing/smithing.struct'))).values()].map(b => [b.params.namedobj, Number(b.params.xpperbar)]));
+  const anvil = new Map();                    // product -> { bar, bars, count, level, xp }
+  for (const row of (await readConfig(dir('configs/smithing/smithing.dbrow'))).values()) {
+    const d = fields(row);
+    const bar = d.bar[0], bars = Number(d.bar_amount[0]);
+    if (!perBar.has(bar)) throw new Error(`smithing: no XP per bar for ${bar}`);
+    anvil.set(need(d.product[0]), { bar: need(bar), bars, count: Number(d.product_amount[0]), level: Number(d.levelrequired[0]), xp: bars * perBar.get(bar) });
+  }
+  const anvilScript = await readFile(dir('scripts/smithing/smithing.rs2'), 'utf8');
+  // Two kinds of thing need a quest done first; the row's tooltip says so.
+  if (!/_dart_tip\s*:\s*if \(%desertrescue < \^desertrescue_learned_darts\)/.test(anvilScript)) throw new Error("smithing: dart tips no longer wait for The Tourist Trap");
+  if (!/if\(%death_equiproom < \^death_complete\) \{\s*if_sethide\(smithing:claws_layer, true\)/.test(anvilScript)) throw new Error('smithing: claws no longer wait for Death Plateau');
+  const hammer = need(fromScriptText(anvilScript, /inv_total\(inv, (\w+)\) < 1\) \{\s*~mesbox\("You need a hammer/, 'the hammer'));
+  const questNote = key => (/_dart_tip$/.test(key) ? 'Dart tips can be smithed once The Tourist Trap is done.' : /_claws$/.test(key) ? 'Claws can be smithed once Death Plateau is done.' : null);
+
+  // ── The calculator's rows ──
+  const SMELT = 'Smelting';
+  const METAL = { bronze_bar: 'Bronze', iron_bar: 'Iron', steel_bar: 'Steel', mithril_bar: 'Mithril', adamantite_bar: 'Adamant', runite_bar: 'Rune' };
+  for (const bar of Object.keys(calc)) if (!METAL[bar]) throw new Error(`smithing.js has a metal this script doesn't know: ${bar}`);
+  const charge = 'ring_of_forging_charge';    // a bar's worth of a ring of forging
+  chargeItems[charge] = { id: 1_000_101, name: `${ITEM.get(ring).name} charge`, of: ring, per: ringBars };
+  const smelted = [];                          // bars, in the calculator's order
+  for (const [key, row] of Object.entries(calcSmelt)) {
+    // its two extra rows are choices here; they're checked all the same
+    if (key === 'iron_bar_no_forging') {
+      differ('iron without a ring', [row.level, x10(row.xp), row.ingredients], [smelts.get('iron_bar').level, smelts.get('iron_bar').xp, { iron_ore: orePerBar }]);
+      continue;
+    }
+    if (key === 'gold_smithgauntlets') {
+      differ('gold with gauntlets', [row.level, x10(row.xp), row.ingredients], [smelts.get('gold_bar').level, gauntletXp, smelts.get('gold_bar').in]);
+      continue;
+    }
+    const s = key === elemental.bar ? elemental : smelts.get(key);
+    if (!s) throw new Error(`smithing: the server smelts no ${key}`);
+    differ(key, [row.level, x10(row.xp), row.ingredients], [s.level, s.xp, s.in]);
+    smelted.push(key);
+    const m = { id: `sm_${key}`, skill: 'smithing', group: SMELT, kind: 'xp', name: name(key), level: s.level, xp: s.xp, in: s.in, out: { [key]: 1 } };
+    if (key === 'iron_bar') {
+      m.in = { [need('iron_ore')]: orePerBar };
+      m.note = `Half the iron ore is lost in a furnace, so a bar takes ${orePerBar} ore on average. A ring of forging or Superheat Item saves it all: see Ring of forging and Bars on the goal.`;
+      m.opt = { ring: { in: { ...s.in, [charge]: 1 }, note: `With a ring of forging every ore is a bar. A ring lasts ${ringBars} bars, and they're counted.` } };
+    }
+    if (key === 'gold_bar') {
+      m.note = `With goldsmith gauntlets it's ${gauntletXp / 10} XP: tick Goldsmith gauntlets on the goal.`;
+      m.opt = { gauntlets: { xp: gauntletXp, note: `${gauntletXp / 10} XP with goldsmith gauntlets worn (${s.xp / 10} without).` } };
+    }
+    if (key === elemental.bar) m.note = "Elemental Workshop: smelted at the workshop's own furnace. The ore is dropped by the rock elementals there.";
+    // Superheated: the server's own ingredients (one iron ore: it can't fail) and the spell's runes.
+    if (!Object.keys(s.in).some(k => noHeat.includes(k))) {
+      m.opt = { ...m.opt, superheat: { ...(same(m.in, s.in) ? {} : { in: s.in }), add: superheat.runes, magic: superheat.magic, spell: superheat.spell, magicLevel: superheat.magicLevel,
+        note: `Made with ${superheat.spell} (Magic ${superheat.magicLevel}): ${superheat.magic / 10} Magic XP each, on top of the Smithing XP.${key === 'iron_bar' ? ' It never fails: every iron ore is a bar, with no ring of forging.' : ''}` } };
+    }
+    methods.push(m);
+  }
+  for (const key of smelts.keys()) {
+    // (the 'perfect' gold of Family Crest is a quest item)
+    if (!smelted.includes(key) && key !== 'perfect_gold_bar') throw new Error(`smithing: the server smelts ${key}, which the calculator doesn't list`);
+  }
+  // The ring: worn, it's used up a bar at a time. A step on the way, so plans
+  // count whole rings and what's left of one carries on.
+  methods.push({ id: `sm_${ring}`, skill: 'smithing', group: 'Ring of forging', kind: 'prep', name: `${ITEM.get(ring).name} (${ringBars} bars)`, level: 1, xp: 0,
+    in: { [ring]: 1 }, out: { [charge]: ringBars } });
+
+  const made = {};                             // group -> what its rows make
+  const seen = new Set();
+  for (const [bar, rows] of Object.entries(calc)) {
+    const group = METAL[bar];
+    made[group] = [];
+    for (const [key, row] of Object.entries(rows)) {
+      let a = anvil.get(key), furnaceJob = false;
+      if (!a && key === ball.item) { a = { bar: ball.bar, bars: ball.bars, count: ball.count, level: ball.level, xp: ball.xp }; furnaceJob = true; }
+      if (!a) throw new Error(`smithing: the server makes no ${key}`);
+      differ(key, [bar, row.bars, row.level, x10(row.xp)], [a.bar, a.bars, a.level, a.xp]);
+      seen.add(key);
+      made[group].push(key);
+      const note = furnaceJob ? 'Made at a furnace, not an anvil, with an ammo mould (from Dwarf Cannon).' : questNote(key);
+      methods.push({
+        id: `sm_${key}`, skill: 'smithing', group, kind: 'xp', tools: [furnaceJob ? ball.mould : hammer],
+        // more than one from a bar is counted in bars: "100 bars → 1,500 Bronze arrowtips"
+        ...(a.count > 1 ? { unit: 'bar', units: 'bars' } : {}),
+        name: name(key), level: a.level, xp: a.xp, in: { [a.bar]: a.bars }, out: { [key]: a.count },
+        ...(note ? { note } : {}),
+      });
+    }
+  }
+  for (const key of anvil.keys()) if (!seen.has(key)) throw new Error(`smithing: the server makes ${key}, which the calculator doesn't list`);
+
+  // A bar an anvil row takes feeds it: with ore in your bank a plan smelts it
+  // on the way. When you make your own bars (smelted or superheated) it's
+  // planned through from scratch too: ore and coal on the list, and the
+  // smelting XP counted.
+  const mine = methods.filter(m => m.skill === 'smithing');
+  const inputs = new Set(mine.flatMap(m => Object.keys(m.in)));
+  for (const m of mine) {
+    if (m.group !== SMELT || !Object.keys(m.out).some(k => inputs.has(k))) continue;
+    m.feeds = 1;
+    m.opt = { ...m.opt, smelt: { through: 1 }, ...(m.opt?.superheat ? { superheat: { ...m.opt.superheat, through: 1 } } : {}) };
+  }
+
+  const runeText = Object.entries(superheat.runes).map(([k, n]) => `${n === 1 ? (/^[aeiou]/i.test(ITEM.get(k).name) ? 'an' : 'a') : n} ${ITEM.get(k).name.toLowerCase()}${n === 1 ? '' : 's'}`).join(' and ');
+  // A choice with options is a list to pick from (the first is how it starts,
+  // and changes nothing); one without is a tick box. unless: a choice that makes
+  // this one pointless, so it's left out then.
+  choices.smithing = [
+    { id: 'bars', label: 'Bars', options: [{ id: 'buy', name: 'Buy them' }, { id: 'smelt', name: 'Smelt them' }, { id: 'superheat', name: 'Superheat them' }],
+      tip: `Buy them: what's still to buy is bars (ore in your bank is still smelted on the way, at a furnace). Smelt them: it's ore and coal, and the smelting XP counts toward your goal. ` +
+        `Superheat them: the same, made with ${superheat.spell} (Magic ${superheat.magicLevel}): ${runeText} a bar, ${superheat.magic / 10} Magic XP each, and iron never fails.` },
+    { id: 'ring', label: 'Ring of forging', unless: 'superheat',
+      tip: `On: every iron ore is a bar, and rings of forging are counted (one lasts ${ringBars} bars). Off: half the iron ore is lost in a furnace, so an iron bar takes ${orePerBar} ore on average.` },
+    { id: 'gauntlets', label: 'Goldsmith gauntlets',
+      tip: `On: a gold bar gives ${gauntletXp / 10} XP. Off: ${smelts.get('gold_bar').xp / 10} XP.` },
+  ];
+
+  // The Bank tab: ores, bars, the ring and the runes, then what each metal makes.
+  const coal = need('coal');
+  const ores = [...new Set(smelted.flatMap(k => Object.keys((k === elemental.bar ? elemental : smelts.get(k)).in)))].filter(k => k !== coal).concat(coal);
+  bankGroups.smithing = [
+    { name: 'Ores and coal', items: ores },
+    { name: 'Bars', items: smelted },
+    { name: 'Ring of forging and runes for Superheat', items: [ring, ...Object.keys(superheat.runes)] },
+    ...Object.entries(made).map(([group, items]) => ({ name: `Made: ${group.toLowerCase()}`, items })),
+  ];
+  smithingNotes.push(`${smelted.length} bars, ${seen.size} anvil and furnace rows; a ring of forging lasts ${ringBars} bars; gold with gauntlets ${gauntletXp / 10} XP; ${superheat.spell}: Magic ${superheat.magicLevel}, ${runeText}, ${superheat.magic / 10} Magic XP (not: ${noHeat.map(k => ITEM.get(k)?.name || k).join(', ')})`);
+}
+
+await smithing();
+
 // ── Catalog of every item the data mentions ───────────────────────────────
 const used = new Set();
 for (const m of methods) {
@@ -823,7 +1140,7 @@ for (const k of [...used]) {
   if (m && ITEM.has('4dose' + m[1])) used.add('4dose' + m[1]);
 }
 
-const names = [...used].filter(k => !virtualItems[k]).map(need).sort((a, b) => ITEM.get(a).id - ITEM.get(b).id);
+const names = [...used].filter(k => !virtualItems[k] && !chargeItems[k]).map(need).sort((a, b) => ITEM.get(a).id - ITEM.get(b).id);
 
 // ── Icon atlas ─────────────────────────────────────────────────────────────
 const PER_ROW = 16, SIZE = 32;
@@ -861,12 +1178,17 @@ names.forEach((name, n) => {
 for (const [slug, v] of Object.entries(virtualItems)) {
   items[slug] = { id: v.id, name: v.name, cost: v.cost, members: 1, icon: items[v.iconOf].icon, set: v.parts };
 }
+// What a worn item gives while it lasts (a ring of forging's 140 bars): not an
+// item you hold, so it's worth nothing and never bought. Plans count the ring.
+for (const [slug, v] of Object.entries(chargeItems)) {
+  items[slug] = { id: v.id, name: v.name, cost: 0, members: 1, icon: items[v.of].icon, gp: 0, charge: { of: v.of, per: v.per } };
+}
 
 const out = `// Generated by build-data.mjs. Do not edit by hand; change the script and re-run it.
 // Levels and XP come from Lost City's server content (LostCityRS/Content, rev 274, MIT);
 // XP is in tenths, like the server keeps it. Item names, ids and shop values are from
-// LostHQ's item database (GPL-3.0). Crafting's rows are LostHQ's Crafting calculator
-// (GPL-3.0), checked against the server. RuneScape is (c) Jagex Ltd.
+// LostHQ's item database (GPL-3.0). The rows of Crafting, Mining and Smithing are those
+// of LostHQ's calculators (GPL-3.0), checked against the server. RuneScape is (c) Jagex Ltd.
 //
 // A method turns "in" items into "out" items (no "in" at all: gathering, like
 // Woodcutting). unit/units, when set, is what one action uses (one essence, one
@@ -888,7 +1210,15 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // pays: inputs that are a fee (the tanner's coins): never taken from a bank,
 // never holding a plan back, always a cost. at: what the step takes instead at
 // another place (the Canifis tanner's fee); PLACES names the choice.
-// An item with gp is always worth that (a coin is 1 gp): no market price.
+// opt: what a choice on the goal changes about a method (CHOICES names them):
+// { choice: { in (what it takes instead), add (what it takes besides), xp, note,
+// magic/spell/magicLevel, through } }. through: a method that feeds is planned
+// through from scratch as well, like a prep step, and its XP counts (bars you
+// smelt yourself). icon: the item a method is shown as, when it isn't the first
+// thing it makes (a gem rock).
+// An item with gp is always worth that (a coin is 1 gp): no market price. One
+// with charge is what a worn item gives while it lasts (a ring of forging's 140
+// bars): a step on the way turns the item into them, so plans count whole rings.
 
 export const GAME_REVISION = 274;
 export const ICON_SIZE = ${SIZE};
@@ -915,10 +1245,18 @@ export const SALE_GROUPS = ${JSON.stringify(saleGroups, null, 2)};
 // Where a skill has a choice of place that changes what a step takes: the
 // tanner (the first is the default; a method's "at" has the others' amounts).
 export const PLACES = ${JSON.stringify(places, null, 2)};
+
+// Choices a goal has in a skill, each changing what some methods take or give
+// (a method's "opt"). One with options is a list to pick from: the first is how
+// it starts and changes nothing. One without is a tick box, off to start.
+// unless: a choice that makes this one pointless, so it's left out then.
+export const CHOICES = ${JSON.stringify(choices, null, 2)};
 `;
 await writeFile('gamedata.js', out);
 console.log(`gamedata.js: ${methods.length} methods, ${names.length} items; items.png ${PER_ROW * SIZE}x${rows * SIZE}`);
 for (const note of craftingNotes) console.log(`  crafting: ${note}`);
+for (const note of miningNotes) console.log(`  mining: ${note}`);
+for (const note of smithingNotes) console.log(`  smithing: ${note}`);
 
 // ── Bank screenshots ───────────────────────────────────────────────────────
 // What bankread.js needs to read a bank from a screenshot, loaded only when one

@@ -1193,6 +1193,169 @@ await check('crafting: a spell above your Magic level says so in the Magic XP ti
   }
 });
 
+await check('mining: no bank, rocks to mine and what they are worth; limestone, and a gem rock by its chances', async () => {
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  await addGoal('mining', 90);
+  const card = page.locator('.goal', { hasText: 'Mining' });
+  try {
+    await card.locator('.plan').waitFor();
+    const t = await card.innerText();
+    assert.match(t, /Level 86 → 90/);           // (the Gains check trained 500,000 Mining XP)
+    assert.match(t, /Mining only needs a pickaxe you have the level for \(bronze and iron from level 1, steel 6, mithril 21, adamant 31, rune 41\), so this plan doesn't use your bank\./);
+    assert.doesNotMatch(t, /From your bank|Use my bank|To collect or buy|Buying it all|Also bring/);
+    assert.match(t, /To reach your goal: 1,435,685 XP/);
+    assert.match(t, /11,486 × Runite ore \+1,435,750 XP/, 'the most XP an ore at 86');
+    assert.match(t, /What you make is worth/);
+    // every rock of the calculator, and limestone
+    const names = await card.locator('tr[data-method] td:nth-child(2)').allInnerTexts();
+    assert.deepEqual(names.map(x => x.trim()), ['Clay', 'Rune essence', 'Copper ore', 'Tin ore', 'Blurite ore', 'Limestone', 'Iron ore', 'Silver ore', 'Coal', 'Gold ore', 'Gem rock', 'Mithril ore', 'Adamantite ore', 'Runite ore']);
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Rock', 'XP', 'Net/item', 'gp/XP', 'To goal', 'Plan to make']);
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+    assert.deepEqual((await cells('mi_limestone')).slice(0, 3), ['10', 'Limestone', '26.5']);
+    assert.deepEqual([(await cells('mi_limestone'))[5], (await cells('mi_coal'))[5]], ['54,177', '28,714'], 'To goal: 1,435,685 XP at 26.5 and at 50 each');
+    assert.match(await card.locator('tr[data-method="mi_limestone"]').getAttribute('title'), /Limestone: level 10, 26\.5 XP each\nNot on LostHQ's calculator: the server's own level and XP\./);
+    // a gem rock: shown as the calculator shows it, and worth its chances
+    assert.equal(await card.locator('tr[data-method="mi_gemrock"] .item').first().getAttribute('title'), 'Uncut red topaz');
+    assert.match(await card.locator('tr[data-method="mi_gemrock"]').getAttribute('title'), /Gem rock: level 40, 65 XP each\nIn Shilo Village\. One gem a rock, by chance \(out of 128\): opal 60, jade 30, red topaz 15, sapphire 9, emerald 5, ruby 5, diamond 4\./);
+    await card.locator('select[data-gopt="fill"]').selectOption('mi_gemrock');
+    await card.locator('.step', { hasText: 'Gem rock' }).waitFor();
+    assert.match(flat(await card.innerText()), /22,088 × Gem rock \+1,435,720 XP In Shilo Village\. One gem a rock, by chance/);
+    // its prices: what it makes, the gems among them
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="mining"]');
+    await page.waitForSelector('[data-price="runite_ore"]');
+    assert.match(flat(await text('#prices-body')), /Ores and gems.*Clay.*Rune essence.*Limestone.*Coal.*Uncut opal.*Uncut diamond.*Runite ore/);
+    assert.equal(await page.locator('#bank-head [data-bskill="mining"], #bank-body [data-bskill="mining"]').count(), 0);
+  } finally {
+    await page.click('.tab[data-tab="goals"]');
+    if (await card.count()) {
+      await card.locator('[data-act="remove-goal"]').click();
+      await card.locator('[data-act="remove-goal"]').click();
+    }
+    await page.waitForFunction(() => ![...document.querySelectorAll('.goal')].some(g => g.innerText.includes('Mining')));
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="herblore"]');
+  }
+});
+
+await check('smithing: ore is smelted on the way; bars bought, smelted or superheated; a ring of forging and goldsmith gauntlets', async () => {
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  const BANK = { iron_ore: '1000', coal: '1200', ring_of_forging: '3', gold_ore: '500', naturerune: '300', firerune: '5000' };
+  const card = page.locator('.goal', { hasText: 'Smithing' });
+  try {
+    await setBank('smithing', BANK);
+    // the Smithing bank: ores, bars, the ring and the runes, then what each metal makes
+    assert.deepEqual((await page.locator('#bank-body .bank-group h4, #bank-body .group-title, #bank-body h4').allInnerTexts()).map(flat).filter(Boolean).slice(0, 4),
+      ['Ores and coal', 'Bars', 'Ring of forging and runes for Superheat', 'Made: bronze']);
+    await addGoal('smithing', 80);
+    const sec = card.locator('.plan-sec').first();
+    await card.locator('.step', { hasText: 'Steel platebody' }).first().waitFor();
+    const steps = async () => (await sec.locator('.step').allInnerTexts()).map(flat);
+    const then = card.locator('.plan-sec', { hasText: 'reach your goal' }).first();
+    // The choices: where the bars come from (bought, to start with), a ring of forging, goldsmith gauntlets
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /^Use my bank Round up my supplies Bars Buy them Smelt them Superheat them Ring of forging Goldsmith gauntlets \d+ kinds of item in your bank/);
+    assert.equal(await card.locator('select[data-opt="bars"]').inputValue(), 'buy');
+    assert.match(await card.locator('label:has(select[data-opt="bars"])').getAttribute('title'), /^Buy them: what's still to buy is bars .*Superheat them: the same, made with Superheat Item \(Magic 43\): a nature rune and 4 fire runes a bar, 53 Magic XP each, and iron never fails\.$/);
+    assert.match(await card.locator('label:has(input[data-opt="ring"])').getAttribute('title'), /one lasts 140 bars.*an iron bar takes 2 ore on average\.$/);
+    // As it is: steel gets the ore first, as far as the coal goes; iron loses half its ore; gold is 22.5 XP
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +51,750 XP → level 73');
+    let st = await steps();
+    assert.equal(st.length, 3, st.join(' / '));
+    assert.match(st[0], /^120 × Steel platebody \+33,000 XP .*incl\. 600 × Steel bar \+10,500 XP$/);
+    assert.match(st[1], /^40 × Iron platebody \+7,500 XP .*incl\. 200 × Iron bar \+2,500 XP$/);
+    assert.match(st[2], /^500 × Gold bar \+11,250 XP/);
+    assert.equal(await sec.locator('.tip.magic').count(), 0);
+    // the rest: steel platebodies, with the bars to buy and a hammer
+    assert.match(flat(await then.locator('.step').innerText()), /^5,293 × Steel platebody \+992,437\.5 XP$/);
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 26,465 Steel bar/);
+    assert.match(flat(await then.innerText()), /Also bring: Hammer/);
+    // the table: a tab a metal, steel's showing; things made several to a bar are counted in bars
+    assert.deepEqual((await card.locator('.group-pick .chip').allInnerTexts()).map(x => x.trim()), ['Smelting', 'Bronze', 'Iron', 'Steel', 'Mithril', 'Adamant', 'Rune', 'All']);
+    assert.equal((await card.locator('.group-pick .chip.on').innerText()).trim(), 'Steel');
+    assert.equal(await card.locator('tr[data-method]').count(), 24);
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+    assert.deepEqual((await cells('sm_steel_platebody')).slice(1, 4), ['48', 'Steel platebody', '187.5']);
+    assert.match((await cells('sm_steel_arrowheads'))[2], /^Steel arrowtips\s*per bar$/);
+    assert.match(await card.locator('tr[data-method="sm_mcannonball"]').getAttribute('title'), /Cannonball: level 35, 37\.5 XP per bar\nNeeds \(from scratch\): 1 Steel bar\nTools: Ammo mould\nMade at a furnace, not an anvil, with an ammo mould \(from Dwarf Cannon\)\./);
+    assert.match(await card.locator('tr[data-method="sm_steel_claws"]').getAttribute('title'), /Tools: Hammer\nClaws can be smithed once Death Plateau is done\./);
+    assert.match(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()), /A row marked "per bar" counts bars\.$/);
+
+    // Smelt them: ore and coal to buy, and the smelting XP counts, so it takes fewer
+    await card.locator('select[data-opt="bars"]').selectOption('smelt');
+    await then.locator('.step', { hasText: '3,609 × Steel platebody' }).waitFor();
+    assert.match(flat(await then.locator('.step').innerText()), /^3,609 × Steel platebody \+992,475 XP incl\. 18,045 × Steel bar \+315,787\.5 XP$/);
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 18,045 Iron ore( \([\d.,]+[KM]?\))? 36,090 Coal/);
+    assert.match(flat(await card.locator('select[data-gopt="fill"] option:checked').innerText()), /^Steel platebody \(lvl 48, 275 XP\)$/);
+    assert.deepEqual((await cells('sm_steel_platebody')).slice(1, 4), ['48', 'Steel platebody', '275'], 'the XP with its five bars smelted');
+    assert.match(await card.locator('tr[data-method="sm_steel_platebody"]').getAttribute('title'),
+      /Steel platebody: level 48, 187\.5 XP each\nWith what's made on the way: 275 XP each \(87\.5 of it from your own bars\)\nNeeds \(from scratch\): 5 Iron ore, 10 Coal\nTools: Hammer/);
+    assert.match(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()), /XP and counts include the bars you make on the way\.$/);
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +51,750 XP → level 73', 'your bank makes the same either way');
+
+    // Superheat them: the runes too, the Magic XP, and no ring to tick. The bank goes as far as its 300 nature runes.
+    await card.locator('select[data-opt="bars"]').selectOption('superheat');
+    await sec.locator('h4', { hasText: '+16,500 XP' }).waitFor();
+    assert.equal(await card.locator('input[data-opt="ring"]').count(), 0, 'iron never fails that way');
+    st = await steps();
+    assert.equal(st.length, 1, st.join(' / '));
+    assert.match(st[0], /^60 × Steel platebody \+16,500 XP .*incl\. 300 × Steel bar \+5,250 XP$/);
+    assert.equal(flat(await sec.locator('.tip.magic').innerText()), 'Magic XP on the way: +15,900 XP from 300 × Superheat Item (Magic 43)');
+    assert.match(flat(await then.locator('.step').innerText()), /^3,737 × Steel platebody \+1,027,675 XP incl\. 18,685 × Steel bar \+326,987\.5 XP$/);
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 17,985 Iron ore( \([\d.,]+[KM]?\))? 36,770 Coal( \([\d.,]+[KM]?\))? 18,685 Nature rune( \([\d.,]+[KM]?\))? 70,940 Fire rune/);
+    assert.equal(flat(await then.locator('.tip.magic').innerText()), 'Magic XP on the way: +990,305 XP from 18,685 × Superheat Item (Magic 43)');
+    assert.match(await card.locator('label:has(input[data-gopt="roundUp"])').getAttribute('title'), /Rings of forging and runes never hold it back: what you're short of is collected too\.$/);
+    // rounded up, the runes short are collected: all 1,000 ore become steel, with the coal for it
+    await card.locator('input[data-gopt="roundUp"]').check();
+    await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
+    st = await steps();
+    assert.match(st[0], /^120 × Steel platebody \+33,000 XP .*incl\. 600 × Steel bar \+10,500 XP collect 300 Nature rune$/);
+    assert.match(flat(await sec.locator('.collect').innerText()), /^To round up your supplies, collect: .*Nature rune/);
+    await page.screenshot({ path: `${SHOTS}/10i-smithing-superheat.png`, fullPage: true });
+    await card.locator('input[data-gopt="roundUp"]').uncheck();
+
+    // Back to buying bars, with a ring of forging and goldsmith gauntlets: the 400 ore left for iron are 400 bars,
+    // out of the 3 rings in the bank, and gold is 56.2 XP
+    await card.locator('select[data-opt="bars"]').selectOption('buy');
+    await card.locator('input[data-opt="ring"]').check();
+    await card.locator('input[data-opt="gauntlets"]').check();
+    await sec.locator('h4', { hasText: '+76,100 XP' }).waitFor();
+    st = await steps();
+    assert.equal(st.length, 3, st.join(' / '));
+    assert.match(st[1], /^80 × Iron platebody \+15,000 XP .*incl\. 3 × Ring of forging \(140 bars\), 400 × Iron bar \+5,000 XP$/);
+    assert.match(st[2], /^500 × Gold bar \+28,100 XP/);
+    await card.locator('[data-tgroup="Smelting"]').click();
+    assert.deepEqual((await card.locator('tr[data-method] td:nth-child(3)').allInnerTexts()).map(x => x.trim()),
+      ['Bronze bar', 'Iron bar', 'Elemental metal', 'Silver bar', 'Steel bar', 'Gold bar', 'Mithril bar', 'Adamantite bar', 'Runite bar']);
+    const iron = await cells('sm_iron_bar');
+    assert.deepEqual([iron[1], iron[3], iron[6]], ['15', '12.5', '420'], '3 rings: 420 bars from the bank on its own');
+    assert.match(iron[8], /^5\s*→\s*1,000$/);
+    assert.equal(await card.locator('tr[data-method="sm_iron_bar"] td.even').getAttribute('title'), 'Collect 5 Ring of forging, and your bank covers 1,000 × Iron bar instead of 420.');
+    assert.match(await card.locator('tr[data-method="sm_iron_bar"]').getAttribute('title'),
+      /Iron bar: level 15, 12\.5 XP each\nNeeds \(from scratch\): 1 Iron ore, 1\/140 Ring of forging\nWith a ring of forging every ore is a bar\. A ring lasts 140 bars, and they're counted\./);
+    assert.equal((await cells('sm_gold_bar'))[3], '56.2');
+    await page.screenshot({ path: `${SHOTS}/10j-smithing-ring.png`, fullPage: true });
+    // the choices are kept with the goal
+    const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.goals.demo_main')).find(g => g.skill === 'smithing').opts);
+    assert.deepEqual(kept, { ring: true, gauntlets: true }, 'buying bars is how it starts, so it isn\'t kept');
+    // its prices: by the bank's groups
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="smithing"]');
+    await page.waitForSelector('[data-price="runite_ore"]');
+    assert.match(flat(await text('#prices-body')), /Ores and coal.*Copper ore.*Coal.*Bars.*Runite bar.*Ring of forging and runes for Superheat.*Nature rune.*Made: bronze.*Bronze wire.*Made: steel.*Cannonball.*Steel studs.*Made: rune.*Rune platebody/);
+  } finally {
+    // leave things as they were, whatever happened
+    await setBank('smithing', Object.fromEntries(Object.keys(BANK).map(k => [k, ''])));
+    await page.click('.tab[data-tab="goals"]');
+    if (await card.count()) {
+      await card.locator('[data-act="remove-goal"]').click();
+      await card.locator('[data-act="remove-goal"]').click();
+    }
+    await page.waitForFunction(() => ![...document.querySelectorAll('.goal')].some(g => g.innerText.includes('Smithing')));
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="herblore"]');
+  }
+});
+
 await check('firemaking: the bank\'s logs burn toward the goal, best first', async () => {
   await setBank('firemaking', { willow_logs: '10k' });
   assert.match(await text('#bank-head'), /Achey tree logs aren't listed/);

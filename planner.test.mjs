@@ -1,11 +1,11 @@
 // Run with:  node --test
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { METHODS, ITEMS, BANK_GROUPS, SALE_GROUPS, PLACES, UNID_HERBS } from './gamedata.js';
-import { mergeUnids, minorOf } from './planner-ui.js';
+import { METHODS, ITEMS, BANK_GROUPS, SALE_GROUPS, PLACES, CHOICES, UNID_HERBS } from './gamedata.js';
+import { mergeUnids, minorOf, choicesInUse, amountText } from './planner-ui.js';
 import {
-  xp10ForLevel, levelForXp10, goalTargetXp10, rankForTop, indexMethods, planBank, planGoal,
-  methodEconomics, maxRuns, Stock, bankValue, outAt, madeOver, gathers, castsIn,
+  xp10ForLevel, levelForXp10, goalTargetXp10, rankForTop, indexMethods, planBank, planGoal, planMix,
+  methodEconomics, maxRuns, Stock, bankValue, outAt, madeOver, gathers, castsIn, xpEach,
 } from './planner.js';
 
 const ix = indexMethods(METHODS.filter(m => m.skill === 'herblore'));
@@ -1334,3 +1334,325 @@ test('round up my supplies: 2,000 molten glass round up to 2,000 unpowered orbs 
   assert.deepEqual(evSteps(sand), [[ORB, 300, true, { soda_ash: 300 }]]);
 });
 
+
+// ── Mining (v2.6) ─────────────────────────────────────────────────────────
+// The rows are LostHQ's Mining calculator, checked against the server's mining
+// table when the data is built, plus limestone, which only the server has.
+const mi = indexMethods(METHODS.filter(m => m.skill === 'mining'));
+
+test("mining: LostHQ's 13 rocks with their level and XP an ore, and limestone, which only the server has (v2.6)", () => {
+  assert.deepEqual(mi.train.map(m => [m.name, m.level, m.xp / 10]), [
+    ['Clay', 1, 5], ['Rune essence', 1, 5], ['Copper ore', 1, 17.5], ['Tin ore', 1, 17.5], ['Blurite ore', 10, 17.5], ['Limestone', 10, 26.5],
+    ['Iron ore', 15, 35], ['Silver ore', 20, 40], ['Coal', 30, 50], ['Gold ore', 40, 65], ['Gem rock', 40, 65],
+    ['Mithril ore', 55, 80], ['Adamantite ore', 70, 95], ['Runite ore', 85, 125],
+  ]);
+  assert.ok(mi.train.every(gathers), 'mining takes nothing in');
+  assert.equal(BANK_GROUPS.mining, undefined, 'so it has no bank tab');
+  assert.ok(mi.train.every(m => m.group === 'Rocks' && !m.tools));
+  assert.match(mi.byId.get('mi_limestone').note, /Not on LostHQ's calculator/);
+  // a gem rock gives one gem, by the server's chances out of 128
+  const gem = mi.byId.get('mi_gemrock');
+  assert.deepEqual(Object.fromEntries(Object.entries(gem.out).map(([k, n]) => [k, n * 128])),
+    { uncut_opal: 60, uncut_jade: 30, uncut_red_topaz: 15, uncut_sapphire: 9, uncut_emerald: 5, uncut_ruby: 5, uncut_diamond: 4 });
+  assert.equal(Object.values(gem.out).reduce((a, b) => a + b, 0), 1, 'one gem a rock');
+  assert.equal(gem.icon, 'uncut_red_topaz', 'shown as the calculator shows it');
+  assert.equal(gem.note, 'In Shilo Village. One gem a rock, by chance (out of 128): opal 60, jade 30, red topaz 15, sapphire 9, emerald 5, ruby 5, diamond 4.');
+  for (const m of mi.train) if (m !== gem) assert.deepEqual(Object.values(m.out), [1], m.id);
+});
+
+test('mining: ores to mine and what they are worth, with no bank involved (v2.6)', () => {
+  const toGo = xp10ForLevel(70) - xp10ForLevel(60);
+  const plan = planGoal(mi, { bank: { coal: 5000, mithril_ore: 300 }, currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(70), priceOf: k => ({ mithril_ore: 200 })[k] ?? null });
+  assert.equal(plan.fromBank.steps.length, 0, 'ore in the bank gives no Mining XP');
+  assert.equal(plan.fill.id, 'mi_mithril_ore', 'the most XP an ore at 60');
+  assert.deepEqual(plan.fill.segments, [{ id: 'mi_mithril_ore', runs: Math.ceil(toGo / 800), xp10: Math.ceil(toGo / 800) * 800, made: { mithril_ore: Math.ceil(toGo / 800) } }]);
+  assert.deepEqual(plan.fill.buy, {});
+  const r = row(plan, 'mi_coal');
+  assert.deepEqual([r.have, r.needed, r.toMake, r.collect, r.balance], [0, Math.ceil(toGo / 500), Math.ceil(toGo / 500), {}, null]);
+  // a rock you can't mine yet: the best one at each level on the way. Limestone beats copper from 10 to 15.
+  const low = planGoal(mi, { currentXp10: 0, targetXp10: xp10ForLevel(20), fillId: 'mi_iron_ore' });
+  assert.deepEqual(low.fill.segments.map(s => [s.id, s.runs, s.toLevel]), [['mi_copper_ore', 66, 10], ['mi_limestone', 48, 15], ['mi_iron_ore', 59, undefined]]);
+  // a gem rock is worth its chances: 60 opals in 128 at 128 gp are 60 gp a rock
+  const gp = { uncut_opal: 128, uncut_jade: 256, uncut_red_topaz: 512, uncut_sapphire: 1280, uncut_emerald: 2560, uncut_ruby: 5120, uncut_diamond: 12800 };
+  const e = methodEconomics(mi, mi.byId.get('mi_gemrock'), k => gp[k] ?? null);
+  assert.deepEqual([e.inputs, e.cost, e.value, e.net], [{}, 0, 60 + 60 + 60 + 90 + 100 + 200 + 400, 970]);
+  assert.equal(methodEconomics(mi, mi.byId.get('mi_gemrock'), k => (k === 'uncut_diamond' ? null : gp[k])).net, null, 'a gem with no price: unknown');
+  const gems = planGoal(mi, { currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(60) + 128 * 650, fillId: 'mi_gemrock' });
+  assert.deepEqual(gems.fill.segments[0].made, { uncut_opal: 60, uncut_jade: 30, uncut_red_topaz: 15, uncut_sapphire: 9, uncut_emerald: 5, uncut_ruby: 5, uncut_diamond: 4 }, '128 rocks, on average');
+});
+
+// ── Smithing (v2.6) ───────────────────────────────────────────────────────
+// The rows are LostHQ's Smithing calculator: its smelting list and its anvil
+// table for each metal, each checked against the server when the data is built.
+const smAll = METHODS.filter(m => m.skill === 'smithing');
+const sm = indexMethods(smAll);
+const smith = (...opts) => indexMethods(smAll, { opts });      // with these choices in use
+const SMITH_MINOR = minorOf('smithing');
+
+test("smithing: LostHQ's smelting list and its anvil table for each metal (v2.6)", () => {
+  const groups = ['Smelting', 'Bronze', 'Iron', 'Steel', 'Mithril', 'Adamant', 'Rune'];
+  assert.deepEqual([...new Set(sm.train.map(m => m.group))], groups);
+  assert.deepEqual(groups.map(g => sm.train.filter(m => m.group === g).length), [9, 22, 21, 24, 21, 21, 21]);
+  const r = id => { const m = sm.byId.get(id); return [m.level, m.xp, m.in, m.out]; };
+  // smelting: the server's level, XP and ore (iron: 2 ore a bar on average, since half fails)
+  assert.deepEqual(sm.train.filter(m => m.group === 'Smelting').map(m => [m.name, m.level, m.xp, m.in]), [
+    ['Bronze bar', 1, 62, { copper_ore: 1, tin_ore: 1 }], ['Iron bar', 15, 125, { iron_ore: 2 }], ['Elemental metal', 20, 80, { elemental_workshop_ore: 1, coal: 4 }],
+    ['Silver bar', 20, 137, { silver_ore: 1 }], ['Steel bar', 30, 175, { iron_ore: 1, coal: 2 }], ['Gold bar', 40, 225, { gold_ore: 1 }],
+    ['Mithril bar', 50, 300, { mithril_ore: 1, coal: 4 }], ['Adamantite bar', 70, 375, { adamantite_ore: 1, coal: 6 }], ['Runite bar', 85, 500, { runite_ore: 1, coal: 8 }],
+  ]);
+  // the anvil: XP is per bar, the same for everything a metal makes
+  const perBar = { Bronze: 125, Iron: 250, Steel: 375, Mithril: 500, Adamant: 625, Rune: 750 };
+  for (const m of sm.train.filter(x => x.group !== 'Smelting')) {
+    const [bar, bars] = Object.entries(m.in)[0];
+    assert.equal(Object.keys(m.in).length, 1, m.id);
+    assert.equal(m.xp, bars * perBar[m.group], m.id);
+    assert.ok(/_bar$/.test(bar) && sm.producers.get(bar)?.length === 1, `${m.id}: ${bar} is smelted by one row`);
+  }
+  assert.deepEqual(r('sm_bronze_dagger'), [1, 125, { bronze_bar: 1 }, { bronze_dagger: 1 }]);
+  assert.deepEqual(r('sm_bronzecraftwire'), [4, 125, { bronze_bar: 1 }, { bronzecraftwire: 1 }]);
+  assert.deepEqual(r('sm_iron_scimitar'), [20, 500, { iron_bar: 2 }, { iron_scimitar: 1 }]);
+  assert.deepEqual(r('sm_steel_claws'), [43, 750, { steel_bar: 2 }, { steel_claws: 1 }]);
+  assert.deepEqual(r('sm_studs'), [36, 375, { steel_bar: 1 }, { studs: 1 }]);
+  assert.deepEqual(r('sm_mithril_kiteshield'), [62, 1500, { mithril_bar: 3 }, { mithril_kiteshield: 1 }]);
+  assert.deepEqual(r('sm_adamnt_warhammer'), [79, 1875, { adamantite_bar: 3 }, { adamnt_warhammer: 1 }]);
+  assert.deepEqual(['bronze', 'iron', 'steel', 'mithril', 'adamant', 'rune'].map(k => r(`sm_${k}_platebody`).slice(0, 2)),
+    [[18, 625], [33, 1250], [48, 1875], [68, 2500], [88, 3125], [99, 3750]]);
+  assert.deepEqual(r('sm_rune_platebody').slice(2), [{ runite_bar: 5 }, { rune_platebody: 1 }]);
+  // more than one from a bar: counted in bars
+  const many = sm.train.filter(m => Object.values(m.out)[0] > 1);
+  assert.deepEqual([...new Set(many.map(m => [m.id.replace(/^sm_(bronze|iron|steel|mithril|adamant|rune)_/, ''), Object.values(m.out)[0]].join(' ')))].sort(),
+    ['arrowheads 15', 'dart_tip 10', 'knife 5', 'sm_mcannonball 4', 'sm_nails 2']);
+  assert.ok(many.every(m => m.unit === 'bar' && m.units === 'bars') && sm.train.filter(m => m.unit).length === many.length);
+  // cannonballs come out of a furnace, with a mould; everything else off an anvil, with a hammer
+  assert.deepEqual([r('sm_mcannonball'), sm.byId.get('sm_mcannonball').tools], [[35, 375, { steel_bar: 1 }, { mcannonball: 4 }], ['ammo_mould']]);
+  assert.ok(sm.train.every(m => (m.group === 'Smelting' ? !m.tools : m.id === 'sm_mcannonball' || m.tools.join() === 'hammer')));
+  assert.match(sm.byId.get('sm_mithril_dart_tip').note, /The Tourist Trap/);
+  assert.match(sm.byId.get('sm_rune_claws').note, /Death Plateau/);
+  // in the calculator's order
+  assert.deepEqual(sm.train.filter(m => m.group === 'Steel').slice(4, 12).map(m => m.id),
+    ['sm_steel_sword', 'sm_nails', 'sm_steel_dart_tip', 'sm_steel_scimitar', 'sm_steel_arrowheads', 'sm_mcannonball', 'sm_steel_longsword', 'sm_studs']);
+  // the bank: ores, bars, the ring and runes, then what each metal makes
+  assert.deepEqual(BANK_GROUPS.smithing.map(g => [g.name, g.items.length]), [['Ores and coal', 10], ['Bars', 9], ['Ring of forging and runes for Superheat', 3],
+    ['Made: bronze', 22], ['Made: iron', 21], ['Made: steel', 24], ['Made: mithril', 21], ['Made: adamant', 21], ['Made: rune', 21]]);
+  assert.deepEqual(BANK_GROUPS.smithing[0].items, ['copper_ore', 'tin_ore', 'iron_ore', 'elemental_workshop_ore', 'silver_ore', 'gold_ore', 'mithril_ore', 'adamantite_ore', 'runite_ore', 'coal']);
+  assert.deepEqual(BANK_GROUPS.smithing[2].items, ['ring_of_forging', 'naturerune', 'firerune']);
+});
+
+test('smithing: the choices on a goal: where the bars come from, a ring of forging, goldsmith gauntlets (v2.6)', () => {
+  assert.deepEqual(CHOICES.smithing.map(c => [c.id, c.label, c.options ? c.options.map(o => [o.id, o.name]) : null, c.unless || null]), [
+    ['bars', 'Bars', [['buy', 'Buy them'], ['smelt', 'Smelt them'], ['superheat', 'Superheat them']], null],
+    ['ring', 'Ring of forging', null, 'superheat'], ['gauntlets', 'Goldsmith gauntlets', null, null]]);
+  assert.ok(CHOICES.smithing.every(c => c.tip.length > 40));
+  const iron = ix => ix.byId.get('sm_iron_bar'), gold = ix => ix.byId.get('sm_gold_bar');
+  // none in use: iron loses half its ore, gold is 22.5 XP, bars are bought
+  assert.deepEqual([iron(sm).in, gold(sm).xp, sm.through, sm.batch], [{ iron_ore: 2 }, 225, false, 140]);
+  assert.match(iron(sm).note, /Half the iron ore is lost in a furnace, so a bar takes 2 ore on average/);
+  // a ring of forging: every ore a bar, and a bar's worth of the ring. The ring is 140 of those.
+  assert.deepEqual(iron(smith('ring')).in, { iron_ore: 1, ring_of_forging_charge: 1 });
+  assert.equal(iron(smith('ring')).note, "With a ring of forging every ore is a bar. A ring lasts 140 bars, and they're counted.");
+  const worn = sm.byId.get('sm_ring_of_forging');
+  assert.deepEqual([worn.kind, worn.xp, worn.in, worn.out, worn.name], ['prep', 0, { ring_of_forging: 1 }, { ring_of_forging_charge: 140 }, 'Ring of forging (140 bars)']);
+  assert.deepEqual([ITEMS.ring_of_forging_charge.gp, ITEMS.ring_of_forging_charge.charge, ITEMS.ring_of_forging_charge.icon], [0, { of: 'ring_of_forging', per: 140 }, ITEMS.ring_of_forging.icon]);
+  // goldsmith gauntlets: 2.5 times the XP, in whole tenths as the server works it out
+  assert.equal(gold(smith('gauntlets')).xp, 562);
+  assert.deepEqual(smAll.filter(m => m.opt?.gauntlets).map(m => m.id), ['sm_gold_bar']);
+  // smelt them: the bars an anvil row takes are planned through. Silver, gold and elemental metal go into nothing here.
+  const through = ix => ix.methods.filter(m => m.through).map(m => m.id);
+  assert.deepEqual(through(smith('smelt')), ['sm_bronze_bar', 'sm_iron_bar', 'sm_steel_bar', 'sm_mithril_bar', 'sm_adamantite_bar', 'sm_runite_bar']);
+  assert.deepEqual(smAll.filter(m => m.feeds).map(m => m.id), through(smith('smelt')));
+  assert.equal(smith('smelt').through, true);
+  assert.deepEqual(iron(smith('smelt')).in, { iron_ore: 2 }, 'at a furnace: half still fails');
+  // superheat them: the spell's runes a bar, its Magic XP, and iron never fails. Elemental ore won't melt that way.
+  const heat = smith('superheat');
+  assert.deepEqual(through(heat), through(smith('smelt')));
+  assert.deepEqual(iron(heat).in, { iron_ore: 1, naturerune: 1, firerune: 4 });
+  assert.deepEqual([iron(heat).magic, iron(heat).spell, iron(heat).magicLevel], [530, 'Superheat Item', 43]);
+  assert.match(iron(heat).note, /^Made with Superheat Item \(Magic 43\): 53 Magic XP each, on top of the Smithing XP\. It never fails: every iron ore is a bar, with no ring of forging\.$/);
+  assert.deepEqual(heat.byId.get('sm_runite_bar').in, { runite_ore: 1, coal: 8, naturerune: 1, firerune: 4 });
+  assert.deepEqual([gold(heat).in, gold(heat).xp, gold(heat).magic, !!gold(heat).through], [{ gold_ore: 1, naturerune: 1, firerune: 4 }, 225, 530, false]);
+  assert.deepEqual(heat.byId.get('sm_elemental_workshop_bar'), sm.byId.get('sm_elemental_workshop_bar'));
+  assert.deepEqual(smAll.filter(m => m.group === 'Smelting' && !m.opt?.superheat).map(m => m.id), ['sm_elemental_workshop_bar']);
+  // together: gauntlets count when superheating, and a ring has nothing to do then
+  assert.deepEqual([gold(smith('gauntlets', 'superheat')).xp, gold(smith('gauntlets', 'superheat')).in], [562, { gold_ore: 1, naturerune: 1, firerune: 4 }]);
+  assert.match(gold(smith('gauntlets', 'superheat')).note, /^56\.2 XP with goldsmith gauntlets worn \(22\.5 without\)\. Made with Superheat Item/);
+  assert.deepEqual(iron(smith('ring', 'superheat')).in, iron(heat).in);
+  // as the app passes them: tick boxes, then the list; a ring is left out when you superheat; anything unknown is nothing
+  const use = opts => choicesInUse({ skill: 'smithing', opts });
+  assert.deepEqual(use(undefined), []);
+  assert.deepEqual(use({ bars: 'buy' }), []);
+  assert.deepEqual(use({ bars: 'smelt', ring: true }), ['ring', 'smelt']);
+  assert.deepEqual(use({ bars: 'superheat', ring: true, gauntlets: true }), ['gauntlets', 'superheat']);
+  assert.deepEqual(use({ bars: 'melt', ring: 0, gauntlets: true, other: true }), ['gauntlets']);
+  assert.deepEqual(choicesInUse({ skill: 'crafting', opts: { bars: 'smelt', ring: true } }), []);
+  // a method nothing changes is the very same one
+  assert.equal(smith('ring', 'gauntlets', 'smelt').byId.get('sm_rune_platebody'), sm.byId.get('sm_rune_platebody'));
+  // what never holds rounding up back: the ring, and the spell's runes
+  assert.deepEqual([...SMITH_MINOR].sort(), ['firerune', 'naturerune', 'ring_of_forging']);
+});
+
+test('smithing: ore in your bank is smelted on the way to what it makes, and that XP counts (v2.6)', () => {
+  // 100 runite ore, 800 coal and 7 bars at 99: 107 bars are 21 platebodies and a scimitar
+  const bank = { runite_ore: 100, coal: 800, runite_bar: 7 };
+  const res = planBank(sm, { bank, startXp10: xp10ForLevel(99) });
+  assert.deepEqual(crSteps(res), [['sm_rune_platebody', 21, { sm_runite_bar: 98 }], ['sm_rune_scimitar', 1, { sm_runite_bar: 2 }]]);
+  assert.equal(res.xp10, 21 * 3750 + 98 * 500 + 1500 + 2 * 500);
+  assert.deepEqual(res.used, bank);
+  // at 72 neither the ore nor the bars can be worked yet (85): they wait
+  assert.deepEqual(planBank(sm, { bank, startXp10: xp10ForLevel(72) }).steps, []);
+  // iron without a ring: 1,000 ore are 500 bars
+  const iron = planBank(sm, { bank: { iron_ore: 1000 }, startXp10: xp10ForLevel(40) });
+  assert.deepEqual(crSteps(iron), [['sm_iron_platebody', 100, { sm_iron_bar: 500 }]]);
+  assert.equal(iron.xp10, 100 * 1250 + 500 * 125);
+  // with coal as well, steel gets the ore first (more XP a platebody), as far as the coal goes
+  const both = planBank(sm, { bank: { iron_ore: 1000, coal: 1200 }, startXp10: xp10ForLevel(72) });
+  assert.deepEqual(crSteps(both), [['sm_steel_platebody', 120, { sm_steel_bar: 600 }], ['sm_iron_platebody', 40, { sm_iron_bar: 200 }]]);
+  // unticking the smelting rows changes nothing about that: bars are still smelted on the way
+  const smeltRows = new Set(sm.train.filter(m => m.group === 'Smelting').map(m => m.id));
+  assert.deepEqual(crSteps(planBank(sm, { bank: { iron_ore: 1000, coal: 1200 }, startXp10: xp10ForLevel(72), excluded: smeltRows })), crSteps(both));
+  // ore with nothing ticked to smith it into is smelted for its own sake
+  const anvil = new Set(sm.train.filter(m => m.group !== 'Smelting').map(m => m.id));
+  assert.deepEqual(crSteps(planBank(sm, { bank: { iron_ore: 1000, coal: 1200 }, startXp10: xp10ForLevel(72), excluded: anvil })), [['sm_steel_bar', 600, {}], ['sm_iron_bar', 200, {}]]);
+  // each row on its own, and what rounding it up would take
+  const plan = planGoal(sm, { bank: { iron_ore: 1000, coal: 1200 }, currentXp10: xp10ForLevel(72), targetXp10: xp10ForLevel(80), minor: SMITH_MINOR });
+  assert.deepEqual([row(plan, 'sm_steel_platebody').have, row(plan, 'sm_steel_platebody').balance], [120, { runs: 200, collect: { coal: 800 } }]);
+  assert.deepEqual([row(plan, 'sm_iron_platebody').have, row(plan, 'sm_iron_platebody').balance], [100, null]);
+  assert.equal(plan.fill.id, 'sm_steel_platebody', 'carries on with what the bank mostly made');
+  assert.deepEqual(plan.fill.buy, { steel_bar: plan.fill.segments[0].runs * 5 }, 'bars, when you buy them');
+});
+
+test('smithing: a ring of forging saves the iron ore, 140 bars a ring, and the rings are counted (v2.6)', () => {
+  const ringed = smith('ring');
+  const bank = { iron_ore: 1000, ring_of_forging: 3 };
+  // three rings are 420 bars: 84 platebodies, and 580 ore left
+  const res = planBank(ringed, { bank, startXp10: xp10ForLevel(40) });
+  assert.deepEqual(crSteps(res), [['sm_iron_platebody', 84, { sm_ring_of_forging: 3, sm_iron_bar: 420 }]]);
+  assert.deepEqual(res.leftover.toObject(), { iron_ore: 580, iron_platebody: 84 });
+  assert.deepEqual(res.used, { iron_ore: 420, ring_of_forging: 3 });
+  // no rings: no iron bars as it is (steel, which never fails, would still take the ore)
+  assert.deepEqual(planBank(ringed, { bank: { iron_ore: 1000 }, startXp10: xp10ForLevel(40) }).steps, []);
+  // each row on its own; rounding up, rings never decide, and the ones you're short of are collected
+  const at = { bank, currentXp10: xp10ForLevel(40), targetXp10: xp10ForLevel(60), minor: SMITH_MINOR };
+  const plan = planGoal(ringed, at);
+  assert.deepEqual([row(plan, 'sm_iron_bar').have, row(plan, 'sm_iron_bar').balance], [420, { runs: 1000, collect: { ring_of_forging: 5 } }]);
+  assert.deepEqual([row(plan, 'sm_iron_platebody').have, row(plan, 'sm_iron_platebody').balance], [84, { runs: 200, collect: { ring_of_forging: 5 } }]);
+  const even = planGoal(ringed, { ...at, roundUp: true }).fromBank;
+  assert.deepEqual(evSteps(even), [['sm_iron_platebody', 200, false, { ring_of_forging: 5 }]]);
+  assert.deepEqual(even.steps[0].sub, { sm_ring_of_forging: 8, sm_iron_bar: 1000 });
+  assert.deepEqual(even.collect, { ring_of_forging: 5 });
+  assert.deepEqual(even.leftover.toObject(), { ring_of_forging_charge: 120, iron_platebody: 200 }, "what's left of the eighth ring carries on");
+  // rings alone call for nothing
+  const alone = planGoal(ringed, { ...at, bank: { ring_of_forging: 10 }, roundUp: true }).fromBank;
+  assert.deepEqual([alone.steps, alone.collect], [[], {}]);
+  // still to make: whole rings, less what's left of the ore
+  const still = row(plan, 'sm_iron_bar');
+  assert.deepEqual(still.collect, { iron_ore: still.toMake - 580, ring_of_forging: Math.ceil(still.toMake / 140) });
+  // one bar's share of a ring is a 140th of it, and it's costed that way
+  const gp = { iron_ore: 100, ring_of_forging: 2800, iron_bar: 150, iron_platebody: 1000 };
+  const e = methodEconomics(ringed, ringed.byId.get('sm_iron_bar'), k => gp[k] ?? null);
+  assert.deepEqual(e.inputs, { iron_ore: 1, ring_of_forging: 1 / 140 });
+  assert.ok(Math.abs(e.cost - 120) < 1e-9 && Math.abs(e.net - 30) < 1e-9);
+  assert.deepEqual(methodEconomics(ringed, ringed.byId.get('sm_iron_platebody'), k => gp[k] ?? null).inputs, { iron_bar: 5 }, 'bars are bought: no ring in it');
+  assert.deepEqual(methodEconomics(smith('ring', 'smelt'), ringed.byId.get('sm_iron_platebody'), k => gp[k] ?? null).inputs, { iron_ore: 5, ring_of_forging: 5 / 140 });
+  assert.deepEqual([1 / 140, 5 / 140, 3 / 140, 0.2, 5, 2.5].map(amountText), ['1/140', '1/28', '0.021', '0.2', '5', '2.5']);
+});
+
+test("smithing: with your own bars smelted, what's still to buy is ore and coal, and the smelting XP counts (v2.6)", () => {
+  const toGo = 10_000_000;                      // a million XP
+  const at = { currentXp10: xp10ForLevel(99), targetXp10: xp10ForLevel(99) + toGo, fillId: 'sm_rune_platebody' };
+  const PLATE = 'sm_rune_platebody', BAR = 'sm_runite_bar';
+  // bars bought (the calculator's Smithing mode): 375 XP each
+  const buy = planGoal(sm, at);
+  assert.deepEqual(buy.fill.segments, [{ id: PLATE, runs: 2667, xp10: 2667 * 3750, made: { rune_platebody: 2667 } }]);
+  assert.deepEqual(buy.fill.buy, { runite_bar: 13335 });
+  assert.deepEqual([row(buy, PLATE).xp10, row(buy, PLATE).xpAll, row(buy, PLATE).needed], [3750, undefined, 2667]);
+  assert.equal(xpEach(sm, sm.byId.get(PLATE)), 3750);
+  // smelted (its Smelting + smithing mode): 375 + 5 × 50 = 625 XP each, so 1,600 do it
+  const smelting = smith('smelt');
+  const made = planGoal(smelting, at);
+  assert.deepEqual(made.fill.segments, [{ id: PLATE, runs: 1600, xp10: toGo, made: { rune_platebody: 1600 }, sub: { [BAR]: 8000 } }]);
+  assert.deepEqual(made.fill.buy, { runite_ore: 8000, coal: 64000 });
+  assert.deepEqual(made.fill.steps, { [PLATE]: 1600, [BAR]: 8000 });
+  const r = row(made, PLATE);
+  assert.deepEqual([r.xp10, r.xpAll, r.needed, r.toMake, r.collect], [3750, 6250, 1600, 1600, { runite_ore: 8000, coal: 64000 }]);
+  assert.deepEqual(r.econ.inputs, { runite_ore: 5, coal: 40 });
+  assert.equal(xpEach(smelting, smelting.byId.get(PLATE)), 6250);
+  assert.deepEqual([row(made, BAR).xpAll, row(made, BAR).needed], [undefined, 20000], 'smelting on its own is as it was');
+  // every anvil row, the way the calculator works it out: ceil(XP / (its XP + bars × the bar's XP)), and the ore that takes
+  for (const m of smelting.train.filter(x => x.group !== 'Smelting')) {
+    const [bar, bars] = Object.entries(m.in)[0];
+    const smelt = smelting.producers.get(bar)[0];
+    const n = Math.ceil(toGo / (m.xp + bars * smelt.xp));
+    const t = row(made, m.id);
+    assert.equal(t.needed, n, m.id);
+    assert.deepEqual(t.collect, Object.fromEntries(Object.entries(smelt.in).map(([ore, q]) => [ore, q * bars * n])), m.id);
+    assert.equal(row(buy, m.id).needed, Math.ceil(toGo / m.xp), `${m.id}: bars bought`);
+  }
+  // gp per XP counts it too: 5 bars' ore and coal over 625 XP
+  const gp = k => ({ runite_ore: 10000, coal: 150, rune_platebody: 38000 })[k] ?? null;
+  const e = methodEconomics(smelting, smelting.byId.get(PLATE), gp);
+  assert.deepEqual([e.cost, e.value, e.net, e.gpPerXp], [56000, 38000, -18000, 18000 / 625]);
+  // bars and ore already in your bank: 3 bars make a warhammer as it is; the 50 ore have no coal, so they wait
+  // for the rest of the plan, which buys 50 fewer
+  const some = planGoal(smelting, { ...at, bank: { runite_bar: 3, runite_ore: 50 }, minor: SMITH_MINOR });
+  assert.deepEqual(crSteps(some.fromBank), [['sm_rune_warhammer', 1, {}]]);
+  assert.deepEqual(some.fill.segments.map(s => [s.id, s.runs, s.xp10, s.sub]), [[PLATE, 1600, 1600 * 6250, { [BAR]: 8000 }]]);
+  assert.deepEqual(some.fill.buy, { runite_ore: 7950, coal: 64000 });
+  // rounded up, that ore is smelted with coal to collect: 10 platebodies (3 bars and 47 ore) and a warhammer
+  const even = planGoal(smelting, { ...at, bank: { runite_bar: 3, runite_ore: 50 }, minor: SMITH_MINOR, roundUp: true });
+  assert.deepEqual(evSteps(even.fromBank), [[PLATE, 10, false, { coal: 376 }], ['sm_rune_warhammer', 1, true, { coal: 24 }]]);
+  assert.deepEqual(even.fromBank.steps.map(s => s.sub), [{ [BAR]: 47 }, { [BAR]: 3 }]);
+  // bars left over aren't smelted, so they add no XP: it takes more platebodies than from scratch
+  const kept = planGoal(smelting, { ...at, bank: { runite_bar: 4004 }, excluded: new Set(smelting.train.map(m => m.id).filter(id => id !== PLATE)), useBank: true });
+  assert.equal(kept.fromBank.steps[0].runs, 800);                       // 4,000 bars: 800 platebodies, 300,000 XP; 4 bars over
+  const rest = toGo - 800 * 3750;
+  const runs = kept.fill.segments[0].runs;
+  assert.equal(runs, Math.ceil((rest + 4 * 500) / 6250), 'the 4 bars left save 4 smelts, 200 XP');
+  assert.equal(kept.fill.segments[0].xp10, runs * 3750 + (runs * 5 - 4) * 500);
+  assert.deepEqual(kept.fill.buy, { runite_ore: runs * 5 - 4, coal: (runs * 5 - 4) * 8 });
+  // a level you don't have yet: the best on the way, by the XP that counts
+  const low = planGoal(smith('smelt'), { currentXp10: xp10ForLevel(30), targetXp10: xp10ForLevel(50), fillId: 'sm_steel_platebody' });
+  assert.deepEqual(low.fill.segments.map(s => [s.id, s.toLevel]), [['sm_steel_dagger', 35], ['sm_steel_scimitar', 39], ['sm_steel_warhammer', 48], ['sm_steel_platebody', undefined]]);
+  assert.ok(low.fill.segments.every(s => s.xp10 === s.runs * (smelting.byId.get(s.id).xp + smelting.byId.get(s.id).in.steel_bar * 175)));
+  assert.deepEqual(Object.keys(low.fill.buy), ['iron_ore', 'coal']);
+  // your own mix: the bars smelted for it count
+  const mix = planMix(smelting, { [PLATE]: 100, [BAR]: 20 }, { startXp10: xp10ForLevel(99) });
+  assert.deepEqual(mix.steps.map(s => [s.id, s.runs, s.xp10, s.sub]), [[BAR, 20, 20 * 500, undefined], [PLATE, 100, 100 * 6250, { [BAR]: 500 }]]);
+  assert.deepEqual(mix.buy, { runite_ore: 520, coal: 4160 });
+  assert.deepEqual(planMix(sm, { [PLATE]: 100 }, { startXp10: xp10ForLevel(99) }).steps.map(s => [s.xp10, s.sub, s.buy]), [[100 * 3750, undefined, { runite_bar: 500 }]]);
+});
+
+test('smithing: goldsmith gauntlets, and Superheat Item for the bars: its runes, its Magic XP, and iron that never fails (v2.6)', () => {
+  // gold: 22.5 XP a bar, 56.2 with the gauntlets
+  assert.equal(planBank(sm, { bank: { gold_ore: 500 }, startXp10: xp10ForLevel(40) }).xp10, 500 * 225);
+  assert.equal(planBank(smith('gauntlets'), { bank: { gold_ore: 500 }, startXp10: xp10ForLevel(40) }).xp10, 500 * 562);
+  // superheated: as far as the runes go as it is. 200 nature runes are 200 bars, every ore one of them.
+  const heat = smith('superheat');
+  const at = { bank: { iron_ore: 1000, naturerune: 200, firerune: 5000 }, currentXp10: xp10ForLevel(40), targetXp10: xp10ForLevel(60), minor: SMITH_MINOR };
+  const now = planGoal(heat, at);
+  assert.deepEqual(crSteps(now.fromBank), [['sm_iron_platebody', 40, { sm_iron_bar: 200 }]]);
+  const casts = fb => castsIn(heat, fb.steps.flatMap(st => [[st.id, st.runs], ...Object.entries(st.sub)]));
+  assert.deepEqual(casts(now.fromBank), { xp10: 200 * 530, level: 43, by: { sm_iron_bar: 200 } });
+  assert.deepEqual(row(now, 'sm_iron_bar').balance, { runs: 1000, collect: { naturerune: 800 } }, 'the 5,000 fire runes are enough for 1,000');
+  // the rest of the goal, superheated too: ore, runes, and the Magic XP of it
+  const f = now.fill;
+  const bars = f.steps.sm_iron_bar;
+  assert.deepEqual(f.segments.map(s => [s.id, s.sub]), [['sm_iron_platebody', { sm_iron_bar: bars }]]);
+  assert.equal(bars, f.segments[0].runs * 5);
+  assert.deepEqual(f.buy, { iron_ore: bars - 800, naturerune: bars, firerune: bars * 4 - 4200 }, 'less the 800 ore and 4,200 fire runes left in the bank');
+  assert.deepEqual(castsIn(heat, Object.entries(f.steps)), { xp10: bars * 530, level: 43, by: { sm_iron_bar: bars } });
+  // rounded up, runes never hold it back: the 800 nature runes short are collected
+  const even = planGoal(heat, { ...at, roundUp: true }).fromBank;
+  assert.deepEqual(evSteps(even), [['sm_iron_platebody', 200, false, { naturerune: 800 }]]);
+  assert.deepEqual(casts(even), { xp10: 1000 * 530, level: 43, by: { sm_iron_bar: 1000 } });
+  // runes alone round nothing up
+  const alone = planGoal(heat, { ...at, bank: { naturerune: 9000, firerune: 36000 }, roundUp: true }).fromBank;
+  assert.deepEqual([alone.steps, alone.collect], [[], {}]);
+  // gold, gauntlets and Superheat: the classic. 56.2 Smithing XP and 53 Magic XP a cast.
+  const classic = smith('gauntlets', 'superheat');
+  const gold = planGoal(classic, { bank: { gold_ore: 300, naturerune: 300, firerune: 1200 }, currentXp10: xp10ForLevel(40), targetXp10: xp10ForLevel(50) });
+  assert.deepEqual(crSteps(gold.fromBank), [['sm_gold_bar', 300, {}]]);
+  assert.equal(gold.fromBank.xp10, 300 * 562);
+  assert.deepEqual(castsIn(classic, [['sm_gold_bar', 300]]), { xp10: 300 * 530, level: 43, by: { sm_gold_bar: 300 } });
+  assert.deepEqual(gold.fill.buy, { gold_ore: gold.fill.segments[0].runs, naturerune: gold.fill.segments[0].runs, firerune: gold.fill.segments[0].runs * 4 });
+  assert.equal(gold.fill.segments[0].runs, Math.ceil(gold.remaining / 562));
+});

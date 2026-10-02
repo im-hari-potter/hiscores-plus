@@ -34,7 +34,8 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 The planner works out what it takes to reach a goal, from your XP on the hiscores, what's in your bank
 and the prices you set. Any skill can have a goal. A skill with its full planner (marked with a dot
 when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woodcutting**,
-**Firemaking**, **Fletching** and **Crafting**, with the other skills to follow.
+**Firemaking**, **Fletching**, **Crafting**, **Mining** and **Smithing**, with the other skills to
+follow.
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
@@ -45,9 +46,11 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
 
 - Every number comes from the game itself (Lost City's server content): the level each way to train
   needs, the XP it gives, and what it takes and makes. The maths is done in tenths of XP, like the
-  game does. Crafting's rows are those of
-  [LostHQ's Crafting calculator](https://2004.losthq.rs/?p=calculators&calc=crafting), each one
-  checked against the server; where the two differ, the server's number is used.
+  game does. The rows of Crafting, Mining and Smithing are those of LostHQ's calculators
+  ([Crafting](https://2004.losthq.rs/?p=calculators&calc=crafting),
+  [Mining](https://2004.losthq.rs/?p=calculators&calc=mining),
+  [Smithing](https://2004.losthq.rs/?p=calculators&calc=smithing)), each one checked against the
+  server; where the two differ, the server's number is used.
 - How many you need = the XP still to go ÷ the XP each one gives, rounded up.
 - **Gross** is what something is worth, with nothing taken off. **Net** takes off what you pay for its
   supplies, so it can be negative: a loss.
@@ -121,6 +124,36 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
     - Where the calculator and Lost City's server differ, the server is followed: a sapphire
       necklace is level 20 (the calculator says 22). Opal, jade and red topaz can smash when you cut
       them; like the calculator, plans count every cut as a success.
+  - Mining needs nothing but a pickaxe you have the level for, so its plan is the ores to mine and
+    what they're worth, like Woodcutting. It has every rock of LostHQ's Mining calculator.
+    - A **gem rock** gives one gem by chance, so what it makes is the server's chances: out of 128,
+      opal 60, jade 30, red topaz 15, sapphire 9, emerald 5, ruby 5, diamond 4.
+    - **Limestone** (level 10, 26.5 XP) is added: the server has it, the calculator doesn't.
+  - Smithing has every row of LostHQ's Smithing calculator: its smelting list, and what each metal
+    makes on the anvil. The table shows one at a time: **Smelting**, **Bronze**, **Iron**,
+    **Steel**, **Mithril**, **Adamant**, **Rune**.
+    - Ore in your bank is smelted on the way to what you smith, and that XP counts: at level 99,
+      100 runite ore, 800 coal and 7 bars make 21 platebodies and a scimitar.
+    - Three choices sit on the goal. They stand in for the calculator's two extra rows and its
+      modes:
+      - **Bars**: where yours come from.
+        - **Buy them** (how it starts): what's still to buy is bars. A million XP is 2,667 rune
+          platebodies and 13,335 runite bars. That's the calculator's Smithing mode.
+        - **Smelt them**: what's still to buy is ore and coal, and the smelting XP counts, so it
+          takes fewer: 1,600 platebodies, 8,000 runite ore and 64,000 coal. That's its Smelting +
+          smithing mode. The XP column and Train with show the XP with the bars in it: 625.
+        - **Superheat them**: the same, made with Superheat Item (Magic 43). A bar takes a nature
+          rune and 4 fire runes on top and gives 53 Magic XP, and iron never fails. The Magic XP
+          shows in its own line, as for enchanting.
+      - **Ring of forging**: off, half the iron ore is lost in a furnace, so an iron bar takes 2
+        ore on average. On, every ore is a bar and the rings are counted: one lasts 140 bars. It's
+        left out when you superheat, which needs no ring.
+      - **Goldsmith gauntlets**: on, a gold bar gives 56.2 XP. Off, 22.5.
+    - What comes several to a bar is counted in bars: 100 bars → 1,500 arrowtips, 1,000 dart tips,
+      500 knives, 400 cannonballs or 200 nails.
+    - Cannonballs come out of a furnace with an ammo mould; everything else takes a hammer. Dart
+      tips wait for The Tourist Trap and claws for Death Plateau: hover over the row.
+    - The Elemental Workshop's bar is there, as on the calculator. It can't be superheated.
 - Click an item a plan says to collect, buy or bring to open its page on the market.
 
 #### Check your prices first
@@ -209,6 +242,8 @@ your bank. It's one or the other: the table below already shows both side by sid
     amulets are strung with. So emeralds round up to rings of dueling with the gold bars and runes
     to collect, 2,000 molten glass round up to 2,000 unpowered orbs and 2,000 battlestaves with
     the battlestaffs and runes to collect, and a few spare balls of wool don't ask for dragonstones.
+  - In Smithing it's **rings of forging** and the **runes** for Superheat Item: 1,000 iron ore and
+    3 rings round up to 1,000 bars, with 5 more rings to collect.
   - **To round up your supplies, collect** lists it all, and the money line takes its cost off: Gross,
     Rounding up your supplies, Net.
   - Everything after it (Then, Still needed to goal, Supplies needed) comes after the rounded-up bank.
@@ -229,10 +264,11 @@ by default, so **turn off anything you don't plan to make**: a potion you'd rath
 supplies you're saving. Otherwise the plan spends your supplies on it, and From your bank, Still needed to
 goal and the gp totals count XP you won't get. Unticked options also leave the Train with list.
 
-In Crafting, what a ticked row needs is still made on the way, even if that row is unticked itself: with
-Sapphire (cut), Molten glass or Unpowered orb unticked, sapphires are still cut for a games necklace and
-glass still made and blown for a battlestaff. They just aren't made for their own sake. To leave uncut
-sapphires alone, untick the things made from sapphires.
+In Crafting and Smithing, what a ticked row needs is still made on the way, even if that row is unticked
+itself: with Sapphire (cut), Molten glass or Unpowered orb unticked, sapphires are still cut for a games
+necklace and glass still made and blown for a battlestaff, and with Runite bar unticked ore is still
+smelted for a platebody. They just aren't made for their own sake. To leave uncut sapphires alone,
+untick the things made from sapphires.
 
 #### Vials of water and thread
 
@@ -277,8 +313,9 @@ supplies** looks past that (see above): it uses up your herbs and lists the vial
     - Things the planner doesn't use can look like one it does, and the review names them next to it:
       a jug of wine looks like wine of Zamorak, and a plain staff or a Dramen staff like a battlestaff.
       Untick those.
-    - Tools (a chisel, moulds, a needle) and thread are left out: a plan names the tools a row needs,
-      it never counts them. Thread can still be typed in on the Crafting tab if you count yours.
+    - Tools (a chisel, a hammer, moulds, a needle) and thread are left out: a plan names the tools a
+      row needs, it never counts them. Thread can still be typed in on the Crafting tab if you count
+      yours.
     - Items cut off at the top or bottom edge of the bank are skipped, so let screenshots overlap.
     - Where each item sits is kept too, for All. If you've dragged items around since, you can choose
       to put them back in your bank's order.
@@ -314,7 +351,8 @@ restore.
 - The market's sale history can also only be read inside LostKit. A normal browser gets open offers
   from the market's JSON API.
 - The numbers are the game's own (Lost City's server content), so a few may surprise you: achey tree
-  logs give no Firemaking XP in this version, and any axe can be used at any Woodcutting level.
+  logs give no Firemaking XP in this version, any axe can be used at any Woodcutting level, and a
+  steel bar makes 2 nails.
 
 ## Development
 
@@ -328,8 +366,8 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
   `node build-data.mjs <Content checkout> <LostHQ 2004 checkout>` (needs `sharp`).
   - Content is [LostCityRS/Content](https://github.com/LostCityRS/Content), branch 274.
   - The LostHQ checkout is [LostHQ/2004](https://github.com/LostHQ/2004).
-  - Crafting's rows are read from LostHQ's `js/calculators/crafting.js` and checked against Content
-    one by one. The build stops at any difference it hasn't been told about.
+  - The rows of Crafting, Mining and Smithing are read from LostHQ's `js/calculators/` and checked
+    against Content one by one. The build stops at any difference it hasn't been told about.
 - Planner files:
   - `planner.js` holds the maths, all in tenths of XP like the game.
   - `planner-ui.js` builds the Goals, Bank and Prices views.
@@ -344,7 +382,7 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
 - Hiscores come from the Lost City hiscores API.
 - Levels and XP for the planner, and the bank layout and font the screenshot reader uses, come from
   Lost City's server content and client (MIT).
-- Item names and icons, and the rows of the Crafting calculator, come from
+- Item names and icons, and the rows of the Crafting, Mining and Smithing calculators, come from
   [LostHQ](https://2004.losthq.rs) (GPL-3.0).
 - Prices come from [markets.lostcity.rs](https://markets.lostcity.rs). How they're read follows
   LostKit's own price check.
