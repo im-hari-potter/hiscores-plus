@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { findTotal, pageOfRank, rankParamForPage, pageCount } from './totals-core.js';
 import {
-  xpForLevel, levelForXp, combatLevel, combatBreakdown, levelsToNextCombat,
+  xpForLevel, levelForXp, combatLevel, combatBreakdown, levelsToNextCombat, levelsToCombat,
   boundUnrankedLevels, combatFromProfile, levelProgress, apiXp,
 } from './skills.js';
 
@@ -112,6 +112,24 @@ test('combat level formula', () => {
   assert.equal(b.melee, 48.75);
   const next = levelsToNextCombat(shot);
   assert.deepEqual(next, { attack: 1, strength: 1, defence: 1, hitpoints: 1, ranged: null, prayer: 1, magic: null });
+});
+
+test('levelsToCombat: what each skill alone takes to reach a combat level (a Combat level goal, v2.10.2)', () => {
+  // The same account, 86.75 now, after 90: 3.25 more.
+  const shot = { attack: 60, strength: 90, defence: 45, hitpoints: 86, ranged: 90, prayer: 43, magic: 90 };
+  // Attack: 0.325 a level, 10 of them. Strength stops at 99 (89.675). Defence and Hitpoints: a quarter each, 13.
+  // Prayer: a quarter every second level, 43 → 68. Ranged and Magic would have to pass melee first, and can't by 99.
+  assert.deepEqual(levelsToCombat(shot, 90), { attack: 10, strength: null, defence: 13, hitpoints: 13, ranged: null, prayer: 25, magic: null });
+  for (const [key, add] of Object.entries(levelsToCombat(shot, 90))) {
+    if (add == null) { assert.ok(combatLevel({ ...shot, [key]: 99 }) < 90, key); continue; }
+    assert.ok(combatLevel({ ...shot, [key]: shot[key] + add }) >= 90, key);
+    assert.ok(combatLevel({ ...shot, [key]: shot[key] + add - 1 }) < 90, `${key}: one fewer isn't enough`);
+  }
+  // with no level given it's the next one, as before
+  assert.deepEqual(levelsToCombat(shot), levelsToNextCombat(shot));
+  assert.deepEqual(levelsToCombat(shot, 87), levelsToNextCombat(shot));
+  // out of reach for any one skill
+  assert.deepEqual(levelsToCombat(shot, 126), { attack: null, strength: null, defence: null, hitpoints: null, ranged: null, prayer: null, magic: null });
 });
 
 test('levelsToNextCombat for melee-only builds', () => {

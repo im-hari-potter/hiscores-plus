@@ -97,19 +97,20 @@ export function combatBreakdown(l) {
   return { base, melee, range, magic, style, exact, level, progress: exact - level };
 }
 
-// For each combat skill: how many more levels (alone) push combat up by one.
-// null when that skill can't do it before 99.
-export function levelsToNextCombat(l) {
-  const current = combatLevel(l);
+// For each combat skill: how many more levels (alone) take combat to a level
+// (the next one, when none is given). null when that skill can't do it before 99.
+export function levelsToCombat(l, target = combatLevel(l) + 1) {
   const out = {};
   for (const key of COMBAT_KEYS) {
     out[key] = null;
     for (let add = 1; l[key] + add <= MAX_LEVEL; add++) {
-      if (combatLevel({ ...l, [key]: l[key] + add }) > current) { out[key] = add; break; }
+      if (combatLevel({ ...l, [key]: l[key] + add }) >= target) { out[key] = add; break; }
     }
   }
   return out;
 }
+// (how many more push combat up by one)
+export const levelsToNextCombat = l => levelsToCombat(l);
 
 // Skills below 15 have no hiscores row, so their level is unknown. The Overall
 // row still carries the true total level, which pins those skills down a bit:

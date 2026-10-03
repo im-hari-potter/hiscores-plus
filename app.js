@@ -3,7 +3,7 @@
 
 import {
   SKILLS, SKILL_BY_ID, SKILL_IDS, COMBAT_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL,
-  levelProgress, combatFromProfile, combatBreakdown, levelsToNextCombat, combatLevel, boundUnrankedLevels,
+  levelProgress, combatFromProfile, combatBreakdown, levelsToCombat, combatLevel, boundUnrankedLevels,
 } from './skills.js';
 import { HiscoresApi, LIVE_API, isElectron, toSafeName, toDisplayName, checkName } from './api.js';
 import { Totals, topPercent, formatPercent } from './totals.js';
@@ -13,7 +13,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.10.1';
+const VERSION = '2.10.2';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -181,7 +181,7 @@ function topFor(id, rank) {
 // ── Planner (Goals, Bank, Prices) ────────────────────────────────────────
 const planner = createPlanner({
   api, totals, prices, esc, fmt, ago, iconImg, showMsg, errorText,
-  // (the combat card's pieces, for the one on the Goals tab)
+  // (the combat card's pieces, for a Combat level goal's calculator on the Goals tab)
   combatCard: { icon: COMBAT, text: combatText, live: (...a) => combatLiveHtml(...a), grid: (...a) => calcGridHtml(...a) },
   fullMarket: LOCAL || isElectron(),
   inLostKit: isElectron(),
@@ -449,10 +449,16 @@ const calcGridHtml = (L, attr = 'calc', text = false) => `<div class="calc-grid"
           }).join('')}
         </div>`;
 // head: the line that says the level (HTML). note: a line under the bar, if any.
-function combatLiveHtml(L, head, note = '') {
+// goal: the combat level a Combat level goal is after. Short of it, the skills
+// listed are what each alone takes to get there, not just to the next level.
+function combatLiveHtml(L, head, note = '', goal = null) {
   const b = combatBreakdown(L);
-  const next = levelsToNextCombat(L);
+  const short = goal != null && b.level < goal;
+  const aim = short ? goal : b.level + 1;
+  const next = levelsToCombat(L, aim);
   const f2 = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+  // (rounded down to 88: "2 short of your goal of 90", or "that's your goal of 90")
+  const vsGoal = goal == null ? '' : short ? `: <b>${goal - b.level}</b> short of your goal of <b>${goal}</b>` : `: that's your goal of <b>${goal}</b>${b.level > goal ? ' and more' : ''}`;
   const needs = COMBAT_KEYS
     .filter(k => next[k] != null)
     .sort((a, c) => next[a] - next[c])
@@ -468,7 +474,7 @@ function combatLiveHtml(L, head, note = '') {
     <div class="cc-line">Plus the best of: Melee 0.325 × (Attack <b>${L.attack}</b> + Strength <b>${L.strength}</b>) = <b>${f2(b.melee)}</b> ·
       Ranged 0.325 × (<b>${L.ranged}</b> + half <b>${Math.floor(L.ranged / 2)}</b>) = <b>${f2(b.range)}</b> ·
       Magic 0.325 × (<b>${L.magic}</b> + half <b>${Math.floor(L.magic / 2)}</b>) = <b>${f2(b.magic)}</b></div>
-    <div class="cc-line">= ${f2(b.exact)}, rounded down to <b>${b.level}</b>${b.level < 126 ? `. Any one of these gets ${b.level + 1}:` : '. Maxed.'}</div>
+    <div class="cc-line">= ${f2(b.exact)}, rounded down to <b>${b.level}</b>${vsGoal}${b.level < 126 ? `. Any one of these gets ${aim}:` : '. Maxed.'}</div>
     ${b.level < 126 ? `<div class="cc-next">${needs || '<span class="c-faint">Nothing single-handedly; train a few skills.</span>'}</div>` : ''}`;
 }
 

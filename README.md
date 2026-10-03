@@ -37,7 +37,8 @@ The planner works out what it takes to reach a goal, from your XP on the hiscore
 and the prices you set. Every skill has its planner: set a goal in any of them and open its
 **Plan (Calculator)**.
 
-- **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
+- **Goals**: set a **level, XP, rank or top %** goal in any skill, or a level for your combat level.
+  Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
     or only one skill.
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
@@ -45,18 +46,25 @@ and the prices you set. Every skill has its planner: set a goal in any of them a
     another kind (level, XP, rank, top %). Its plan, ticks, order and progress bar stay as they are.
   - **Plan (Calculator)**, on each goal, opens its plan: what your bank makes, what's left to do
     after that, and under them the calculator, a table of every way to train.
-  - **Combat level** is a card of its own among your goals, just before the first one in a combat
-    skill (it's there while one is listed). It combines your goals in Attack, Strength, Defence,
-    Hitpoints, Ranged, Prayer and Magic into the combat level they come to.
-    - Its **Plan (Calculator)** button opens the card Lookup has under Combat: how the level is
-      made up, what gets the next one, and a box for each combat skill. The boxes start from your
-      levels with your goals reached; type a level to try it, and reset to go back.
+  - **Combat level** is a goal too, set like a skill's: its button is the first one where you pick a
+    goal's skill, before Attack. Give it a level to reach (86 → 90) and it sits among your goals with
+    its progress bar, to move, edit or remove like any of them. Nothing about your combat level shows
+    up by itself.
+    - Its **Plan (Calculator)** is the combat calculator (the card Lookup has under Combat): how the
+      level is made up, how far short of the goal it is, and what each combat skill alone would take
+      to get there ("88: 2 short of your goal of 90. Any one of these gets 90: Attack +6 …").
+    - The calculator's boxes start from your levels with your goals in Attack, Strength, Defence,
+      Hitpoints, Ranged, Prayer and Magic reached: a Prayer goal of 52 puts 52 in the Prayer box. Type
+      over a level to try something else (Prayer 43, Defence 70): that changes none of your goals, and
+      **Reset to your goals** puts their values back. What you type lasts until you reset it or reload.
+    - Narrowing the goals to one combat skill keeps your Combat level goal on screen with that skill's
+      goals; a skill that has nothing to do with combat leaves it out.
     - Each combat skill's own plan has a tip with what its goal adds by itself: "this goal alone
       adds about 3.7 (67 → 70), with what its kills give besides (Hitpoints 54 → 57)". Combat level
       counts quarters and thirds of a level, so several goals' parts add up before they show as
-      whole levels; the card has the total.
-    - What a plan's kills give the other skills counts, in the tip and in the card: every point of
-      damage is Hitpoints XP too, and Controlled and Longrange share theirs. So a Ranged goal that
+      whole levels; a Combat level goal has the total.
+    - What a plan's kills give the other skills counts, in the tip and in the calculator: every point
+      of damage is Hitpoints XP too, and Controlled and Longrange share theirs. So a Ranged goal that
       adds nothing by itself (melee still ahead) can still be a combat level, through the Hitpoints
       level its kills come to. Bones aren't counted, since burying them is up to you.
 

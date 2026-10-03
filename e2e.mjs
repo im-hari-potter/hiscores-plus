@@ -2801,174 +2801,272 @@ await check('combat: Strength, Defence, Hitpoints and Ranged, each with its own 
   }
 });
 
-await check("goals: the combat level card: its own card before the first combat goal, shut until its Plan (Calculator) is opened, the same calculator Lookup has; each combat plan says what its goal adds", async () => {
-  const combat = () => page.locator('#goals-list [data-combat]');
-  const live = () => page.locator('#gc-live');
-  const shut = async () => flat(await combat().innerText());
+await check("goals: Combat level is a goal like a skill's: picked with the first button, before Attack, with a level to reach; its card has its progress and is moved, changed and removed like any goal; its Plan (Calculator) is the full calculator, starting from your goals, with what-ifs that change none of them; nothing shows by itself; a combat skill's goals come with it; each combat plan keeps its tip (v2.10.2)", async () => {
+  const combat = () => page.locator('.goal.combat-goal');
+  const live = () => combat().locator('.gc-live');
   const tipOf = async name => flat(await goalCard(name).locator('.tip.combat').innerText());
+  const names = async () => (await page.locator('.goal .goal-name').allInnerTexts()).map(flat);
+  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('lchs.goals.old_badger') || '[]'));
+  const addCombat = async level => {
+    await page.click('#goal-new [data-nskill="combat"]');
+    await page.fill('#goal-new input[name=value]', String(level));
+    await page.click('#goal-new button[type=submit]');
+  };
   await planAs('old badger', 'Old Badger');
   const saved = await page.evaluate(() => localStorage.getItem('lchs.goals.old_badger'));
   try {
-    // no goal in a combat skill: no card (it used to sit between the skill picker and the goals, whatever they were)
-    assert.deepEqual(JSON.parse(saved || '[]').filter(g => ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic'].includes(g.skill)), [], 'no goal of an earlier check is left in a combat skill');
-    assert.equal(await page.locator('#goals-combat, [data-combat]').count(), 0);
+    // Old Badger: Attack 51, Strength 53, Defence 52, Hitpoints 54, Ranged 55, Prayer 56, Magic 50: combat 67.3
+    assert.deepEqual(JSON.parse(saved || '[]').filter(g => ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic', 'combat'].includes(g.skill)), [], 'no goal of an earlier check is left in a combat skill');
+    // goals in combat skills bring no card of their own anymore (up to v2.10.1 one came before the first of them)
     await addGoal('cooking', 60);
     await goalCard('Cooking').waitFor();
-    assert.equal(await combat().count(), 0, 'not for a skill that has nothing to do with combat');
-    // a goal in a combat skill: the card comes just before it, shut, with the same button as a goal's plan
     await addGoal('attack', 60);
-    await combat().waitFor();
-    assert.equal(await combat().evaluate(el => el.nextElementSibling.querySelector('.goal-name').innerText.trim()), 'Attack', 'just before the first combat goal');
-    assert.equal(await combat().evaluate(el => el.previousElementSibling.querySelector('.goal-name')?.innerText.trim()), 'Cooking', 'and after the goals before it');
-    assert.equal(await combat().locator('.ico-combat').count(), 1, 'the crossed swords');
-    assert.equal(await page.locator('#gc-live, [data-gcalc]').count(), 0, 'shut until you open it');
-    assert.deepEqual([flat(await combat().locator('.goal-name').innerText()), flat(await combat().locator('.goal-title').innerText()), flat(await combat().locator('[data-act="combat-toggle"]').innerText())],
-      ['Combat level', 'Level 67 → 70', 'Plan (Calculator)']);
-    assert.equal(flat(await goalCard('Attack').locator('[data-act="toggle-plan"]').innerText()), 'Hide Plan (Calculator)', "a goal's own button, its plan open");
-    // Attack 51 to 60 is 809 rock crabs, and those are Hitpoints XP too: 54 to 57. Both count
-    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "70 once your goals are reached (Attack 60, Hitpoints 57 from their kills). Each of those goals' plans says what it adds on its own.");
-    // the goal's own plan says what it adds: 9 Attack levels are 2.925, 3 Hitpoints levels 0.75
+    await goalCard('Attack').waitFor();
+    assert.equal(await page.locator('#goals-combat, [data-combat], .combat-goal, .gc-live, [data-gcalc], [data-act="combat-toggle"]').count(), 0, 'nothing about the combat level by itself');
+    assert.deepEqual(await names(), ['Cooking', 'Attack']);
+    // the goal's own plan still says what it adds: 9 Attack levels are 2.925, and the 3 Hitpoints levels its 809 rock crabs give, 0.75
     assert.equal(await tipOf('Attack'), 'Combat level: this goal alone adds about 3.7 (67 → 70), with what its kills give besides (Hitpoints 54 → 57).');
-    assert.match(await goalCard('Attack').locator('.tip.combat').getAttribute('title'), /^Your combat level is a quarter of Defence \+ Hitpoints \+ half your Prayer, plus 0\.325 of the best of Attack \+ Strength,.*A plan's kills give Hitpoints XP too/);
+    assert.match(await goalCard('Attack').locator('.tip.combat').getAttribute('title'), /^Your combat level is a quarter of Defence \+ Hitpoints \+ half your Prayer, plus 0\.325 of the best of Attack \+ Strength,.*A plan's kills give Hitpoints XP too.*A Combat level goal \(the first of the buttons a goal is picked with\) combines them all, and its calculator lets you try other levels\.$/);
     assert.equal(await goalCard('Attack').locator('.plan > .tip.combat + .plan-sec table.plan-t').count(), 1, "under the plan's own lines, above the table");
     assert.equal(await goalCard('Attack').locator('[data-topt]').count(), 0, 'no Hide unused items where there are no Use boxes');
-    // a goal that adds nothing says why: Ranged 55 to 56 leaves melee the best of the three (and its 87 kills aren't a Hitpoints level)
-    await addGoal('ranged', 56);
-    await goalCard('Ranged').waitFor();
-    assert.equal(await tipOf('Ranged'), 'Combat level: this goal alone adds nothing (67 now): only the best of melee, Ranged and Magic counts, and your melee (Attack and Strength) is ahead. All your goals together: 70.');
-    assert.equal(await tipOf('Attack'), 'Combat level: this goal alone adds about 3.7 (67 → 70), with what its kills give besides (Hitpoints 54 → 57). All your goals together: 70.', 'now that there are two');
-    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "70 once your goals are reached (Attack 60, Hitpoints 57 from their kills, Ranged 56). Each of those goals' plans says what it adds on its own.");
-    // a goal can add through its kills alone: Ranged 55 to 60 is 536 rock crabs, and their Hitpoints XP is two levels (54 to 56),
-    // half a combat level, while Ranged 60 itself still isn't ahead of melee
-    await removeGoal(goalCard('Ranged'));
-    await noGoalFor('Ranged');
-    await addGoal('ranged', 60);
-    await goalCard('Ranged').waitFor();
-    assert.equal(await tipOf('Ranged'), 'Combat level: this goal alone adds about 0.5 (67 now: not a whole level by itself), through what its kills give besides (Hitpoints 54 → 56). '
-      + 'Ranged itself adds nothing: only the best of melee, Ranged and Magic counts, and your melee (Attack and Strength) is ahead. All your goals together: 71.');
-    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "71 once your goals are reached (Attack 60, Hitpoints 58 from their kills, Ranged 60). Each of those goals' plans says what it adds on its own.");
-    await removeGoal(goalCard('Ranged'));
-    await noGoalFor('Ranged');
-    await addGoal('ranged', 56);
-    await goalCard('Ranged').waitFor();
-    // Prayer counts by halves: 56 to 60 is two halves of a quarter each. Said to two places under one
-    await addGoal('prayer', 60);
-    await goalCard('Prayer').waitFor();
-    assert.equal(await tipOf('Prayer'), 'Combat level: this goal alone adds about 0.5 (67 now: not a whole level by itself). All your goals together: 71.');
-    assert.equal(flat(await combat().locator('.goal-title').innerText()), 'Level 67 → 71', '70.975 and a half');
-    await removeGoal(goalCard('Prayer'));
-    await noGoalFor('Prayer');
-    // without the Attack goal: Ranged 56 alone adds no level, and the card says so
-    await removeGoal(goalCard('Attack'));
-    await noGoalFor('Attack');
-    assert.equal(await combat().evaluate(el => el.nextElementSibling.querySelector('.goal-name').innerText.trim()), 'Ranged');
-    assert.equal(flat(await combat().locator('.goal-title').innerText()), 'Level 67');
-    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "The same once your goals are reached (Ranged 56): together they don't add a whole combat level yet.");
-    assert.equal(await tipOf('Ranged'), 'Combat level: this goal alone adds nothing (67 now): only the best of melee, Ranged and Magic counts, and your melee (Attack and Strength) is ahead.');
-    // filtered to a skill that isn't one of the seven, it's off the page; back with them
-    await page.click('[data-gonly="cooking"]');
-    await page.waitForFunction(() => !document.querySelector('[data-combat]'));
-    await page.click('[data-gonly="cooking"]');
+
+    // it's picked like a skill: the first of the buttons, before Attack
+    const picker = await page.locator('#goal-new [data-nskill]').evaluateAll(els => els.map(el => [el.dataset.nskill, el.title]));
+    assert.deepEqual(picker.slice(0, 3), [['combat', 'Combat level'], ['attack', 'Attack'], ['defence', 'Defence']]);
+    assert.equal(await page.locator('#goal-new [data-nskill="combat"] .ico-combat').count(), 1, 'the crossed swords');
+    await page.click('#goal-new [data-nskill="combat"]');
+    await page.waitForSelector('#goal-new [data-nskill="combat"].on');
+    assert.equal(await page.locator('#goal-new [data-nskill].on').count(), 1);
+    // a level is the only kind of goal it has; the next one is suggested, and what your goals already come to is said
+    assert.equal(flat(await page.locator('#goal-new form').innerText()), 'Combat level Level Add goal Now: level 67 · your skill goals reach 70');
+    assert.equal(await page.locator('#goal-new [data-ntype]').count(), 0, 'no XP, Rank or Top %');
+    assert.deepEqual([await page.inputValue('#goal-new input[name=value]'), await page.locator('#goal-new input[name=value]').getAttribute('placeholder')], ['68', 'Level (up to 126)']);
+    for (const [typed, says] of [['67', 'Old Badger is already combat level 67.'], ['127', 'Combat level goals go from 4 to 126.'], ['x', 'Enter a number for the goal.']]) {
+      await page.fill('#goal-new input[name=value]', typed);
+      await page.click('#goal-new button[type=submit]');
+      assert.equal(flat(await text('#goals-msg')), says);
+      assert.equal(await combat().count(), 0);
+    }
+    await addCombat(72);
     await combat().waitFor();
-    await removeGoal(goalCard('Ranged'));
-    await noGoalFor('Ranged');
-    assert.equal(await combat().count(), 0, 'gone with the last combat goal');
-    // open: how the level is made up and what gets the next one, as on Lookup
-    await addGoal('attack', 60);
-    await combat().waitFor();
-    await page.click('[data-act="combat-toggle"]');
-    await live().waitFor();
-    assert.equal(flat(await combat().locator('[data-act="combat-toggle"]').innerText()), 'Hide Plan (Calculator)');
+    assert.equal(await page.locator('#goals-msg').isHidden(), true);
+    // a goal among the goals: where a new one goes, with a goal's buttons and its progress since it was set
+    assert.deepEqual(await names(), ['Cooking', 'Attack', 'Combat level']);
+    assert.equal(await combat().locator('.goal-head .ico-combat').count(), 1);
+    assert.equal(flat(await combat().locator('.goal-head').innerText()), 'Combat level Level 67 → 72 Edit Hide Plan (Calculator) ▲ ▼ ✕');
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), 'Level 67 now · 5 levels to go · your skill goals reach 70 (Attack 60, Hitpoints 57 from their kills): 2 more to find');
+    assert.equal(await combat().locator('.goal-bar').getAttribute('title'), '0.0% of the way since you set this goal');
+    const mine = (await stored()).at(-1);
+    assert.deepEqual([mine.skill, mine.type, mine.value, Math.round(mine.startCb * 1000)], ['combat', 'level', 72, 67300], 'kept with the other goals; its bar starts from 67.3');
+    // the first button stays picked, like a skill's, and suggests the same again
+    assert.equal(await page.locator('#goal-new [data-nskill="combat"].on').count(), 1);
+
+    // its Plan (Calculator), open as a new goal's is: how the level is made up, and what each skill alone would take to get to the goal
     assert.equal(flat(await live().locator('.cc-head').innerText()), "Combat level once your goals are reached 70 +3 from Old Badger's 67");
     const lines = async () => (await live().locator('.cc-line').allInnerTexts()).map(flat);
+    const needs = async () => (await live().locator('.cc-next .need').allInnerTexts()).map(flat);
     assert.deepEqual(await lines(), ['Base: ¼ × (Defence 52 + Hitpoints 57 + half of Prayer 56 = 28) = 34.25',
       'Plus the best of: Melee 0.325 × (Attack 60 + Strength 53) = 36.725 · Ranged 0.325 × (55 + half 27) = 26.65 · Magic 0.325 × (50 + half 25) = 24.375',
-      '= 70.975, rounded down to 70. Any one of these gets 71:']);
-    assert.deepEqual(await page.locator('[data-combat] [data-gcalc]').evaluateAll(els => els.map(el => [el.dataset.gcalc, el.value])),
-      [['attack', '60'], ['strength', '53'], ['defence', '52'], ['hitpoints', '57'], ['ranged', '55'], ['prayer', '56'], ['magic', '50']]);
-    assert.equal(flat(await combat().locator('.calc .small-note').innerText()), "Combat calculator: it starts from Old Badger's levels, with your goals reached and what their kills give besides. Type a level to see what it does.");
-    assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), true);
-    assert.equal(flat(await page.locator('[data-act="combat-reset"]').innerText()), 'Reset to your goals');
-    // type a level to try it: the card follows as you type, and the box keeps the cursor
-    await page.fill('[data-gcalc="defence"]', '70');
-    await page.waitForFunction(() => /What-if/.test(document.querySelector('#gc-live').innerText));
+      '= 70.975, rounded down to 70: 2 short of your goal of 72. Any one of these gets 72:']);
+    // (1.025 more: four Attack or Strength levels at 0.325, five Defence or Hitpoints at a quarter, ten of Prayer; Ranged or Magic would have to pass melee first)
+    assert.deepEqual(await needs(), ['Attack +4', 'Strength +4', 'Defence +5', 'Hitpoints +5', 'Prayer +10', 'Ranged +23', 'Magic +28']);
+    assert.deepEqual(await page.evaluate(async () => (await import('./skills.js')).levelsToCombat({ attack: 60, strength: 53, defence: 52, hitpoints: 57, ranged: 55, prayer: 56, magic: 50 }, 72)),
+      { attack: 4, strength: 4, defence: 5, hitpoints: 5, ranged: 23, prayer: 10, magic: 28 });
+    // the boxes start from your goals: Attack 60 is the Attack goal's, Hitpoints 57 what its kills give
+    const boxes = () => combat().locator('[data-gcalc]').evaluateAll(els => els.map(el => [el.dataset.gcalc, el.value]));
+    assert.deepEqual(await boxes(), [['attack', '60'], ['strength', '53'], ['defence', '52'], ['hitpoints', '57'], ['ranged', '55'], ['prayer', '56'], ['magic', '50']]);
+    assert.equal(flat(await combat().locator('.calc .small-note').innerText()), "Combat calculator: it starts from Old Badger's levels, with your goals reached and what their kills give besides. Type a level to see what it does: that changes none of your goals.");
+    const reset = () => combat().locator('[data-act="combat-reset"]');
+    assert.equal(await reset().isDisabled(), true);
+    assert.equal(flat(await reset().innerText()), 'Reset to your goals');
+    // type a level to try it: the calculator follows as you type, the box keeps the cursor, and no goal changes
+    const goalsBefore = JSON.stringify(await stored());
+    await combat().locator('[data-gcalc="defence"]').fill('70');
+    await page.waitForFunction(() => /What-if/.test(document.querySelector('.combat-goal .gc-live').innerText));
     assert.equal(flat(await live().locator('.cc-head').innerText()), "What-if combat level 75 +8 from Old Badger's 67");
+    assert.equal((await lines())[2], "= 75.475, rounded down to 75: that's your goal of 72 and more. Any one of these gets 76:");
     assert.equal(await page.evaluate(() => document.activeElement?.dataset.gcalc), 'defence');
-    assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), false);
+    assert.equal(await reset().isDisabled(), false);
+    assert.equal(JSON.stringify(await stored()), goalsBefore, 'a what-if is not a goal: nothing is saved, and no Defence goal appears');
+    assert.deepEqual(await names(), ['Cooking', 'Attack', 'Combat level']);
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), 'Level 67 now · 5 levels to go · your skill goals reach 70 (Attack 60, Hitpoints 57 from their kills): 2 more to find', "the card's own line stays your goals'");
+    // an Attack goal's level typed over, too: the goal keeps its own
+    await combat().locator('[data-gcalc="attack"]').fill('99');
+    await page.waitForFunction(() => /What-if combat level\s+88\b/.test(document.querySelector('.combat-goal .gc-live').innerText));
+    assert.equal(flat(await goalCard('Attack').locator('.goal-title').innerText()), 'Level 51 → 60');
+    await combat().locator('[data-gcalc="attack"]').fill('60');
     // typed back to what it started from, there's nothing to reset
-    await page.fill('[data-gcalc="defence"]', '52');
-    await page.waitForFunction(() => !/What-if/.test(document.querySelector('#gc-live').innerText));
-    assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), true);
-    // it is Lookup's card: with the levels the hiscores have typed in, the same lines
-    await page.fill('[data-gcalc="attack"]', '51');
-    await page.fill('[data-gcalc="hitpoints"]', '54');
-    await page.waitForFunction(() => /67\.30/.test(document.querySelector('#gc-live').innerText));
+    await combat().locator('[data-gcalc="defence"]').fill('52');
+    await page.waitForFunction(() => !/What-if/.test(document.querySelector('.combat-goal .gc-live').innerText));
+    assert.equal(await reset().isDisabled(), true);
+    // it is Lookup's card: with the levels the hiscores have typed in, the same sums
+    await combat().locator('[data-gcalc="attack"]').fill('51');
+    await combat().locator('[data-gcalc="hitpoints"]').fill('54');
+    await page.waitForFunction(() => /67\.30/.test(document.querySelector('.combat-goal .gc-live').innerText));
     assert.equal(flat(await live().locator('.cc-head').innerText()), "What-if combat level 67 +0 from Old Badger's 67");
-    const mine = [await lines(), (await live().locator('.cc-next .need').allInnerTexts()).map(flat)];
+    const here = await lines();
+    assert.equal(here[2], '= 67.30, rounded down to 67: 5 short of your goal of 72. Any one of these gets 72:');
     await page.click('.tab[data-tab="lookup"]');
     await page.fill('#lookup-name', 'old badger');
     await page.click('#lookup-form button');
     await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.includes('Old Badger'), null, { timeout: 15000 });
     await page.click('#filter-seg [data-filter="combat"]');
     await page.waitForFunction(() => /67\.30/.test(document.querySelector('#cc-live')?.innerText || ''));
-    const lookup = [(await page.locator('#cc-live .cc-line').allInnerTexts()).map(flat), (await page.locator('#cc-live .cc-next .need').allInnerTexts()).map(flat)];
+    const lookup = (await page.locator('#cc-live .cc-line').allInnerTexts()).map(flat);
+    // (Lookup's has no goal to be short of: it says what gets the next level, as it always did)
+    assert.equal(lookup[2], '= 67.30, rounded down to 67. Any one of these gets 68:');
+    assert.deepEqual((await page.locator('#cc-live .cc-next .need').allInnerTexts()).map(flat), ['Attack +3', 'Strength +3', 'Defence +3', 'Hitpoints +3', 'Prayer +6', 'Ranged +17', 'Magic +22']);
     await page.click('#filter-seg [data-filter="all"]');
     await page.click('.tab[data-tab="goals"]');
     await live().waitFor();
-    assert.deepEqual(mine, lookup);
-    assert.deepEqual(mine[1], ['Attack +3', 'Strength +3', 'Defence +3', 'Hitpoints +3', 'Prayer +6', 'Ranged +17', 'Magic +22']);
+    assert.deepEqual(here.slice(0, 2), lookup.slice(0, 2));
     // a level out of range is brought back into it when you leave the box
-    await page.fill('[data-gcalc="defence"]', '70');
-    await page.fill('[data-gcalc="prayer"]', '150');
-    await page.press('[data-gcalc="prayer"]', 'Tab');
-    assert.equal(await page.inputValue('[data-gcalc="prayer"]'), '99');
-    // what's typed stays through a redraw
+    await combat().locator('[data-gcalc="defence"]').fill('70');
+    await combat().locator('[data-gcalc="prayer"]').fill('150');
+    await combat().locator('[data-gcalc="prayer"]').press('Tab');
+    assert.equal(await combat().locator('[data-gcalc="prayer"]').inputValue(), '99');
+    // what's typed stays through a redraw, and with the plan shut and opened again
     await combat().evaluate(el => { el.mark = true; });
     await page.click('[data-act="refresh-xp"]');
-    await page.waitForFunction(() => { const el = document.querySelector('[data-combat]'); return el && !el.mark; }, null, { timeout: 10000 });
-    assert.deepEqual([await page.inputValue('[data-gcalc="defence"]'), await page.inputValue('[data-gcalc="prayer"]'), await page.inputValue('[data-gcalc="attack"]')], ['70', '99', '51']);
-    await page.click('[data-act="combat-reset"]');
-    await page.waitForFunction(() => !/What-if/.test(document.querySelector('#gc-live').innerText));
-    assert.deepEqual([await page.inputValue('[data-gcalc="defence"]'), await page.inputValue('[data-gcalc="prayer"]'), await page.inputValue('[data-gcalc="attack"]'), await page.inputValue('[data-gcalc="hitpoints"]')], ['52', '56', '60', '57']);
+    await page.waitForFunction(() => { const el = document.querySelector('.goal.combat-goal'); return el && !el.mark; }, null, { timeout: 10000 });
+    const typedNow = async () => Object.fromEntries((await boxes()).filter(([k]) => ['defence', 'prayer', 'attack'].includes(k)));
+    assert.deepEqual(await typedNow(), { attack: '51', defence: '70', prayer: '99' });
+    await combat().locator('[data-act="toggle-plan"]').click();
+    await page.waitForFunction(() => !document.querySelector('.combat-goal .gc-live'));
+    assert.equal(flat(await combat().locator('[data-act="toggle-plan"]').innerText()), 'Plan (Calculator)');
+    await combat().locator('[data-act="toggle-plan"]').click();
+    await live().waitFor();
+    assert.deepEqual(await typedNow(), { attack: '51', defence: '70', prayer: '99' });
+    // Reset puts back your goals' values
+    await reset().click();
+    await page.waitForFunction(() => !/What-if/.test(document.querySelector('.combat-goal .gc-live').innerText));
+    assert.deepEqual(await boxes(), [['attack', '60'], ['strength', '53'], ['defence', '52'], ['hitpoints', '57'], ['ranged', '55'], ['prayer', '56'], ['magic', '50']]);
     assert.equal(flat(await live().locator('.cc-head').innerText()), "Combat level once your goals are reached 70 +3 from Old Badger's 67");
+    assert.equal(await reset().isDisabled(), true);
+    // a goal changed or added shows in it at once: a Prayer goal of 60 is two more halves of a quarter
+    await addGoal('prayer', 60);
+    await goalCard('Prayer').waitFor();
+    assert.equal(await tipOf('Prayer'), 'Combat level: this goal alone adds about 0.5 (67 now: not a whole level by itself). All your goals together: 71.');
+    assert.deepEqual((await boxes()).find(([k]) => k === 'prayer'), ['prayer', '60']);
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), 'Level 67 now · 5 levels to go · your skill goals reach 71 (Attack 60, Hitpoints 57 from their kills, Prayer 60): 1 more to find');
+    assert.equal((await lines())[2], '= 71.475, rounded down to 71: 1 short of your goal of 72. Any one of these gets 72:');
     await combat().evaluate(el => el.scrollIntoView({ block: 'start' }));
-    await page.screenshot({ path: `${SHOTS}/10u-combat-card.png`, fullPage: false });
-    // open or shut is remembered, and Hide all plans / Show all plans take it along with the goals' plans
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).combatOpen), true);
+    await page.screenshot({ path: `${SHOTS}/10u-combat-goal.png`, fullPage: false });
+    await removeGoal(goalCard('Prayer'));
+    await noGoalFor('Prayer');
+
+    // narrowed to one skill: a combat skill's goals come with it, a skill that has nothing to do with combat leaves it out
+    assert.deepEqual(await page.$$eval('.goal-filter [data-gonly]', els => els.map(e => [e.dataset.gonly, e.title])),
+      [['cooking', 'Only Cooking'], ['attack', 'Only Attack, with your Combat level goal'], ['combat', 'Only Combat level']]);
+    await page.click('[data-gonly="attack"]');
+    await page.waitForFunction(() => document.querySelectorAll('.goal').length === 2);
+    assert.deepEqual(await names(), ['Attack', 'Combat level']);
+    await page.click('[data-gonly="attack"]');
+    await page.click('[data-gonly="cooking"]');
+    await page.waitForFunction(() => document.querySelectorAll('.goal').length === 1);
+    assert.deepEqual(await names(), ['Cooking']);
+    await page.click('[data-gonly="cooking"]');
+    await page.click('[data-gonly="combat"]');
+    await page.waitForFunction(() => document.querySelectorAll('.goal').length === 1);
+    assert.deepEqual(await names(), ['Combat level']);
+    await page.click('[data-gonly="combat"]');
+    await page.waitForFunction(() => document.querySelectorAll('.goal').length === 3);
+    // moved like any goal, and it stays where it's put
+    await combat().locator('[data-act="goal-up"]').click();
+    assert.deepEqual(await names(), ['Cooking', 'Combat level', 'Attack']);
+    assert.deepEqual((await stored()).map(g => g.skill), ['cooking', 'combat', 'attack']);
+    await combat().locator('[data-act="goal-up"]').click();
+    assert.deepEqual(await names(), ['Combat level', 'Cooking', 'Attack']);
+    assert.equal(await combat().locator('[data-act="goal-up"]').isDisabled(), true);
+    await combat().locator('[data-act="goal-down"]').click();
+    await combat().locator('[data-act="goal-down"]').click();
+    assert.deepEqual(await names(), ['Cooking', 'Attack', 'Combat level']);
+    // changed like any goal: Edit moves the goalpost, a level being all it can be
+    await combat().locator('[data-act="edit-goal"]').click();
+    const edit = combat().locator('[data-form="edit-goal"]');
+    await edit.waitFor();
+    assert.equal(flat(await edit.innerText()), 'Change this goal to Level Save Cancel Its progress stays as it is, and so does what you typed into its calculator.');
+    assert.equal(await edit.locator('[data-etype]').count(), 0);
+    assert.equal(await edit.locator('[name=value]').inputValue(), '72');
+    await edit.locator('[name=value]').fill('60');
+    await edit.locator('[name=value]').press('Enter');
+    assert.equal(flat(await combat().locator('[data-form="edit-goal"] .c-lose').innerText()), 'Old Badger is already combat level 67.');
+    await combat().locator('[data-form="edit-goal"] [name=value]').fill('70');
+    await combat().locator('[data-form="edit-goal"] [name=value]').press('Enter');
+    await page.waitForFunction(() => !document.querySelector('.combat-goal [data-form="edit-goal"]'));
+    assert.equal(flat(await combat().locator('.goal-title').innerText()), 'Level 67 → 70');
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "Level 67 now · 3 levels to go · your skill goals reach 70 (Attack 60, Hitpoints 57 from their kills): that's this goal");
+    assert.equal((await lines())[2], "= 70.975, rounded down to 70: that's your goal of 70. Any one of these gets 71:");
+    assert.deepEqual(await needs(), ['Attack +1', 'Strength +1', 'Defence +1', 'Hitpoints +1', 'Prayer +2', 'Ranged +21', 'Magic +26']);
+    // Hide all plans and Show all plans take it along with the others
     await page.click('[data-act="close-all"]');
-    await page.waitForFunction(() => !document.querySelector('#gc-live') && !document.querySelector('.goal .plan'));
-    assert.equal(flat(await combat().locator('[data-act="combat-toggle"]').innerText()), 'Plan (Calculator)');
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).combatOpen), false);
+    await page.waitForFunction(() => !document.querySelector('.gc-live') && !document.querySelector('.goal .plan'));
+    assert.equal(flat(await combat().innerText()), "Combat level Level 67 → 70 Edit Plan (Calculator) ▲ ▼ ✕ Level 67 now · 3 levels to go · your skill goals reach 70 (Attack 60, Hitpoints 57 from their kills): that's this goal");
+    assert.equal(await page.locator('[data-gcalc]').count(), 0, 'the calculator is its plan: shut with it');
     await page.click('[data-act="open-all"]');
     await live().waitFor();
     await goalCard('Attack').locator('.plan').waitFor();
-    await page.click('[data-act="combat-toggle"]');
-    await page.waitForFunction(() => !document.querySelector('#gc-live'));
-    assert.equal(await shut(), "Combat level Level 67 → 70 Plan (Calculator) 70 once your goals are reached (Attack 60, Hitpoints 57 from their kills). Each of those goals' plans says what it adds on its own.");
+    // two of them: each has its own target and its own what-ifs
+    await addCombat(80);
+    await page.waitForFunction(() => document.querySelectorAll('.goal.combat-goal').length === 2);
+    await combat().first().locator('[data-gcalc="strength"]').fill('99');
+    await page.waitForFunction(() => /What-if/.test(document.querySelector('.combat-goal .gc-live').innerText));
+    assert.deepEqual(await combat().evaluateAll(cards => cards.map(c => [c.querySelector('.goal-title').innerText.replace(/\s+/g, ' ').trim(), c.querySelector('[data-gcalc="strength"]').value, /What-if/.test(c.querySelector('.gc-live').innerText)])),
+      [['Level 67 → 70', '99', true], ['Level 67 → 80', '53', false]]);
+    assert.match(flat(await combat().nth(1).locator('.cc-line').last().innerText()), /^= 70\.975, rounded down to 70: 10 short of your goal of 80\. Any one of these gets 80:$/);
+    // removed like any goal (and what was typed into it goes with it)
+    await removeGoal(combat().nth(1));
+    await page.waitForFunction(() => document.querySelectorAll('.goal.combat-goal').length === 1);
+    await removeGoal(combat());
+    await noGoalFor('Combat level');
+    assert.equal(await page.locator('.combat-goal, .gc-live, [data-gcalc]').count(), 0);
+    assert.deepEqual((await stored()).map(g => g.skill), ['cooking', 'attack']);
+
+    // a goal that's reached: said like a skill's, and counted with the reached ones
+    await page.evaluate(() => {
+      const list = JSON.parse(localStorage.getItem('lchs.goals.old_badger'));
+      list.push({ id: 'gcbdone', skill: 'combat', type: 'level', value: 60, created: Date.now(), startCb: 50 });
+      localStorage.setItem('lchs.goals.old_badger', JSON.stringify(list));
+    });
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('.tab[data-tab="goals"]');
+    await combat().waitFor();
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), 'Reached · level 67');
+    assert.match(await combat().locator('.goal-bar').getAttribute('class'), /\bmaxed\b/);
+    assert.match(flat(await page.locator('.goal-filter [data-gshow="done"]').innerText()), /^Reached 1$/);
+    await combat().locator('[data-act="toggle-plan"]').click();
+    await live().waitFor();
+    assert.match(flat(await live().locator('.cc-line').last().innerText()), /^= 70\.975, rounded down to 70: that's your goal of 60 and more\. Any one of these gets 71:$/);
+    await removeGoal(combat());
+    await noGoalFor('Combat level');
+
     await removeGoal(goalCard('Attack'));
     await noGoalFor('Attack');
     await removeGoal(goalCard('Cooking'));
     await noGoalFor('Cooking');
-    // an account with combat skills off the hiscores: a range, and the card says why
+    // an account with combat skills off the hiscores: a range, and the card and its calculator say why
     await planAs('lowbie', 'Lowbie');
     const lowSaved = await page.evaluate(() => localStorage.getItem('lchs.goals.lowbie'));
     try {
       await addGoal('attack', 30);
-      await combat().waitFor();
-      assert.match(flat(await combat().locator('.goal-title').innerText()), /^Level \d+–\d+( → \d+)?$/);
+      await goalCard('Attack').waitFor();
       assert.match(await tipOf('Attack'), /^Combat level: this goal alone adds about [\d.]+ \(at least \d+ (→ \d+|now: not a whole level by itself)\)/);
-      await page.click('[data-act="combat-toggle"]');
-      await live().waitFor();
+      await page.click('#goal-new [data-nskill="combat"]');
+      assert.match(flat(await page.locator('#goal-new form').innerText()), /^Combat level Level Add goal Now: level \d+–\d+( · your skill goals reach \d+)?$/);
+      await page.click('#goal-new button[type=submit]');
+      await combat().waitFor();
+      assert.match(flat(await combat().locator('.goal-title').innerText()), /^Level \d+–\d+ → \d+$/);
+      assert.match(flat(await combat().locator('.goal-sub').innerText()), /^Level \d+–\d+ now · \d+ levels? to go · .*\(some combat skills are below 15, so their lowest possible levels are used\)$/);
       assert.match(flat(await live().innerText()), /Some combat skills are below 15, so they're not on the hiscores\. Their lowest possible levels are used below, and you can change them in the calculator\./);
-      await page.click('[data-act="combat-toggle"]');
     } finally {
       await page.evaluate(v => (v == null ? localStorage.removeItem('lchs.goals.lowbie') : localStorage.setItem('lchs.goals.lowbie', v)), lowSaved);
     }
   } finally {
     await planAs('old badger', 'Old Badger');
     await page.evaluate(v => (v == null ? localStorage.removeItem('lchs.goals.old_badger') : localStorage.setItem('lchs.goals.old_badger', v)), saved);
-    await page.evaluate(() => { const ui = JSON.parse(localStorage.getItem('lchs.planUi') || '{}'); delete ui.combatOpen; localStorage.setItem('lchs.planUi', JSON.stringify(ui)); });
     await planAs('demo main', 'Demo Main');
+    // (the button a new goal's skill is picked with: back on a skill)
+    await page.click('#goal-new [data-nskill="herblore"]');
   }
 });
 
@@ -2977,16 +3075,17 @@ await check('goals: every skill has its planner: no dot on the skill picker, and
   assert.equal(await page.locator('.calc-dot').count(), 0);
   // every skill's button is its name, and its goal gets a plan
   const picker = await page.locator('#goal-new [data-nskill]').evaluateAll(els => els.map(el => [el.dataset.nskill, el.title, el.getAttribute('aria-label'), el.children.length]));
-  assert.equal(picker.length, 19);
+  // (the combat level first, which is a goal too, then the 19 skills)
+  assert.equal(picker.length, 20);
   for (const [key, title, label, kids] of picker) assert.deepEqual([title, kids, /\(planner\)/.test(title)], [label, 1, false], key);
-  assert.deepEqual(picker.map(p => p[1]), ['Attack', 'Defence', 'Strength', 'Hitpoints', 'Ranged', 'Prayer', 'Magic', 'Cooking', 'Woodcutting', 'Fletching', 'Fishing', 'Firemaking', 'Crafting', 'Smithing', 'Mining',
+  assert.deepEqual(picker.map(p => p[1]), ['Combat level', 'Attack', 'Defence', 'Strength', 'Hitpoints', 'Ranged', 'Prayer', 'Magic', 'Cooking', 'Woodcutting', 'Fletching', 'Fishing', 'Firemaking', 'Crafting', 'Smithing', 'Mining',
     'Herblore', 'Agility', 'Thieving', 'Runecraft']);
   const mod = await page.evaluate(async () => { const m = await import('./planner-ui.js'); const s = await import('./skills.js'); return s.SKILLS.filter(x => x.id).map(x => [x.key, m.hasCalculator(x.key)]); });
   assert.ok(mod.length === 19 && mod.every(([, has]) => has), JSON.stringify(mod.filter(([, has]) => !has)));
   // an account with no goals: how to start, and no list of skills that have a planner or of those still to come
   await planAs('pure ranger', 'Pure Ranger');
   try {
-    assert.equal(flat(await text('#goals-list')), 'No goals yet. Pick a skill above and set a level, XP, rank or top % to reach.');
+    assert.equal(flat(await text('#goals-list')), 'No goals yet. Pick a skill above and set a level, XP, rank or top % to reach. The first button is your combat level.');
     await page.click('.tab[data-tab="bank"]');
     await page.click('[data-bskill="herblore"]');
     const note = flat(await page.locator('#bank-head .note').innerText());
