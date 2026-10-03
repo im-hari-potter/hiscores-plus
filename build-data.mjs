@@ -2463,6 +2463,452 @@ async function agility() {
 
 await agility();
 
+// ── Prayer ─────────────────────────────────────────────────────────────────
+// Bones, buried: each one carries its XP on the server (bone_exp), and anything
+// in the bones category can be buried. The rows are LostHQ's Prayer calculator
+// (js/calculators/prayer.js), each checked against the server, plus the bones
+// the server drops that the calculator leaves out. They come out of the bank,
+// like Firemaking's logs, and nothing comes back.
+const prayerNotes = [];
+async function prayer() {
+  const { bonesXp: calc } = await calculatorTables('prayer.js', ['bonesXp']);
+  // Every item with bone_exp, whichever file it's in (monkey bones aren't with the rest).
+  const { readdir } = await import('node:fs/promises');
+  const server = new Map();
+  for (const f of (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.obj'))) {
+    for (const b of (await readConfig(scripts(f))).values()) if (b.params.bone_exp != null) server.set(b.name, { xp: Number(b.params.bone_exp), buried: b.props.category === 'bones' });
+  }
+  const bury = await readFile(scripts('skill_prayer/scripts/bury_bone.rs2'), 'utf8');
+  if (!/\[opheld1,_bones\]/.test(bury) || !/stat_advance\(prayer, oc_param\(\$last_item, bone_exp\)\)/.test(bury)) throw new Error("prayer: can't read how bones are buried");
+  // The server's own: [where they come from]
+  const ADDED_BONES = {
+    mm_normal_monkey_bones: 'Dropped by the monkeys of Karamja.',
+    tbwt_beast_bones: 'Dropped by the Shaikahan, east of Tai Bwo Wannai.',
+  };
+  const LEFT_OUT_BONES = {
+    newbiebones: "Tutorial Island's bones",
+    ...Object.fromEntries(['tbwt_burnt_jogre_bones', 'tbwt_burnt_jogre_bones_in_raw_karambwanji_paste', 'tbwt_burnt_jogre_bones_in_cooked_karambwanji_paste', 'tbwt_burnt_jogre_bones_marinated_in_karambwanji',
+      'tbwt_jogre_bones_in_raw_karambwanji_paste', 'tbwt_jogre_bones_in_cooked_karambwanji_paste', 'tbwt_jogre_bones_marinated_in_karambwanji']
+      .map(k => [k, 'the jogre bones Tai Bwo Wannai Trio has you burn, paste and marinate (16 to 18 XP, and not to be traded)'])),
+  };
+  const rows = [];
+  for (const [key, xp] of Object.entries(calc)) {
+    const b = server.get(key);
+    if (!b || !b.buried) throw new Error(`prayer: the server buries no ${key}`);
+    if (Math.round(xp * 10) !== b.xp) throw new Error(`prayer ${key}: the calculator says ${xp} XP, the server ${b.xp / 10}`);
+    rows.push({ key, xp: b.xp });
+  }
+  for (const [key, b] of server) {
+    if (key in calc || LEFT_OUT_BONES[key]) continue;
+    if (!ADDED_BONES[key]) throw new Error(`prayer: the server has bones the calculator doesn't (${key}, ${b.xp / 10} XP): look at them, then list them`);
+    if (!b.buried || ITEM.get(need(key)).tradeable !== true) throw new Error(`prayer: ${key} can't be buried or traded any more`);
+    rows.push({ key, xp: b.xp, note: `${ADDED_BONES[key]} Not on LostHQ's calculator: the server's own XP.` });
+    prayerNotes.push(`${ITEM.get(key).name}: ${b.xp / 10} XP on the server; not in LostHQ's calculator (added)`);
+  }
+  for (const key of [...Object.keys(ADDED_BONES), ...Object.keys(LEFT_OUT_BONES)]) if (!server.has(key)) throw new Error(`prayer: the server no longer has ${key}: take it off the list`);
+  // Least XP first, the calculator's order within that.
+  rows.map((r, i) => [r, i]).sort(([a, i], [b, j]) => a.xp - b.xp || i - j).forEach(([r]) => {
+    methods.push({ id: `pr_${r.key}`, skill: 'prayer', group: 'Bones', kind: 'xp', name: ITEM.get(need(r.key)).name, level: 1, xp: r.xp,
+      in: { [r.key]: 1 }, out: {}, ...(r.note ? { note: r.note } : {}) });
+  });
+  bankGroups.prayer = [{ name: 'Bones', items: methods.filter(m => m.skill === 'prayer').map(m => Object.keys(m.in)[0]) }];
+
+  // Every script that gives Prayer XP is this one, or looked at and left out.
+  const USED = ['skill_prayer/scripts/bury_bone.rs2'];
+  const LEFT_OUT = {
+    'minigames/game_mortton/scripts/mortton_pyre.rs2': "shades' remains burnt on a pyre in Mort'ton", 'quests/quest_druidspirit/scripts/ghast.rs2': 'ghasts',
+    'quests/quest_priest/scripts/quest_priest.rs2': 'a quest reward', 'quests/quest_grail/scripts/quest_grail.rs2': 'a quest reward', 'quests/quest_priestperil/scripts/priestperil.rs2': 'a quest reward',
+    '_test/scripts/cheats/cheat_maxme.rs2': 'a test cheat',
+  };
+  for (const file of await everyScript()) {
+    if (USED.includes(file) || LEFT_OUT[file]) continue;
+    if ((await readFile(scripts(file), 'utf8')).includes('stat_advance(prayer')) throw new Error(`prayer: ${file} gives Prayer XP and isn't accounted for: look at it, then list it`);
+  }
+  for (const file of [...USED, ...Object.keys(LEFT_OUT)]) if (!(await readFile(scripts(file), 'utf8')).includes('stat_advance(prayer')) throw new Error(`prayer: ${file} no longer gives Prayer XP: take it off the list`);
+  prayerNotes.push(`${rows.length} bones; left out: ${[...new Set([...Object.values(LEFT_OUT_BONES), ...Object.values(LEFT_OUT)])].filter(v => !/quest reward|cheat/.test(v)).join(', ')}, and quest rewards`);
+}
+
+await prayer();
+
+// ── Magic ──────────────────────────────────────────────────────────────────
+// The rows are LostHQ's Magic calculator (js/calculators/magic.js): its combat
+// and non-combat lists. Every spell is checked against the server's two spell
+// tables, which also give what the calculator leaves out: the runes a cast
+// takes, a combat spell's max hit, and what an enchant or a Charge Orb turns
+// into what. Where the two differ the server's number is used and the row says
+// so; a difference this script hasn't seen before stops it.
+//
+// They're grouped by how you train with them:
+//   Combat      - what does damage. The XP is for the cast, hit or miss; damage
+//                 adds 2 XP a point, which a choice on the goal can count.
+//   Curses      - what weakens or holds a target.
+//   Utility     - alchemy, Superheat Item (a row for each bar: the ore goes in
+//                 and the bar comes out), and the odd ones.
+//   Enchantment - Lvl-1 to Lvl-5 Enchant, a row for each piece of jewellery, and
+//                 the Charge Orb spells.
+//   Teleports
+// Rows here stand on their own: nothing is shared with the Crafting and Smithing
+// rows that cast the same spells on the way.
+//
+// asked: a spell that takes nothing but runes. A bank can't say which of them
+// its runes are for, so a bank plan casts one only when it's the spell you train
+// with (or it has a place in your order). What goes into a spell besides runes
+// (a ring, ore, an orb) is planned from a bank by itself, like any other skill's.
+// sprite: the spell's own icon, from the client's spell sheets.
+// opt: a staff's runes left out (less; CHOICES' staff), and the XP with damage
+// counted (CHOICES' damage).
+const magicNotes = [];
+const spellSprites = [];     // the spell icons to add to items.png: [{ sheet, index }]; a method's sprite is its place in this list until the atlas is laid out
+async function magic() {
+  const x10 = xp => Math.round(xp * 10);
+  const item = k => nameOverride[k] || ITEM.get(need(k)).name;
+  // (in a sentence: "a dragonstone amulet", which the game's item list runs together)
+  const lower = k => item(k).toLowerCase().replace(/^dragonstoneamulet$/, 'dragonstone amulet');
+  const read = p => readFile(scripts(p), 'utf8');
+
+  // ── The calculator's two lists: set up inside its runCalc, so cut out of it ──
+  const src = await readFile(join(LOSTHQ, 'js/calculators/magic.js'), 'utf8');
+  const table = name => {
+    const from = src.indexOf(`const ${name} = {`);
+    if (from < 0) throw new Error(`magic.js: no ${name}`);
+    let depth = 0, i = src.indexOf('{', from);
+    const start = i;
+    for (; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}' && --depth === 0) break; }
+    return new Function(`return ${src.slice(start, i + 1)};`)();
+  };
+  const calc = { ...table('combatSpells'), ...table('nonCombatSpells') };      // name -> { xp, level }
+  // The calculator's name for a spell -> the server's (its constant).
+  const ODD = { 'Low Level Alchemy': 'lowlvl_alchemy', 'High Level Alchemy': 'highlvl_alchemy' };
+  const constOf = name => ODD[name]
+    || (name.match(/^Lvl-(\d) Enchant$/) && `enchant_lvl${name.match(/^Lvl-(\d) Enchant$/)[1]}`)
+    || (name.match(/^Charge (\w+) Orb$/) && `${name.match(/^Charge (\w+) Orb$/)[1].toLowerCase()}_orb`)
+    || name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const calcOf = new Map(Object.entries(calc).map(([name, row]) => [constOf(name), { name, ...row }]));
+  if (calcOf.size !== Object.keys(calc).length) throw new Error('magic.js: two spells with one name');
+
+  // ── The server's side ──
+  const constants = new Map((await read('skill_combat/configs/magic/spells.constant')).split(/\r?\n/).map(l => l.match(/^\^(\w+)\s*=\s*(\d+)/)).filter(Boolean).map(m => [m[1], Number(m[2])]));
+  const spells = new Map();                   // constant -> the server's row
+  for (const file of ['skill_combat/configs/magic/magic_combat_spells.dbrow', 'skill_magic/configs/magic_spells.dbrow']) {
+    for (const row of (await readConfig(scripts(file))).values()) {
+      const d = fields(row);
+      const key = d.spell?.[0]?.replace(/^\^/, '');
+      if (!key || !constants.has(key)) throw new Error(`magic: ${row.name} names no spell`);
+      const runes = {};
+      for (let i = 0; d.runesrequired && i + 1 < d.runesrequired.length; i += 2) if (d.runesrequired[i] !== 'null') runes[need(d.runesrequired[i])] = Number(d.runesrequired[i + 1]);
+      spells.set(key, {
+        key, level: Number(d.levelrequired?.[0] ?? 0), xp: Number(d.experience?.[0] ?? 0), runes,
+        maxhit: d.maxhit ? Number(d.maxhit[0]) : null, worn: d.wornrequired?.[0] || null,
+        freeze: d.freeze_time ? Number(d.freeze_time[0]) : 0, lowers: (row.data || []).filter(([k]) => k === 'stat_change').map(([, stat]) => stat),
+        converts: (row.data || []).filter(([k]) => k === 'convertobj').map(([, from, to]) => [from, to]),
+        loc: d.loc_type?.[0] || null, teleport: !!d.tele_coord,
+      });
+    }
+  }
+  // (what monsters cast isn't a player's spell: no level, no runes)
+  for (const [key, sp] of [...spells]) if (!sp.level && !Object.keys(sp.runes).length) spells.delete(key);
+  for (const sp of spells.values()) if (!(sp.level > 0) || !(sp.xp > 0) || !Object.keys(sp.runes).length) throw new Error(`magic: can't read the ${sp.key} spell`);
+
+  // The spell's icon: its button in the spellbook says which sprite (20x20, on one of two sheets).
+  const book = await readConfig(scripts('skill_magic/interfaces/magic.if'));
+  const SHEETS = ['magicon', 'magicon2'];
+  const spriteOf = key => {
+    const g = book.get(key)?.props.activegraphic?.split(',');
+    if (!g || !SHEETS.includes(g[0])) throw new Error(`magic: no icon for ${key} in the spellbook`);
+    const at = spellSprites.findIndex(x => x.sheet === g[0] && x.index === Number(g[1]));
+    return at >= 0 ? at : spellSprites.push({ sheet: g[0], index: Number(g[1]) }) - 1;
+  };
+
+  // How a cast is paid for and what it gives.
+  const shared = scriptBlocks(await read('skill_magic/scripts/magic.rs2'));
+  if (!/stat_advance\(magic, db_getfield\(\$spell_data, magic_spell_table:experience, 0\)\)/.test(shared.get('proc,give_spell_xp') || '')) throw new Error("magic: can't read how a spell gives its XP");
+  // A staff stands in for its rune: the server's table of them. A lava staff is in it twice (earth and fire).
+  const staffRows = [...(await readConfig(scripts('skill_magic/configs/magic_staff.dbrow'))).values()].map(row => ({
+    rune: need(fields(row).rune[0]), staves: (row.data || []).filter(([k]) => k === 'staff').map(([, k]) => need(k)) }));
+  if (!/\$staff_data2 = db_findnext/.test(shared.get('proc,staff_runes') || '') || !/\$rune_count1 = null/.test(shared.get('proc,staff_runes') || '')) throw new Error("magic: can't read how a staff stands in for runes");
+  const runesOfStaff = new Map();             // staff -> the runes it stands in for
+  for (const r of staffRows) for (const st of r.staves) runesOfStaff.set(st, [...(runesOfStaff.get(st) || []), r.rune]);
+  // One choice for each set of runes, named after the plainest staff that gives it.
+  const STAFF = [];                           // [{ id, name, runes, staff, all }]
+  for (const [staff, runes] of runesOfStaff) {
+    const same = STAFF.find(o => o.runes.join() === runes.join());
+    if (same) { same.all.push(staff); continue; }
+    const el = runes.map(r => item(r).replace(/ rune$/i, ''));
+    STAFF.push({ id: runes.length > 1 ? staff.replace(/_battlestaff$/, '') : el[0].toLowerCase(), runes, staff, all: [staff],
+      name: runes.length > 1 ? `${item(staff).replace(/ battlestaff$/i, '')} (${el.map(e => e.toLowerCase()).join(' and ')})` : el[0] });
+  }
+  STAFF.sort((a, b) => a.runes.length - b.runes.length);
+  if (STAFF.map(o => o.id).join() !== 'air,water,earth,fire,lava') throw new Error(`magic: the staves are ${STAFF.map(o => o.id).join()} now: look at them`);
+  const isRune = k => /rune$/.test(k);
+
+  // Combat: the XP is given with the cast, before the roll to hit; a hit then
+  // gives XP for its damage, 0 to the spell's max, each as likely as the next.
+  const pvm = scriptBlocks(await read('skill_combat/scripts/player/player_magic.rs2'));
+  const castBlock = pvm.get('proc,pvm_spell_cast') || '', usual = pvm.get('proc,pvm_default_spell') || '', hit = pvm.get('proc,pvm_spell_success') || '';
+  if (!castBlock.includes('~give_spell_xp($spell_data)') || !castBlock.includes('~delete_spell_runes($spell_data)')) throw new Error("magic: a combat spell's cast no longer gives its XP");
+  if (!(usual.indexOf('~pvm_spell_cast($spell_data)') >= 0 && usual.indexOf('~pvm_spell_cast($spell_data)') < usual.indexOf('~player_npc_hit_roll(^magic_style)'))) throw new Error('magic: a combat spell now rolls to hit before it gives its XP');
+  if (!/\$damage = randominc\(~npc_max_dealt\(\$maxhit, \$spell\)\)/.test(hit) || !/~give_combat_experience\(\$damagestyle, \$damage_capped/.test(hit)) throw new Error("magic: can't read what a hit gives");
+  const combat = await read('skill_combat/scripts/combat.rs2');
+  if (!/def_int \$base = multiply\(\$damage, 10\)/.test(combat)) throw new Error("magic: can't read the XP a point of damage gives");
+  const perDamage = fromScript(combat, /\} else \{\s*switch_int\(\$damagestyle\)[\s\S]*?case \^style_magic_normal :\s*stat_advance\(magic, scale\(\$multiplier, 1000, scale\((\d+), 100, \$base\)\)\)/, 'the Magic XP a point of damage gives') / 10;      // in tenths of XP a point
+  if (perDamage !== 20) throw new Error(`magic: a point of damage is ${perDamage / 10} XP now, not 2`);
+  // Chaos gauntlets: 3 more on a bolt spell's max hit.
+  const maxScript = scriptBlocks(await read('skill_combat/scripts/pvp/pvp_magic.rs2')).get('proc,magic_spell_maxhit') || '';
+  const gaunt = maxScript.match(/inv_total\(worn, (\w+)\) > 0 & \$spell >= \^(\w+) & \$spell <= \^(\w+)\) \{\s*\$maxhit = add\(\$maxhit, (\d+)\)/);
+  if (!gaunt) throw new Error("magic: can't read what chaos gauntlets do");
+  const boosted = key => constants.get(key) >= constants.get(gaunt[2]) && constants.get(key) <= constants.get(gaunt[3]);
+  // What a spell can't be cast on twice: a weakened target, a held one.
+  if (!/npc_stat\(\$npc_stat\) < npc_basestat\(\$npc_stat\)/.test(pvm.get('proc,pvm_debuff_allowed') || '')) throw new Error("magic: can't read when a curse can't be cast");
+  if (!/%npc_stunned > map_clock/.test(pvm.get('proc,pvm_freeze_allowed') || '')) throw new Error("magic: can't read when a bind can't be cast");
+  // The spells with a script of their own.
+  const own = async file => read(`skill_combat/scripts/player/spells/scripts/${file}.rs2`);
+  const undead = await own('crumble_undead');
+  const undeadOnly = fromScriptText(undead, /npc_param\(undead\) = \^false\) \{\s*mes\("This spell only affects ([^."]+)\./, 'what Crumble Undead works on');
+  const GODS = { saradomin_strike: 'saradomin', claws_of_guthix: 'guthix', flames_of_zamorak: 'zamorak' };
+  let charged = null;
+  for (const [key, god] of Object.entries(GODS)) {
+    const text = await own(key);
+    if (!new RegExp(`mage_arena_spell_finished & ~inzone_coord_pair_table\\(mage_arena, coord\\) = false`).test(text)) throw new Error(`magic: ${key} no longer has to be learnt in the Mage Arena`);
+    const worn = new RegExp(`inv_total\\(worn, ${god}_cape\\) > 0 & inv_total\\(worn, ${god}_staff\\) > 0\\) \\{`).test(text);
+    const m = text.match(/if \(%magearena_charge > 0\) \{\s*\$maxhit = scale\((\d+), (\d+), \$maxhit\)/);
+    if (!worn || !m) throw new Error(`magic: can't read what Charge does to ${key}`);
+    const up = Math.floor((spells.get(key).maxhit * Number(m[1])) / Number(m[2]));
+    if (charged != null && charged !== up) throw new Error('magic: the god spells no longer hit alike when charged');
+    charged = up;
+  }
+  const iban = await own('ibans_blast');
+  if (!/%iban_staff_charges < 1/.test(iban) || !/%iban_staff_charges = sub\(%iban_staff_charges, 1\)/.test(iban)) throw new Error("magic: can't read what Iban Blast takes from its staff");
+
+  // The rest: what each script asks for besides the runes.
+  const dir = f => read(`skill_magic/scripts/spells/${f}.rs2`);
+  const alch = await dir('alchemy');
+  const share = which => {
+    const m = scriptBlocks(alch).get(`label,magic_spell_${which}_alch`)?.match(/\$profit = max\(scale\((\d+), (\d+), oc_cost\(\$item\)\), 1\)/);
+    if (!m) throw new Error(`magic: can't read what ${which} alchemy pays`);
+    return Math.round((100 * Number(m[1])) / Number(m[2]));
+  };
+  const bananas = await dir('convert_bones');
+  if (!/inv_del\(inv, bones, \$total_bones\);\s*inv_add\(inv, \$product, \$total_bones\)/.test(bananas)) throw new Error("magic: can't read what Bones to Bananas turns");
+  const teleports = await dir('teleport');
+  const QUESTS = { elenaquest: 'Plague City', itwatchtower: 'Watchtower', eadgar_quest: "Eadgar's Ruse" };
+  const questOf = key => {
+    const m = teleports.match(new RegExp(`if\\(\\$spell = \\^${key} & %(\\w+) < \\^\\w+_complete\\)`));
+    if (m && !QUESTS[m[1]]) throw new Error(`magic: ${key} waits for a quest this script doesn't know (${m[1]})`);
+    return m ? QUESTS[m[1]] : null;
+  };
+  const chargeScript = await dir('charge');
+  if (!/%magearena < \^mage_arena_staff_given/.test(chargeScript)) throw new Error('magic: Charge no longer has to be learnt in the Mage Arena');
+  const chargeTicks = fromScript(chargeScript, /%magearena_charge = (\d+);/, 'how long Charge lasts') * fromScript(chargeScript, /settimer\(charge, (\d+)\)/, "Charge's timer");
+  const orbScript = await dir('charge_orb');
+  const orbFrom = need(fromScriptText(orbScript, /inv_del\(inv, (\w+), 1\);\s*~delete_spell_runes/, 'what a Charge Orb spell is cast on'));
+  const heat = await dir('superheat');
+  if (/randominc/.test(heat)) throw new Error('magic: Superheat Item can fail now; the data says it never does');
+  const noHeat = [...heat.matchAll(/if\(\$ore1 = (\w+)\) \{\s*mes\("Even this spell is not hot enough/g)].map(m => m[1]);
+  // (cast on iron ore with coal on you, it makes steel)
+  const steelCoal = fromScript(heat, /if \(\$ore1 = iron_ore & inv_total\(inv, coal\) > (\d+) & stat\(smithing\) >= \d+\) \{\s*\$ore1 = iron_ore;\s*\$bar = steel_bar;/, 'when Superheat Item makes steel of iron ore') + 1;
+  const grab = await dir('telegrab');
+  if (!/obj_takeitem\(inv\)/.test(grab)) throw new Error("magic: can't read what Telekinetic Grab does");
+  const enchantScript = await dir('enchant');
+  if (!/inv_setslot\(inv, \$slot, \$final_obj, 1\)/.test(enchantScript)) throw new Error("magic: can't read what an enchant makes");
+
+  // ── The rows ──
+  // Where the server and the calculator differ: "<name>: <what the calculator says>, not <the server's>".
+  const KNOWN = new Set(['Crumble Undead: 24.5 XP, not 49', 'Enfeeble: 89 XP, not 83', 'Entangle: 90 XP, not 89', 'Stun: 80 XP, not 90',
+    'Falador Teleport: 47 XP, not 48', 'Charge Water Orb: 56 XP, not 66']);
+  const ADDED_SPELLS = { trollheim_teleport: 'Trollheim Teleport' };
+  const differs = (c, sp) => {
+    const found = [];
+    if (c.level !== sp.level) found.push([`${c.name}: level ${c.level}, not ${sp.level}`, `LostHQ's calculator says level ${c.level}; the server asks for ${sp.level}.`]);
+    if (x10(c.xp) !== sp.xp) found.push([`${c.name}: ${c.xp} XP, not ${sp.xp / 10}`, `LostHQ's calculator says ${c.xp} XP; the server gives ${sp.xp / 10}.`]);
+    for (const [k] of found) {
+      if (!KNOWN.delete(k)) throw new Error(`magic, ${k} on the server: look at it, then list it`);
+      magicNotes.push(`${k} on the server (the server's is used)`);
+    }
+    return found.map(([, text]) => text);
+  };
+  const seen = new Set();
+  // A spell's name and what's to say about how it compares.
+  const about = key => {
+    const sp = spells.get(key);
+    if (!sp) throw new Error(`magic: the server has no ${key}`);
+    seen.add(key);
+    const c = calcOf.get(key);
+    if (c) return { sp, name: c.name, notes: differs(c, sp) };
+    if (!ADDED_SPELLS[key]) throw new Error(`magic: the server has a spell the calculator doesn't (${key}): look at it, then list it`);
+    magicNotes.push(`${ADDED_SPELLS[key]}: level ${sp.level}, ${sp.xp / 10} XP on the server; not in LostHQ's calculator (added)`);
+    return { sp, name: ADDED_SPELLS[key], notes: [ADDED] };
+  };
+  // What the goal's choices change: a staff's runes left out, and damage counted.
+  const optOf = (sp, takes, tools) => {
+    const opt = {};
+    // (a spell cast with a staff of its own has no hand free for another)
+    if (!tools) for (const o of STAFF) {
+      const less = o.runes.filter(r => takes[r]);
+      if (less.length) opt[o.id] = { less, tools: [o.staff] };
+    }
+    if (sp.maxhit) {
+      const cast = sp.xp, all = (sp.maxhit * perDamage) / 2;        // a hit is 0 to max, each as likely: half the max on average
+      opt.halfdmg = { xp: cast + all / 2, parts: [['the cast', cast], ['damage', all / 2]] };
+      opt.alldmg = { xp: cast + all, parts: [['the cast', cast], ['damage', all]] };
+    }
+    return Object.keys(opt).length ? { opt } : {};
+  };
+  const mine = [];
+  const row = (group, r) => {
+    const { key, id, name, sp, takes, out = {}, notes = [], aside, tools, icon } = r;
+    for (const k of [...Object.keys(takes), ...Object.keys(out), ...(tools || [])]) need(k);
+    const note = notes.filter(Boolean).join(' ');
+    mine.push({ id: id || `mg_${key}`, skill: 'magic', group, kind: 'xp', name, level: sp.level, xp: sp.xp, in: takes, out, sprite: spriteOf(key),
+      ...(Object.keys(takes).every(isRune) ? { asked: 1 } : {}), ...(aside ? { aside: 1 } : {}), ...(tools ? { tools } : {}), ...(icon ? { icon } : {}),
+      ...optOf(sp, takes, tools), ...(note ? { note } : {}) });
+  };
+  const byLevel = keys => keys.map((k, i) => [k, i]).sort(([a, i], [b, j]) => spells.get(a).level - spells.get(b).level || i - j).map(([k]) => k);
+  const all = [...calcOf.keys(), ...Object.keys(ADDED_SPELLS)];
+  for (const key of all) if (!spells.has(key)) throw new Error(`magic: the server has no ${key}`);
+  const holds = key => spells.get(key).freeze > 0;
+  const curses = key => !spells.get(key).maxhit && spells.get(key).lowers.length > 0;
+  const fights = key => spells.get(key).maxhit > 0 && !holds(key);
+  const damageNote = (sp, key) => `Max hit ${sp.maxhit}${boosted(key) ? ` (${sp.maxhit + Number(gaunt[4])} with ${lower(gaunt[1])})` : ''}: every point of damage is ${perDamage / 10} XP on top of the cast's. See Damage on the goal.`;
+
+  // Combat
+  for (const key of byLevel(all.filter(fights))) {
+    const { sp, name, notes } = about(key);
+    const god = GODS[key];
+    // (what a spell asks for besides its runes comes first)
+    const more = key === 'crumble_undead' ? [`Only works on ${undeadOnly}.`]
+      : god ? [`Learnt in the Mage Arena, and cast with the staff of ${god[0].toUpperCase()}${god.slice(1)} in hand. Hits up to ${charged} for a while after a Charge, with the god's cape worn too.`]
+      : key === 'iban_blast' ? ["Cast with Iban's staff in hand (from the Underground Pass): every cast takes one of the staff's charges."]
+      : [];
+    if (sp.worn && sp.worn !== (god ? `${god}_staff` : key === 'iban_blast' ? 'ibanstaff' : null)) throw new Error(`magic: ${key} needs a ${sp.worn} now: look at it`);
+    row('Combat', { key, name, sp, takes: sp.runes, notes: [...more, damageNote(sp, key), ...notes], aside: more.length > 0, ...(sp.worn ? { tools: [sp.worn] } : {}) });
+  }
+  // Curses
+  const STAT = { attack: 'Attack', strength: 'Strength', defence: 'Defence' };
+  for (const key of byLevel(all.filter(k => curses(k) || holds(k)))) {
+    const { sp, name, notes } = about(key);
+    let what;
+    if (holds(key)) what = `Holds your target for ${ticksText(sp.freeze)}. It can't be cast on one that's already held.${sp.maxhit ? ` ${damageNote(sp, key)}` : ''}`;
+    else {
+      if (sp.lowers.length !== 1 || !STAT[sp.lowers[0]]) throw new Error(`magic: ${key} lowers ${sp.lowers.join()}: look at it`);
+      what = `Lowers your target's ${STAT[sp.lowers[0]]}. It can't be cast on one whose ${STAT[sp.lowers[0]]} is already lowered.`;
+    }
+    row('Curses', { key, name, sp, takes: sp.runes, notes: [what, 'The XP is for the cast, whether it takes hold or not.', ...notes] });
+  }
+  // Utility
+  const util = [];
+  for (const key of all.filter(k => !fights(k) && !curses(k) && !holds(k) && !spells.get(k).teleport && !spells.get(k).converts.some(([from]) => from !== 'null'))) {
+    const { sp, name, notes } = about(key);
+    if (key === 'superheat_item') {
+      // a row for each bar: the server's own ingredients (one iron ore: the spell can't fail)
+      for (const b of smeltedBars) {
+        if (Object.keys(b.in).some(k => noHeat.includes(k))) continue;
+        // (aside, like the orbs below: something you set out to do with ore in hand, not what a plan fills a gap with)
+        util.push({ key, id: `mg_superheat_${b.bar}`, name: `${name}: ${item(b.bar)}`, sp, takes: { ...b.in, ...sp.runes }, out: { [b.bar]: 1 }, aside: true,
+          notes: [b.level > 1 ? `Needs Smithing ${b.level}.` : '', b.lost ? `Never fails: one iron ore is a bar. With ${steelCoal} coal on you the spell makes a steel bar of it instead.` : '', "It gives the bar's Smithing XP too, which isn't counted here.", ...notes] });
+      }
+    } else if (key === 'lowlvl_alchemy' || key === 'highlvl_alchemy') {
+      util.push({ key, name, sp, takes: sp.runes, notes: [`Any item will do: what you alch, and the coins it turns into (${share(key === 'lowlvl_alchemy' ? 'low' : 'high')}% of its shop value), aren't counted here.`, ...notes] });
+    } else if (key === 'bones_to_bananas') {
+      util.push({ key, name, sp, takes: sp.runes, aside: true, notes: ['One cast turns every bone you carry into a banana: neither is counted here.', ...notes] });
+    } else if (key === 'telekinetic_grab') {
+      util.push({ key, name, sp, takes: sp.runes, aside: true, notes: ["Cast on something lying where you can't reach it: what you grab isn't counted here.", ...notes] });
+    } else if (key === 'charge') {
+      util.push({ key, name, sp, takes: sp.runes, aside: true, notes: [`Learnt in the Mage Arena. For ${ticksText(chargeTicks)} after it the god spells hit up to ${charged}, with the god's cape and staff worn.`, ...notes] });
+    } else throw new Error(`magic: ${key} isn't in a group: look at it, then list it`);
+  }
+  util.map((r, i) => [r, i]).sort(([a, i], [b, j]) => a.sp.level - b.sp.level || i - j).forEach(([r]) => row('Utility', r));
+  // Enchantment: a row for each thing an enchant makes, then the orbs.
+  const ench = [];
+  const chargedOf = Object.fromEntries(Object.entries(unchargedOf).map(([full, empty]) => [empty, full]));     // (an amulet of glory comes out uncharged, and is traded charged)
+  for (const key of all.filter(k => spells.get(k).converts.some(([from]) => from !== 'null'))) {
+    const { sp, name, notes } = about(key);
+    for (const [from, to] of sp.converts) {
+      const final = chargedOf[to] || to;
+      if (sp.loc) {
+        if (from !== orbFrom) throw new Error(`magic: ${key} is cast on ${from}, not ${orbFrom}`);
+        ench.push({ key, name, sp, takes: { [from]: 1, ...sp.runes }, out: { [to]: 1 }, aside: true, notes: [`Cast at the Obelisk of ${name.match(/^Charge (\w+) Orb$/)[1]}, with ${/^[aeiou]/i.test(lower(from)) ? 'an' : 'a'} ${lower(from)} on you.`, ...notes] });
+      } else {
+        ench.push({ key, id: `mg_enchant_${final}`, name: `${name}: ${item(final)}`, sp, takes: { [from]: 1, ...sp.runes }, out: { [final]: 1 },
+          notes: [`Cast on ${/^[aeiou]/i.test(lower(from)) ? 'an' : 'a'} ${lower(from).replace(/ \(u\)$/, '')}.${chargedOf[to] ? ' It comes out uncharged: the Fountain of Heroes charges it for nothing.' : ''}`, ...notes] });
+      }
+    }
+  }
+  ench.map((r, i) => [r, i]).sort(([a, i], [b, j]) => a.sp.level - b.sp.level || i - j).forEach(([r]) => row('Enchantment', r));
+  // Teleports
+  for (const key of byLevel(all.filter(k => spells.get(k).teleport))) {
+    const { sp, name, notes } = about(key);
+    const quest = questOf(key);
+    row('Teleports', { key, name, sp, takes: sp.runes, aside: !!quest, notes: [quest ? `Once ${quest} is done.` : '', ...notes] });
+  }
+  for (const key of spells.keys()) if (!seen.has(key)) throw new Error(`magic: the server has a spell the calculator doesn't (${key}): look at it, then list it`);
+  if (KNOWN.size) throw new Error(`magic: no longer different on the server: ${[...KNOWN].join('; ')}`);
+  if (new Set(mine.map(m => m.id)).size !== mine.length) throw new Error('magic: two rows have the same id');
+  // Iron ore with coal beside it is a steel bar, so from a bank the iron bars wait while steel can be made.
+  const ironRow = mine.find(m => m.id === 'mg_superheat_iron_bar'), steelRow = mine.find(m => m.id === 'mg_superheat_steel_bar');
+  if (!ironRow || !steelRow || !Object.keys(ironRow.in).some(k => !isRune(k) && steelRow.in[k]) || steelRow.in.coal !== steelCoal) throw new Error('magic: iron and steel bars no longer share their ore');
+  ironRow.after = [steelRow.id];
+  methods.push(...mine);
+
+  // ── A goal's choices ──
+  const staffNames = o => orList(o.all.map(k => `${/^[aeiou]/i.test(lower(k)) ? 'an' : 'a'} ${lower(k)}`));
+  choices.magic = [
+    { id: 'staff', label: 'Staff', options: [{ id: 'nostaff', name: 'None' }, ...STAFF.map(o => ({ id: o.id, name: o.name }))],
+      tip: `A staff in your hand stands in for its rune, however many a spell takes: ${STAFF.filter(o => o.runes.length === 1).map(o => `${staffNames(o)} for ${lower(o.runes[0])}s`).join('; ')}. `
+        + `${STAFF.filter(o => o.runes.length > 1).map(o => `${staffNames(o)[0].toUpperCase()}${staffNames(o).slice(1)} for both ${andList(o.runes.map(r => lower(r).replace(/ rune$/, '')))} runes`).join('. ')}. `
+        + "Those runes are then left out of what a spell takes and costs. A spell cast with a staff of its own (Iban Blast, the god spells) has no hand free for one." },
+    { id: 'damage', label: 'Damage', options: [{ id: 'nodamage', name: 'Leave it out' }, { id: 'halfdmg', name: 'Half the casts hit' }, { id: 'alldmg', name: 'Every cast hits' }],
+      tip: `A combat spell gives its XP for the cast, hit or miss, and ${perDamage / 10} XP more for every point of damage. Leave it out: only the cast counts, which is the most casts a goal can take (and what LostHQ's calculator shows). `
+        + 'Every cast hits: each is counted for half its max hit as well, the average of a hit (a Fire Strike: 11.5 + 8). Half the casts hit: half of that. '
+        + "How often you really hit depends on your target and what you wear, and a hit can't do more damage than your target has left." },
+  ];
+
+  // ── The Bank tab: runes first, then what each kind of spell is cast on and makes ──
+  const RUNES = ['airrune', 'waterrune', 'earthrune', 'firerune', 'mindrune', 'bodyrune', 'cosmicrune', 'chaosrune', 'naturerune', 'lawrune', 'deathrune', 'bloodrune', 'soulrune'].map(need);
+  const takenBy = test => [...new Set(mine.filter(test).flatMap(m => Object.keys(m.in)).filter(k => !isRune(k)))];
+  const madeBy = test => [...new Set(mine.filter(test).flatMap(m => Object.keys(m.out)))];
+  const enchants = m => m.id.startsWith('mg_enchant_'), heats = m => m.id.startsWith('mg_superheat_'), orbs = m => m.group === 'Enchantment' && !enchants(m);
+  bankGroups.magic = [
+    { name: 'Runes', items: RUNES },
+    { name: 'Jewellery to enchant', items: takenBy(enchants) },
+    { name: 'Ore to superheat', items: takenBy(heats) },
+    { name: 'Orbs to charge', items: takenBy(orbs) },
+    { name: 'Made: enchanted jewellery', items: madeBy(enchants).flatMap(k => (unchargedOf[k] ? [unchargedOf[k], k] : [k])) },
+    { name: 'Made: bars', items: madeBy(heats) },
+    { name: 'Made: orbs', items: madeBy(orbs) },
+  ];
+  const listed = new Set(bankGroups.magic.flatMap(g => g.items));
+  for (const k of mine.flatMap(m => [...Object.keys(m.in), ...Object.keys(m.out)])) if (!listed.has(k)) throw new Error(`magic: ${k} isn't in a bank group`);
+  for (const k of RUNES) if (!mine.some(m => m.in[k])) throw new Error(`magic: no spell takes ${k}`);
+
+  // Every script that gives Magic XP is a spell's (it calls give_spell_xp), the
+  // damage a hit does, or looked at and left out.
+  const CASTS = ['skill_magic/scripts/magic.rs2', 'skill_magic/scripts/spells/alchemy.rs2', 'skill_magic/scripts/spells/charge.rs2', 'skill_magic/scripts/spells/charge_orb.rs2',
+    'skill_magic/scripts/spells/convert_bones.rs2', 'skill_magic/scripts/spells/enchant.rs2', 'skill_magic/scripts/spells/superheat.rs2', 'skill_magic/scripts/spells/telegrab.rs2',
+    'skill_magic/scripts/spells/teleport.rs2', 'skill_combat/scripts/player/player_magic.rs2'];
+  const USED = ['skill_magic/scripts/magic.rs2', 'skill_combat/scripts/combat.rs2'];
+  const LEFT_OUT = {
+    'skill_combat/scripts/pvp/pvp_combat.rs2': 'spells cast on other players', 'skill_combat/scripts/pvp/pvp_magic.rs2': 'spells cast on other players',
+    'quests/quest_legends/scripts/quest_legends.rs2': "Legends' Quest's own casts", 'quests/quest_tbwt/scripts/tbwt_jogre_bones.rs2': 'jogre bones burnt with Superheat Item, in Tai Bwo Wannai Trio',
+    'quests/quest_grandtree/scripts/quest_grandtree.rs2': 'a quest reward', 'quests/quest_hetty/scripts/quest_hetty.rs2': 'a quest reward', 'quests/quest_itwatchtower/scripts/quest_itwatchtower.rs2': 'a quest reward',
+    'quests/quest_horror/scripts/quest_horror.rs2': 'a quest reward', 'quests/quest_imp/scripts/quest_imp.rs2': 'a quest reward',
+    '_test/scripts/cheats/cheat_maxme.rs2': 'a test cheat', '_test/scripts/cheats/cheat_quest.rs2': 'a test cheat', '_test/scripts/debug/debug_quests.rs2': 'a test cheat',
+  };
+  const gives = text => /stat_advance\(magic\b|~give_spell_xp\(/.test(text);
+  for (const file of await everyScript()) {
+    if (CASTS.includes(file) || USED.includes(file) || LEFT_OUT[file]) continue;
+    if (gives(await read(file))) throw new Error(`magic: ${file} gives Magic XP and isn't accounted for: look at it, then list it`);
+  }
+  for (const file of [...CASTS, ...USED, ...Object.keys(LEFT_OUT)]) if (!gives(await read(file))) throw new Error(`magic: ${file} no longer gives Magic XP: take it off the list`);
+
+  const count = g => mine.filter(m => m.group === g).length;
+  magicNotes.push(`${mine.length} rows: ${['Combat', 'Curses', 'Utility', 'Enchantment', 'Teleports'].map(g => `${count(g)} ${g.toLowerCase()}`).join(', ')}; ${mine.filter(m => m.asked).length} take only runes; ${spellSprites.length} spell icons`);
+  magicNotes.push(`staves: ${STAFF.map(o => `${o.name} = ${o.all.map(k => item(k)).join(' / ')}`).join('; ')}`);
+  magicNotes.push(`a point of damage is ${perDamage / 10} XP; ${lower(gaunt[1])}: +${gaunt[4]} max hit on ${[...spells.keys()].filter(boosted).length} bolt spells; god spells hit up to ${charged} for ${ticksText(chargeTicks)} after Charge; alchemy pays ${share('low')}% and ${share('high')}%`);
+  magicNotes.push(`left out: ${[...new Set(Object.values(LEFT_OUT))].filter(v => !/quest reward|cheat/.test(v)).join(', ')}, and quest rewards`);
+}
+
+await magic();
+
 // ── Catalog of every item the data mentions ───────────────────────────────
 const used = new Set();
 // banked: what a bank screenshot is read for. Not what only Thieving and Agility
@@ -2476,6 +2922,8 @@ for (const m of methods) {
     used.add(k);
     if (!NO_BANK.has(m.skill)) banked.add(k);
   }
+  // (what a choice has you bring instead, a staff: named, never counted, and not what a bank is read for)
+  for (const v of Object.values(m.opt || {})) for (const k of v.tools || []) used.add(k);
 }
 for (const groups of Object.values(bankGroups)) for (const g of groups) for (const k of g.items) { used.add(k); banked.add(k); }
 // Potions are made as 3 doses but often traded as 4; keep the 4-dose items so a
@@ -2491,7 +2939,8 @@ const names = [...used].filter(k => !virtualItems[k] && !chargeItems[k]).map(nee
 const PER_ROW = 16, SIZE = 32;
 const sheetMeta = await sharp(join(LOSTHQ, 'img/item_spritesheet.png')).metadata();
 const sheet = await sharp(join(LOSTHQ, 'img/item_spritesheet.png')).ensureAlpha().raw().toBuffer();
-const rows = Math.ceil(names.length / PER_ROW);
+// (after the items: the icons of spells, which aren't items. A method's sprite is its cell here.)
+const rows = Math.ceil((names.length + spellSprites.length) / PER_ROW);
 const atlas = Buffer.alloc(PER_ROW * SIZE * rows * SIZE * 4);
 names.forEach((name, n) => {
   const id = ITEM.get(name).id;
@@ -2502,6 +2951,34 @@ names.forEach((name, n) => {
     sheet.copy(atlas, ((dy + y) * PER_ROW * SIZE + dx) * 4, from, from + SIZE * 4);
   }
 });
+// Spell icons: the client's own sheets (sprites/magicon.png and magicon2.png,
+// in cells of the size their .opt gives, magenta where there's nothing), each
+// set in the middle of an item's cell.
+const SPRITE = 20;
+const spellSheets = new Map();
+for (const name of new Set(spellSprites.map(x => x.sheet))) {
+  const cell = (await readFile(join(CONTENT, `sprites/meta/${name}.opt`), 'ascii')).trim();
+  if (cell !== `${SPRITE}x${SPRITE}`) throw new Error(`sprites/${name}.png is in cells of ${cell} now, not ${SPRITE}x${SPRITE}`);
+  spellSheets.set(name, await sharp(join(CONTENT, `sprites/${name}.png`)).ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
+}
+spellSprites.forEach(({ sheet: name, index }, i) => {
+  const { data, info } = spellSheets.get(name);
+  const perRow = info.width / SPRITE;
+  const sx = (index % perRow) * SPRITE, sy = Math.floor(index / perRow) * SPRITE;
+  if (sy + SPRITE > info.height) throw new Error(`sprites/${name}.png has no icon ${index}`);
+  const n = names.length + i, pad = (SIZE - SPRITE) / 2;
+  const dx = (n % PER_ROW) * SIZE + pad, dy = Math.floor(n / PER_ROW) * SIZE + pad;
+  let drawn = 0;
+  for (let y = 0; y < SPRITE; y++) for (let x = 0; x < SPRITE; x++) {
+    const from = ((sy + y) * info.width + sx + x) * 4;
+    if (data[from] === 0xff && data[from + 1] === 0 && data[from + 2] === 0xff) continue;      // (nothing there)
+    data.copy(atlas, ((dy + y) * PER_ROW * SIZE + dx + x) * 4, from, from + 4);
+    atlas[((dy + y) * PER_ROW * SIZE + dx + x) * 4 + 3] = 0xff;
+    drawn++;
+  }
+  if (drawn < 20) throw new Error(`sprites/${name}.png: icon ${index} is empty`);
+});
+for (const m of methods) if (m.sprite != null) m.sprite += names.length;
 // A sheet's address carries a stamp of its contents. Where an icon sits is in
 // the data, so the two have to come from the same build: with the stamp in the
 // address the data names, a browser can't pair new positions with a sheet it
@@ -2542,8 +3019,9 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // Levels and XP come from Lost City's server content (LostCityRS/Content, rev 274, MIT);
 // XP is in tenths, like the server keeps it. Item names, ids and shop values are from
 // LostHQ's item database (GPL-3.0). From Crafting on (Mining, Smithing, Fishing, Cooking,
-// Thieving, Agility) the rows are those of LostHQ's calculators (GPL-3.0), checked against
-// the server. RuneScape is (c) Jagex Ltd.
+// Thieving, Agility, Prayer, Magic) the rows are those of LostHQ's calculators (GPL-3.0),
+// checked against the server. Spell icons are the client's own (sprites/magicon.png, from
+// the same Content checkout). RuneScape is (c) Jagex Ltd.
 //
 // A method turns "in" items into "out" items (no "in" at all: gathering, like
 // Woodcutting). unit/units, when set, is what one action uses (one essence, one
@@ -2566,11 +3044,17 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // never holding a plan back, always a cost. at: what the step takes instead at
 // another place (the Canifis tanner's fee); PLACES names the choice.
 // opt: what a choice on the goal changes about a method (CHOICES names them):
-// { choice: { in (what it takes instead), add (what it takes besides), xp, note,
+// { choice: { in (what it takes instead), add (what it takes besides), less
+// (what it no longer takes: the runes a staff stands in for), xp, note, tools,
 // magic/spell/magicLevel, through } }. through: a method that feeds is planned
 // through from scratch as well, like a prep step, and its XP counts (bars you
 // smelt yourself). icon: the item a method is shown as, when it isn't the first
 // thing it makes (a gem rock; the bar a Mining row mines the ore for).
+// sprite: a method shown as a picture that isn't an item's (a spell's icon): its
+// cell on the icon sheet, counted like an item's icon.
+// asked: a method a bank plan only makes when it's the one you train with, or
+// in your own order (a spell that takes nothing but runes: the same runes cast
+// dozens of them, so a bank can't say which).
 // lead and as: a row counted in what its output is for, with the words to say so
 // (lead "Ore for", as ["steel bar", "steel bars"]: "Ore for 400 steel bars: …").
 // as on its own: a row counted in its unit, said in full ("450 laps of the Gnome
@@ -2639,6 +3123,8 @@ for (const note of fishingNotes) console.log(`  fishing: ${note}`);
 for (const note of cookingNotes) console.log(`  cooking: ${note}`);
 for (const note of thievingNotes) console.log(`  thieving: ${note}`);
 for (const note of agilityNotes) console.log(`  agility: ${note}`);
+for (const note of prayerNotes) console.log(`  prayer: ${note}`);
+for (const note of magicNotes) console.log(`  magic: ${note}`);
 
 // ── Bank screenshots ───────────────────────────────────────────────────────
 // What bankread.js needs to read a bank from a screenshot, loaded only when one

@@ -82,6 +82,10 @@ const SKILL_TEXT = {
   thieving: { what: 'Target', each: 'theft', made: 'Loot', worth: 'Your loot is worth', net: 'what one theft brings in on average: its coins, and its loot at the price it sells for',
     noBank: 'Thieving takes nothing but a lockpick for some locks, so this plan doesn\'t use your bank. Counts are thefts that work: one that fails gives no XP.' },
   agility: { what: 'Course or obstacle', each: 'lap', noBank: 'Agility takes nothing and makes nothing to sell, so this plan doesn\'t use your bank or any prices.' },
+  prayer: { what: 'Bones', each: 'bone', bankHint: 'bones' },
+  // (idle: what an empty bank plan says besides, where some rows wait to be asked: a spell that only takes runes)
+  magic: { what: 'Spell', each: 'cast', bankHint: 'runes, and what you enchant, superheat or charge',
+    idle: 'Runes alone don\'t say which spell they\'re for: click a spell in the table below to train with it, and your bank\'s runes go to it first.' },
 };
 const textFor = key => SKILL_TEXT[key] || { what: 'Make', each: 'action', bankHint: 'the items it uses' };
 
@@ -99,6 +103,10 @@ for (const m of METHODS) {
     for (const k of Object.keys({ ...(v.in || m.in), ...(v.add || {}) })) if (/rune$/.test(k)) (SPELL_RUNES[m.skill] ||= new Set()).add(k);
   }
 }
+// In Magic every rune is one of those: runes never hold back what you have to
+// enchant, superheat or charge. (A spell that only takes runes is held to them
+// all the same: planner.js, heldTo.)
+for (const m of METHODS) if (m.skill === 'magic') for (const k of Object.keys(m.in)) if (/rune$/.test(k)) (SPELL_RUNES.magic ||= new Set()).add(k);
 // What an item is finished with, rather than made of: the wool an amulet is
 // strung with. And what's worn while you work: a ring of forging.
 const FINISHING = { crafting: ['ball_of_wool'], smithing: ['ring_of_forging'] };
@@ -110,7 +118,7 @@ const FINISHING = { crafting: ['ball_of_wool'], smithing: ['ring_of_forging'] };
 // of wool don't call for 60 more dragonstones.
 export const minorOf = key => new Set([...(DEFAULT_ASSUME[key] || []), ...(SPELL_RUNES[key] || []), ...(FINISHING[key] || [])]);
 // "Vials of water never hold it back", for the tooltip
-const MINOR_TEXT = { herblore: 'Vials of water never hold', crafting: 'Thread, runes and balls of wool never hold', smithing: 'Rings of forging and runes never hold' };
+const MINOR_TEXT = { herblore: 'Vials of water never hold', crafting: 'Thread, runes and balls of wool never hold', smithing: 'Rings of forging and runes never hold', magic: 'Runes never hold' };
 // Read from a screenshot but not added to your bank: tools (a plan names them,
 // it never counts them), and thread.
 const TOOLS = new Set(METHODS.flatMap(m => m.tools || []));
@@ -129,7 +137,9 @@ const LIKELIER_TWIN = { ashes: 'soda_ash', raw_ugthanki_meat: 'raw_beef', cooked
 // For Thieving a pocket to pick: a chest is the most XP, and empty for minutes
 // after. For Agility a course: an Agility Arena ticket's XP says nothing about
 // how long it takes.
-const DEFAULT_FILL_GROUP = { fletching: 'Bows', mining: 'Rocks', cooking: 'Fish', thieving: 'NPCs', agility: 'Courses' };
+// For Magic a combat spell: a curse is more XP a cast, and can't be cast twice
+// on the same target.
+const DEFAULT_FILL_GROUP = { fletching: 'Bows', mining: 'Rocks', cooking: 'Fish', thieving: 'NPCs', agility: 'Courses', magic: 'Combat' };
 // Every bank item in the order of the skill tabs and their groups.
 const SKILL_ORDER = new Map([...new Set(Object.values(BANK_GROUPS).flatMap(gs => gs.flatMap(g => g.items)))].map((s, i) => [s, i]));
 const TARGET_TTL = 30 * 60e3;          // re-check who holds a rank after this long
@@ -451,8 +461,18 @@ export function createPlanner(ctx) {
   // The item that stands for a method: what it makes (a gem rock says which of
   // its gems), or for burning logs, the logs.
   const methodItem = m => m.icon || Object.keys(m.out)[0] || Object.keys(m.in)[0];
-  // Its icon; where there's no item to show (an Agility course), the skill's own in its place.
-  const methodIcon = (m, small = false) => (ITEMS[methodItem(m)] ? itemIcon(methodItem(m), small)
+  // A picture on the icon sheet that isn't an item's: a spell's own icon, 20 by 20
+  // in the middle of its cell. Full size it sits in an item's box; small, it's
+  // shown as it is, since at half size nothing of it would be left.
+  const SPRITE = 20, SPRITE_PAD = (ICON_SIZE - SPRITE) / 2;
+  function spriteIcon(cell, name, small = false) {
+    const x = (cell % ICONS_PER_ROW) * ICON_SIZE + (small ? SPRITE_PAD : 0), y = Math.floor(cell / ICONS_PER_ROW) * ICON_SIZE + (small ? SPRITE_PAD : 0);
+    return `<span class="item sprite${small ? ' sm' : ''}" style="background-position:-${x}px -${y}px" role="img" aria-label="${esc(name)}" title="${esc(name)}"></span>`;
+  }
+  // Its icon: its own picture (a spell), else what it makes or takes; where
+  // there's no item to show (an Agility course), the skill's own in its place.
+  const methodIcon = (m, small = false) => (m.sprite != null ? spriteIcon(m.sprite, m.name, small)
+    : ITEMS[methodItem(m)] ? itemIcon(methodItem(m), small)
     : `<span class="item blank${small ? ' sm' : ''}">${iconImg(SKILL_BY_KEY.get(m.skill))}</span>`);
   const plural = (name, n) => (n === 1 || /s$/i.test(name) ? name : name + 's');
   function priceTip(slug) {
@@ -927,6 +947,18 @@ export function createPlanner(ctx) {
     const fb = plan.fromBank;
     const rounded = !!plan.bankNow;             // Round up my supplies is on
     if (!fb.steps.length) {
+      // (spells your runes could cast, waiting to be asked for: say how. One you've
+      // picked that's above your level waits too; what gets you there takes the runes.)
+      const waiting = textFor(goal.skill).idle && plan.table.some(r => r.have > 0 && !r.locked && ix.byId.get(r.id).asked);
+      const picked = goal.fillId && ix.byId.get(goal.fillId);
+      if (waiting && picked?.asked && plan.fill?.locked) {
+        return `<div class="plan-sec"><h4>From your bank${rounded ? ', supplies rounded up' : ''}</h4><div class="c-faint small-note">${esc(picked.name)} takes level ${picked.level}.
+          Until then your bank's runes go to what gets you there: they're taken off what's listed to collect below.</div></div>`;
+      }
+      if (waiting && !picked) {
+        return `<div class="plan-sec"><h4>From your bank${rounded ? ', supplies rounded up' : ''}</h4><div class="c-faint small-note">Nothing in your bank is used by itself yet.
+          ${esc(textFor(goal.skill).idle)}</div></div>`;
+      }
       return `<div class="plan-sec"><h4>From your bank${rounded ? ', supplies rounded up' : ''}</h4><div class="c-faint small-note">Nothing in your bank makes ${esc(SKILL_BY_KEY.get(goal.skill).name)} XP at your level yet.
         Add ${textFor(goal.skill).bankHint} in the <button type="button" class="linkish" data-act="to-bank" data-skill="${goal.skill}">Bank</button> tab.</div>${unidNote(goal)}</div>`;
     }
@@ -951,7 +983,7 @@ export function createPlanner(ctx) {
         ? `<span class="goal-flag" title="Your goal is reached during this step">Goal after ${fmt(goalAt.runs)}</span>` : '';
       const collect = s.collect && Object.keys(s.collect).length
         ? `<div class="c-faint small-note round-note">collect ${itemList(s.collect, { small: true, named: true, priced: false })}</div>` : '';
-      return `<div class="step" data-step="${s.id}">${movable ? '<span class="grip" aria-hidden="true"></span>' : ''}${itemIcon(methodItem(m))}<div class="step-main">
+      return `<div class="step" data-step="${s.id}">${movable ? '<span class="grip" aria-hidden="true"></span>' : ''}${methodIcon(m)}<div class="step-main">
           <div>${actionText(m, s.runs, s.made)} <span class="c-level">+${xpText(s.xp10)} XP</span>${worthText(s.made)} ${goalHere}</div>
           ${subs.length ? `<div class="c-faint small-note">incl. ${subs.join(', ')}</div>` : ''}
           ${collect}
@@ -1003,7 +1035,7 @@ export function createPlanner(ctx) {
     const more = others.length ? `<button type="button" class="linkish" data-act="order-more" aria-expanded="${open}" title="Things your bank could make with the supplies the lines above use">${others.length} more your bank could make instead ${open ? '▾' : '▸'}</button>` : '';
     const chips = !open ? '' : `<div class="order-more"><span class="c-faint small-note">Click one to put it first:</span>${others.map(r => {
       const m = ix.byId.get(r.id);
-      return `<button type="button" class="chip" data-first="${m.id}" title="${esc(`Your bank could make ${count(m, r.have)} on its own. Click to use your bank for it first.`)}">${itemIcon(methodItem(m), true)} ${esc(m.name)} <span class="c-faint">${fmt(r.have)}</span></button>`;
+      return `<button type="button" class="chip" data-first="${m.id}" title="${esc(`Your bank could make ${count(m, r.have)} on its own. Click to use your bank for it first.`)}">${methodIcon(m, true)} ${esc(m.name)} <span class="c-faint">${fmt(r.have)}</span></button>`;
     }).join('')}</div>`;
     return `<div class="c-faint small-note order-note">${[note, more].filter(Boolean).join(' <span class="c-faint">·</span> ')}</div>${chips}`;
   }
@@ -1412,8 +1444,7 @@ export function createPlanner(ctx) {
     if (!el) return;
     if (!S.account) { el.innerHTML = ''; return; }
     const sh = S.shots;
-    const pick = `<button type="button" class="btn small" data-act="shots-pick">Choose screenshots</button>
-      <input type="file" id="shots-file" accept="image/png,image/*" multiple hidden>`;
+    const pick = '<button type="button" class="btn small" data-act="shots-pick">Choose screenshots</button>';
     if (!sh || sh.error) {
       el.innerHTML = `<div class="card shots-drop" data-drop="1">
         <div class="shots-title">Read your bank from screenshots</div>
@@ -1718,19 +1749,40 @@ export function createPlanner(ctx) {
   }
   let rerenderTimer = null;
   // A button pressed while the view is rebuilt would lose its click: wait for
-  // the press to finish. Same for an open drop-down, which would snap shut.
+  // the press to finish. Same for an open drop-down, which would snap shut,
+  // and for an amount or a price half typed: a field that's rebuilt hands in
+  // what it holds so far (the browser's doing, and that redraws in the middle
+  // of this one), or in other browsers forgets that anything was typed.
   let pressing = false;
-  document.addEventListener('pointerdown', () => { pressing = true; }, true);
-  document.addEventListener('pointerup', () => setTimeout(() => { pressing = false; }, 0), true);
-  document.addEventListener('pointercancel', () => { pressing = false; }, true);
+  let typing = null;                       // that field, until it's entered or left
+  let pressNew = false;                    // the press began this very moment: nothing else has run since
+  let lifted = false;                      // the button is up again; the click it makes is still to come
+  let pressHeld = false;                   // a redraw is waiting for the press to end
+  const released = () => { const due = pressHeld; pressing = lifted = pressHeld = false; if (due) rerender(); };
+  document.addEventListener('pointerdown', () => { pressing = pressNew = true; lifted = false; setTimeout(() => { pressNew = false; }, 0); }, true);
+  document.addEventListener('pointerup', () => { lifted = true; setTimeout(() => { if (lifted) released(); }, 0); }, true);
+  document.addEventListener('pointercancel', released, true);
+  document.addEventListener('keydown', () => { if (lifted) released(); }, true);      // (a key: that press is over)
+  // (a press that opens a menu, or ends in another window, makes no click, and may never say it's over)
+  document.addEventListener('contextmenu', released, true);
+  window.addEventListener('blur', released);
+  const midTyping = () => !!typing && typing.isConnected && typing === document.activeElement;
   function rerender() {
     if (!S.tab || $('view-' + S.tab)?.hidden) return;
     clearTimeout(rerenderTimer);
+    pressHeld = pressing;
     if (pressing) { rerenderTimer = setTimeout(rerender, 250); return; }
-    if (document.activeElement?.tagName === 'SELECT') { rerenderTimer = setTimeout(rerender, 1000); return; }
-    // (and look again when it's time: a press may have started in between)
-    rerenderTimer = setTimeout(() => (pressing ? rerender() : render(S.tab)), 30);
+    if (document.activeElement?.tagName === 'SELECT' || midTyping()) { rerenderTimer = setTimeout(rerender, 1000); return; }
+    // (and look again when it's time: a press or a number may have started in between)
+    rerenderTimer = setTimeout(() => (pressing || midTyping() ? rerender() : render(S.tab)), 30);
   }
+
+  // Leaving a field for something else on the page enters what was typed in it,
+  // and then the press that did it is still under way: redrawn on the spot, the
+  // view would be rebuilt under it and the click would land on nothing (the next
+  // amount box, a row, a tick box: clicked for nothing). So then it's redrawn
+  // once the click has landed; entered with Enter or Tab, straight away.
+  const entered = redraw => (pressing && pressNew ? rerender() : redraw());
 
   function show(tab) {
     render(tab);
@@ -1753,7 +1805,17 @@ export function createPlanner(ctx) {
       root.addEventListener('click', onClick);
       root.addEventListener('change', onChange);
       root.addEventListener('input', onInput);
+      // (an amount or a price being typed, for rerender: from its first key until it's entered or left
+      // for something else on the page. Another window in front isn't leaving it.)
+      root.addEventListener('input', e => { const d = e.target.dataset; if (d?.mix || d?.price || d?.bank) typing = e.target; });
+      root.addEventListener('change', e => { if (e.target === typing) typing = null; }, true);
+      root.addEventListener('focusout', e => { if (e.target === typing && document.hasFocus()) typing = null; });
     }
+    // The plain file button for screenshots: one that stays, outside what's
+    // redrawn. Redrawn with the rest, a redraw while the file dialog was open
+    // left the files you then picked with a button that was no longer there.
+    $('view-bank').appendChild(Object.assign(document.createElement('input'),
+      { type: 'file', id: 'shots-file', accept: 'image/png,image/*', multiple: true, hidden: true }));
     bankDrag = sortable({
       root: $('view-bank'),
       item: '#bank-all-grid .bank-cell',
@@ -1953,7 +2015,7 @@ export function createPlanner(ctx) {
 
   function onChange(e) {
     const t = e.target;
-    if (t.id === 'shots-file') { if (t.files?.length) readShots(t.files); return; }
+    if (t.id === 'shots-file') { if (t.files?.length) readShots(t.files); t.value = ''; return; }      // (emptied: the same file can be picked again)
     // The screenshot review: what's ticked, and which look-alike a line is.
     if (S.shots?.rows) {
       if (t.id === 'shots-clear') { S.shots.clear = t.checked; return; }
@@ -1994,7 +2056,7 @@ export function createPlanner(ctx) {
         if (n > 0) g.mix[t.dataset.mix] = n; else delete g.mix[t.dataset.mix];
         if (!Object.keys(g.mix).length) delete g.mix;
       });
-      renderGoals();
+      entered(renderGoals);
       return;
     }
     if (card && t.dataset.use) {
@@ -2024,7 +2086,7 @@ export function createPlanner(ctx) {
       if (v === undefined || (t.value.trim() !== '' && v == null)) { t.classList.add('bad'); return; }
       t.classList.remove('bad');
       prices.setOverride(t.dataset.price, v);
-      renderPrices();
+      entered(renderPrices);
       return;
     }
     if (t.dataset.psrc) {

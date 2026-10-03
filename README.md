@@ -37,7 +37,7 @@ The planner works out what it takes to reach a goal, from your XP on the hiscore
 and the prices you set. Any skill can have a goal. A skill with its full planner (marked with a dot
 when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woodcutting**,
 **Firemaking**, **Fletching**, **Crafting**, **Mining**, **Smithing**, **Fishing**, **Cooking**,
-**Thieving** and **Agility**, with the other skills to follow.
+**Thieving**, **Agility**, **Prayer** and **Magic**, with the other skills to follow.
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
@@ -57,7 +57,9 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
   [Fishing](https://2004.losthq.rs/?p=calculators&calc=fishing),
   [Cooking](https://2004.losthq.rs/?p=calculators&calc=cooking),
   [Thieving](https://2004.losthq.rs/?p=calculators&calc=thieving),
-  [Agility](https://2004.losthq.rs/?p=calculators&calc=agility)), each one checked against the
+  [Agility](https://2004.losthq.rs/?p=calculators&calc=agility),
+  [Prayer](https://2004.losthq.rs/?p=calculators&calc=prayer),
+  [Magic](https://2004.losthq.rs/?p=calculators&calc=magic)), each one checked against the
   server; where the two differ, the server's number is used.
 - How many you need = the XP still to go ÷ the XP each one gives, rounded up.
 - **Gross** is what something is worth, with nothing taken off. **Net** takes off what you pay for its
@@ -268,6 +270,59 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
         gives no ticket, so it takes more obstacles than this.
     - Left out: obstacles that belong to a quest's own area (Trollheim, the lighthouse, Shilo Village,
       the Underground Pass), and gnomeball.
+  - Prayer has the bones of LostHQ's Prayer calculator, buried from your bank like Firemaking's
+    logs: the best bones first, then the rest of the goal in the bones your bank mostly had (dragon
+    bones, with none in it).
+    - Added, since the server drops them: monkey bones (5 XP) and Shaikahan bones (25 XP).
+    - Left out: the jogre bones Tai Bwo Wannai Trio has you burn, paste and marinate (16 to 18 XP,
+      and not to be traded), shades' remains burnt on a pyre in Mort'ton, and ghasts.
+  - Magic has the spells of LostHQ's Magic calculator, grouped by how you train with them:
+    **Combat**, **Curses**, **Utility**, **Enchantment** and **Teleports**. Every row has its own
+    XP, runes, bank use, prices and Net. Nothing is shared with the Crafting and Smithing rows that
+    cast the same spells on the way: those are as they were.
+    - **Runes and your bank.** What a spell is cast on says which spell it's for, so rings to
+      enchant, ore to superheat and orbs to charge are planned from your bank by themselves. Runes
+      don't: the same ones cast dozens of spells. So a spell that only takes runes is cast from
+      your bank once it's the one you train with (click it in the table), or once you put it in
+      your order. Either way your bank's runes come off what the rest of the goal has you collect.
+    - With nothing picked, a plan finishes with the best combat spell at your level.
+    - **Staff**, on the goal: None, Air, Water, Earth, Fire or Lava. A staff stands in for its
+      rune, so those runes are left out of what a spell takes and costs, and the plan says to
+      bring it. Any staff of the element does (a staff of air, an air battlestaff, a mystic air
+      staff); a lava staff is earth and fire in one.
+    - **Combat**: a spell gives its XP for the cast, hit or miss, and 2 XP more for every point
+      of damage. **Damage**, on the goal, says what to count:
+      - **Leave it out** (how it starts): only the cast, as on LostHQ's calculator. It's the
+        most casts a goal can take.
+      - **Every cast hits**: each cast also counts half its max hit, the average of a hit (a Fire
+        Strike: 11.5 + 8). **Half the casts hit**: half of that.
+      - How often you really hit depends on your target and what you wear, and a hit can't do
+        more damage than your target has left.
+    - **Curses** give their XP whether they take hold or not, but can't be cast on a target
+      that's already weakened or held.
+    - **Utility**:
+      - **Low and High Level Alchemy** count the runes only. Any item will do, so what you alch
+        and the coins it turns into aren't counted here.
+      - **Superheat Item** is a row for each bar: the ore goes in and the bar comes out, so its
+        Net is the bar less the ore and the runes. It never fails on iron. With coal in your bank,
+        iron ore goes to steel bars first. A row says the Smithing level its bar takes; the
+        Smithing XP isn't counted here.
+      - Bones to Bananas, Telekinetic Grab and Charge count their runes.
+    - **Enchantment**: Lvl-1 to Lvl-5 Enchant are a row for each piece of jewellery (a sapphire
+      ring in, a ring of recoil out), and the four Charge Orb spells take an unpowered orb. An
+      amulet of glory comes out uncharged; its row makes the charged one it's traded as, since
+      the Fountain of Heroes charges it for nothing.
+    - **Round up my supplies**: runes never hold back what you enchant, superheat or charge. With
+      300 sapphire rings and 100 cosmic runes all 300 are enchanted, and the 200 cosmic runes
+      you're short of go on the list to collect. Spare runes never call for more rings. The spell
+      you train with is rounded up to the rune you have most of.
+    - Where the calculator and the server differ, the server is followed: Crumble Undead gives
+      49 XP (the calculator says 24.5), Enfeeble 83 (89), Entangle 89 (90), Stun 90 (80), Falador
+      Teleport 48 (47) and Charge Water Orb 66 (56). Trollheim Teleport (level 61, 68 XP) is
+      added: the server has it, the calculator doesn't.
+    - Not what a plan picks by itself (click one to train with it): Crumble Undead (the undead
+      only), Iban Blast and the god spells (a staff of their own), the teleports that wait for a
+      quest, the superheat and orb rows, Bones to Bananas, Telekinetic Grab and Charge.
 - Click an item a plan says to collect, buy or bring to open its page on the market.
 
 #### Check your prices first
@@ -431,14 +486,17 @@ supplies** looks past that (see above): it uses up your herbs and lists the vial
     - Some items look exactly like another one in this version, and a picture can't tell them apart:
       soda ash and ashes, a sapphire ring and a ring of recoil, a cadantine potion (unf) and a
       lantadyme one, lantadyme and an unid herb, the raw meats (beef, rat, bear, rabbit, ugthanki),
-      the three pies. Each stack of those has a **drop-down** in the review: pick the one it is. Your
-      pick is kept for next time, and when your bank holds both, each has its own line.
+      the three pies, and bones: plain, bat and monkey bones are one picture, big, jogre and baby
+      dragon bones another, dragon and Shaikahan bones a third. Each stack of those has a
+      **drop-down** in the review: pick the one it is. Your pick is kept for next time, and when
+      your bank holds both, each has its own line.
       - An amulet of glory, an uncharged one and a strung dragonstone amulet look the same too. Three
         such stacks start as one of each, in that order.
       - The first time, it's the one you typed into your bank yourself, if you did. Otherwise soda ash
-        rather than ashes, an unid herb rather than lantadyme, and the enchanted piece rather than the
-        plain one (a ring of dueling(8), not an emerald ring), since that's what a bank mostly holds.
-        Whatever charges are left, it counts as a full one.
+        rather than ashes, an unid herb rather than lantadyme, plain, big and dragon bones rather
+        than the ones that look like them, and the enchanted piece rather than the plain one (a ring
+        of dueling(8), not an emerald ring), since that's what a bank mostly holds. Whatever charges
+        are left, it counts as a full one.
       - A stack that an earlier read filed under the other name moves over (the review says "was
         under Ashes").
     - Things the planner doesn't use can look like one it does, and the review names them next to it:
@@ -446,7 +504,7 @@ supplies** looks past that (see above): it uses up your herbs and lists the vial
       Untick those. (A jug of wine looks like wine of Zamorak: Cooking uses it, so that's a drop-down.)
     - Tools (a chisel, a hammer, moulds, a needle) and thread are left out: a plan names the tools a
       row needs, it never counts them. Thread can still be typed in on the Crafting tab if you count
-      yours.
+      yours. A staff a spell is cast with is a tool too.
     - What only Thieving and Agility name isn't read either (silk, a lockpick, an Agility Arena
       ticket): no plan takes it from a bank.
     - Items cut off at the top or bottom edge of the bank are skipped, so let screenshots overlap.
@@ -486,7 +544,10 @@ restore.
 - The numbers are the game's own (Lost City's server content), so a few may surprise you: achey tree
   logs give no Firemaking XP in this version, any axe can be used at any Woodcutting level, a
   steel bar makes 2 nails, a cooked chompy is 14 Cooking XP, a gnome's pocket always has a king worm
-  in it, and Falador's crumbling wall gives 12.5 Agility XP.
+  in it, Falador's crumbling wall gives 12.5 Agility XP, and Crumble Undead gives 49 Magic XP a
+  cast.
+- A number you're typing (an amount to make, a price, a bank amount) is left alone until you enter
+  it with Enter, Tab or a click elsewhere: prices that arrive in the meantime show once it's in.
 - After an update, press Ctrl+R once if something looks off: a browser can hold on to the last
   version's files for a few minutes. (Item icons name their own sheet since v2.7, so they can't end
   up mixed with an older one.)
@@ -511,6 +572,8 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
     script that gives a skill XP without being listed.
   - The Agility Arena's layout comes from Content's map (`maps/m43_149.jm2`), and the average way
     between two ticket pillars is worked out from it.
+  - Spell icons are the client's own, from Content's `sprites/magicon.png` and `magicon2.png`:
+    the spellbook (`magic.if`) says which is whose. They sit after the items on `items.png`.
 - Planner files:
   - `planner.js` holds the maths, all in tenths of XP like the game.
   - `planner-ui.js` builds the Goals, Bank and Prices views.
@@ -524,10 +587,10 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
 ## Credits
 
 - Hiscores come from the Lost City hiscores API.
-- Levels and XP for the planner, and the bank layout and font the screenshot reader uses, come from
-  Lost City's server content and client (MIT).
-- Item names and icons, and the rows of the Crafting, Mining, Smithing, Fishing, Cooking, Thieving
-  and Agility calculators, come from [LostHQ](https://2004.losthq.rs) (GPL-3.0).
+- Levels and XP for the planner, spell icons, and the bank layout and font the screenshot reader
+  uses, come from Lost City's server content and client (MIT).
+- Item names and icons, and the rows of the Crafting, Mining, Smithing, Fishing, Cooking, Thieving,
+  Agility, Prayer and Magic calculators, come from [LostHQ](https://2004.losthq.rs) (GPL-3.0).
 - Prices come from [markets.lostcity.rs](https://markets.lostcity.rs). How they're read follows
   LostKit's own price check.
 - Skill icons and RuneScape fonts come from [LostKit](https://github.com/LostHQ/LostKit-Electron)

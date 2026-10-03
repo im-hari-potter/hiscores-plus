@@ -446,6 +446,8 @@ table.cmp tfoot td { background: #241e10; font-size: 13px; }
 /* Item icons: one 32x32 sprite each in items.png, drawn at their own pixel size */
 .item { display: inline-block; width: 32px; height: 32px; background: url('items.png') no-repeat; image-rendering: pixelated; flex-shrink: 0; vertical-align: middle; }
 .item.sm { width: 16px; height: 16px; }
+/* A spell's own icon: 20x20 in the middle of its cell on the sheet. Small, it's shown at its own size. */
+.item.sprite.sm { width: 20px; height: 20px; }
 /* A way to train with no item to show (an Agility course): the skill's own icon in the item's place. */
 .item.blank { background: none; display: inline-flex; align-items: center; justify-content: center; }
 .item.blank.sm .ico { width: 16px; height: 16px; background-size: contain; }

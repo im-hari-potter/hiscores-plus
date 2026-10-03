@@ -15,8 +15,10 @@ const SHOTS = process.env.SHOTS || '/tmp';
 const results = [];
 // ONLY=<pattern>: run just the checks whose name matches (while writing one; the full run is what counts).
 const ONLY = process.env.ONLY ? new RegExp(process.env.ONLY, 'i') : null;
+let running = '(before the first check)';      // the check a page problem happened in
 const check = async (name, fn) => {
   if (ONLY && !ONLY.test(name)) { results.push(['skip', name]); return; }
+  running = name;
   try { await fn(); results.push(['ok', name]); }
   catch (e) {
     // (with the line of this file it happened on)
@@ -29,10 +31,32 @@ const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1000, height: 900 }, deviceScaleFactor: 1 });
 const page = await ctx.newPage();
 const problems = [];
-page.on('pageerror', e => problems.push('pageerror: ' + e.message));
+page.on('pageerror', e => problems.push(`pageerror: ${e.message} (during "${running}")${(e.stack || '').split('\n').slice(1, 7).map(l => `\n      ${l.trim()}`).join('')}`));
 page.on('console', m => { if (m.type() === 'error') problems.push('console: ' + m.text()); });
 const requested = [];                         // every address the page asks for
 page.on('request', r => requested.push(r.url()));
+
+// The page redraws on its own (prices arriving, XP loaded), and Playwright reads a list of elements in two
+// steps: it finds them, then it reads them. A redraw between the two leaves it reading the elements that were
+// just replaced: off the page, where text has no line breaks and nothing has a size or a style. So those
+// reads are done again when what they found was replaced under them.
+{
+  const Locator = Object.getPrototypeOf(page.locator('html'));
+  for (const name of ['evaluate', 'evaluateAll']) {
+    const read = Locator[name];
+    Locator[name] = async function (fn, arg, ...rest) {
+      const whole = new Function('found', 'arg', `return [].concat(found).every(el => el.isConnected)
+        ? Promise.resolve((${fn})(found, arg)).then(got => ({ onPage: true, got })) : {};`);
+      for (let tries = 0; tries < 200; tries++) { const r = await read.call(this, whole, arg, ...rest); if (r.onPage) return r.got; }
+      throw new Error(`${this}: the page kept redrawing under this read`);
+    };
+  }
+  Locator.allInnerTexts = function () { return this.evaluateAll(els => els.map(el => el.innerText)); };
+  const box = Locator.boundingBox;
+  Locator.boundingBox = async function (...a) {
+    for (let tries = 0; ; tries++) { const b = await box.apply(this, a); if (b || tries > 200 || !(await this.isVisible())) return b; }
+  };
+}
 
 const mockStats = async () => (await (await fetch(BASE + '/__mock/stats')).json());
 const text = sel => page.locator(sel).first().innerText();
@@ -1994,6 +2018,215 @@ await check('agility: no bank and nothing to price; laps of a course; an Agility
   }
 });
 
+await check('prayer: bones are buried from the bank, the best first; the two bones the server has besides; look-alike bones in a screenshot', async () => {
+  await planAs('old badger', 'Old Badger');
+  const card = goalCard('Prayer');
+  const BANK = { dragon_bones: '120', big_bones: '900', bones: '40' };
+  const saved = await page.evaluate(() => localStorage.getItem('lchs.bank.old_badger'));
+  try {
+    await setBank('prayer', BANK);
+    assert.deepEqual((await page.locator('#bank-body .bank-group h4').allInnerTexts()).map(flat), ['Bones']);
+    assert.equal(await page.locator('#bank-body [data-bank]').count(), 10);
+    await addGoal('prayer', 60);
+    await card.locator('.plan').waitFor();
+    const t = flat(await card.innerText());
+    assert.match(t, /Level 56 → 60/);
+    // a bank skill like Firemaking: one thing goes in, so there's nothing to round up, and no choices
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /^Use my bank 3 kinds of item in your bank/);
+    assert.equal(await card.locator('input[data-gopt="roundUp"], .plan-opts select').count(), 0);
+    const sec = card.locator('.plan-sec').first();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +22,320 XP → level 57');
+    assert.deepEqual((await sec.locator('.step').allInnerTexts()).map(x => flat(x).replace(/ · .*$/, '')), ['120 × Dragon bones +8,640 XP', '900 × Big bones +13,500 XP', '40 × Bones +180 XP']);
+    // the rest of the goal in the bones the bank mostly had
+    const then = card.locator('.plan-sec', { hasText: 'Then, to reach your goal' });
+    assert.match(flat(await then.locator('h4').innerText()), /^Then, to reach your goal: 67,282 XP$/);
+    assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'pr_big_bones');
+    assert.equal(flat(await then.locator('.step').innerText()), '4,486 × Big bones +67,290 XP');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 4,486 Big bones/);
+    // every bone, least XP first: LostHQ's eight, and the two the server drops besides
+    const names = async () => (await card.locator('tr[data-method] td:nth-child(3)').allInnerTexts()).map(flat);
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+    const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
+    assert.deepEqual(await names(), ['Bones', 'Burnt bones', 'Bat bones', 'Wolf bones', 'Monkey bones', 'Big bones', 'Jogre bones', 'Shaikahan bones', 'Babydragon bones', 'Dragon bones']);
+    assert.equal(await card.locator('.group-pick').count(), 0, 'one group: nothing to pick');
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat).slice(0, 7), ['Use', 'Lvl', 'Bones', 'XP', 'Net/item', 'gp/XP', 'From bank']);
+    assert.doesNotMatch(flat(await card.locator('.plan-t thead').innerText()), /Round up/);
+    const dragon = await cells('pr_dragon_bones');
+    assert.deepEqual([dragon[1], dragon[2], dragon[3], dragon[6]], ['1', 'Dragon bones', '72', '120']);
+    assert.match(await tip('pr_mm_normal_monkey_bones'), /^Monkey bones: level 1, 5 XP each\nNeeds \(from scratch\): 1 Monkey bones\nDropped by the monkeys of Karamja\. Not on LostHQ's calculator: the server's own XP\./);
+    assert.match(await tip('pr_tbwt_beast_bones'), /^Shaikahan bones: level 1, 25 XP each\n.*\nDropped by the Shaikahan, east of Tai Bwo Wannai\. Not on LostHQ's calculator: the server's own XP\./);
+    // picked, dragon bones finish the goal
+    await card.locator('tr[data-method="pr_dragon_bones"] td:nth-child(3)').click();
+    await then.locator('.step', { hasText: 'Dragon bones' }).waitFor();
+    assert.equal(flat(await then.locator('.step').innerText()), '935 × Dragon bones +67,320 XP');
+    assert.deepEqual((await sec.locator('.step').allInnerTexts()).map(x => flat(x).replace(/ \+.*$/, '')), ['120 × Dragon bones', '900 × Big bones', '40 × Bones'], 'the bank as before: dragon bones were first already');
+    await page.screenshot({ path: `${SHOTS}/10r-prayer.png`, fullPage: true });
+    // its prices, and its tab on the Bank
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="prayer"]');
+    await page.waitForSelector('[data-price="dragon_bones"]');
+    assert.match(flat(await text('#prices-body')), /^Bones .*Bones.*Burnt bones.*Bat bones.*Wolf bones.*Monkey bones.*Big bones.*Jogre bones.*Shaikahan bones.*Babydragon bones.*Dragon bones/);
+    // a screenshot: big, jogre and baby dragon bones are one picture, and so are dragon and Shaikahan bones
+    await page.click('.tab[data-tab="bank"]');
+    const items = [{ slot: 0, icon: 'big_bones', count: 950 }, { slot: 1, icon: 'dragon_bones', count: 130 }, { slot: 2, icon: 'wolf_bones', count: 7 }];
+    await page.setInputFiles('#shots-file', [{ name: 'bones.png', mimeType: 'image/png', buffer: encodePng(fakeBank({ items })) }]);
+    await page.waitForSelector('#bank-shots .shots-result', { timeout: 45000 });
+    const big = page.locator('[data-shot-as="big_bones@0"]'), drag = page.locator('[data-shot-as="dragon_bones@0"]');
+    assert.deepEqual([await big.inputValue(), await big.locator('option').allInnerTexts()], ['big_bones', ['Big bones', 'Babydragon bones', 'Jogre bones']]);
+    assert.deepEqual([await drag.inputValue(), await drag.locator('option').allInnerTexts()], ['dragon_bones', ['Dragon bones', 'Shaikahan bones']]);
+    assert.equal(await page.locator('.shot-row', { has: page.locator('[data-shot="wolf_bones"]') }).locator('select').count(), 0, 'wolf bones have a colour of their own');
+    await big.selectOption('babydragon_bones');
+    await page.waitForFunction(() => document.querySelector('[data-shot-as="big_bones@0"]')?.value === 'babydragon_bones');
+    await page.click('[data-act="shots-apply"]');
+    await page.waitForSelector('#bank-msg:not([hidden])');
+    await page.click('[data-bskill="prayer"]');
+    assert.deepEqual([await page.inputValue('[data-bank="babydragon_bones"]'), await page.inputValue('[data-bank="dragon_bones"]'), await page.inputValue('[data-bank="wolf_bones"]')], ['950', '130', '7']);
+  } finally {
+    await page.evaluate(v => (v == null ? localStorage.removeItem('lchs.bank.old_badger') : localStorage.setItem('lchs.bank.old_badger', v)), saved);
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('[data-bskill="herblore"]');
+    await removeGoal(card);
+    await noGoalFor('Prayer');
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="herblore"]');
+    await page.click('.tab[data-tab="goals"]');
+  }
+});
+
+await check("magic: spells by how you train with them, each with its own runes; a rune-only spell waits to be picked; a staff, damage and rounding up", async () => {
+  await planAs('old badger', 'Old Badger');
+  const card = goalCard('Magic');
+  const RUNES = { airrune: '10000', firerune: '5000', chaosrune: '3000', naturerune: '2000', lawrune: '1000', cosmicrune: '100', waterrune: '800' };
+  const saved = await page.evaluate(() => localStorage.getItem('lchs.bank.old_badger'));
+  try {
+    await setBank('magic', RUNES);
+    // the Magic bank: the runes, then what each kind of spell is cast on and makes
+    assert.deepEqual((await page.locator('#bank-body .bank-group h4').allInnerTexts()).map(flat),
+      ['Runes', 'Jewellery to enchant', 'Ore to superheat', 'Orbs to charge', 'Made: enchanted jewellery', 'Made: bars', 'Made: orbs']);
+    await addGoal('magic', 60);
+    await card.locator('.plan').waitFor();
+    assert.match(flat(await card.innerText()), /Level 50 → 60/);
+    // the choices on the goal: a staff and what to count of the damage
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /^Use my bank Round up my supplies Staff None Air Water Earth Fire Lava \(earth and fire\) Damage Leave it out Half the casts hit Every cast hits 7 kinds of item in your bank/);
+    assert.match(await card.locator('label:has(select[data-opt="staff"])').getAttribute('title'), /^A staff in your hand stands in for its rune, however many a spell takes: a staff of air, an air battlestaff or a mystic air staff for air runes;/);
+    assert.match(await card.locator('label:has(select[data-opt="damage"])').getAttribute('title'), /^A combat spell gives its XP for the cast, hit or miss, and 2 XP more for every point of damage\./);
+    // runes alone don't say which spell they're for: nothing is cast from the bank until you pick
+    const sec = card.locator('.plan-sec').first();
+    const then = card.locator('.plan-sec', { hasText: 'to reach your goal' }).first();
+    const steps = async () => (await sec.locator('.step').allInnerTexts()).map(x => flat(x).replace(/ · .*$/, ''));
+    assert.equal(flat(await sec.innerText()), "From your bank Nothing in your bank is used by itself yet. Runes alone don't say which spell they're for: click a spell in the table below to train with it, and your bank's runes go to it first.");
+    // the rest of the goal: the best combat spell at level 50, with the bank's runes taken off what it takes
+    assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'mg_water_blast');
+    assert.equal(flat(await then.locator('.step').innerText()), '6,046 × Water Blast +172,311 XP');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 6,046 Death rune( \([\d.,]+[KM]?\))? 17,338 Water rune( \([\d.,]+[KM]?\))? 8,138 Air rune/);
+    assert.equal(await then.locator('.step .item.sprite').getAttribute('title'), 'Water Blast', "the spell's own icon");
+    // five kinds of spell, one at a time: combat's showing
+    const names = async () => (await card.locator('tr[data-method] td:nth-child(3)').allInnerTexts()).map(flat);
+    const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
+    const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
+    assert.deepEqual((await card.locator('.group-pick .chip').allInnerTexts()).map(x => x.trim()), ['Combat', 'Curses', 'Utility', 'Enchantment', 'Teleports', 'All']);
+    assert.equal(await card.locator('.group-pick .chip.on').innerText(), 'Combat');
+    assert.deepEqual(await names(), ['Wind Strike', 'Water Strike', 'Earth Strike', 'Fire Strike', 'Wind Bolt', 'Water Bolt', 'Earth Bolt', 'Fire Bolt', 'Crumble Undead', 'Wind Blast', 'Water Blast', 'Iban Blast',
+      'Earth Blast', 'Fire Blast', 'Saradomin Strike', 'Claws of Guthix', 'Flames of Zamorak', 'Wind Wave', 'Water Wave', 'Earth Wave', 'Fire Wave']);
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat).slice(0, 7), ['Use', 'Lvl', 'Spell', 'XP', 'Net/item', 'gp/XP', 'From bank']);
+    assert.equal(await card.locator('tr[data-method="mg_fire_bolt"] .item.sprite.sm').count(), 1);
+    // a row: what the bank's runes could cast of it on its own, and what the server says of it
+    let bolt = await cells('mg_fire_bolt');
+    assert.deepEqual([bolt[1], bolt[2], bolt[3], bolt[6]], ['35', 'Fire Bolt', '22.5', '1,250']);
+    assert.match(await tip('mg_fire_bolt'), /^Fire Bolt: level 35, 22\.5 XP each\nNeeds \(from scratch\): 1 Chaos rune, 4 Fire rune, 3 Air rune\nMax hit 12 \(15 with chaos gauntlets\): every point of damage is 2 XP on top of the cast's\. See Damage on the goal\./);
+    assert.match(await tip('mg_crumble_undead'), /^Crumble Undead: level 39, 49 XP each\n.*\nOnly works on skeletons, zombies, ghosts and shades\. Max hit 8: .* LostHQ's calculator says 24\.5 XP; the server gives 49\./);
+    assert.match(await tip('mg_saradomin_strike'), /\nTools: Staff of saradomin\nLearnt in the Mage Arena, and cast with the staff of Saradomin in hand\./);
+    // what's cast on something is planned by itself: iron ore goes to steel while there's coal, and 100 cosmic runes enchant 100 rings
+    await setBank('magic', { sapphire_ring: '300', iron_ore: '400', coal: '1000' });
+    await page.click('.tab[data-tab="goals"]');
+    await sec.locator('.step', { hasText: 'Steel bar' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +22,950 XP → level 52');
+    assert.deepEqual(await steps(), ['400 × Superheat Item: Steel bar +21,200 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
+    assert.equal(flat(await then.locator('.step').innerText()), '5,241 × Water Blast +149,368.5 XP');
+    // picked, a spell that only takes runes gets the bank first: 5,000 fire runes are 1,250 Fire Bolts, and leave none to superheat with
+    await card.locator('tr[data-method="mg_fire_bolt"] td:nth-child(3)').click();
+    await sec.locator('.step', { hasText: 'Fire Bolt' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +29,875 XP → level 52');
+    assert.deepEqual(await steps(), ['1,250 × Fire Bolt +28,125 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
+    assert.equal(flat(await then.locator('.step').innerText()), '6,331 × Fire Bolt +142,447.5 XP');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 4,581 Chaos rune( \([\d.,]+[KM]?\))? 25,324 Fire rune( \([\d.,]+[KM]?\))? 12,743 Air rune/);
+    assert.doesNotMatch(flat(await then.innerText()), /Also bring/);
+    // a staff of fire: no fire runes in anything, so the bank's go further and the ore is superheated after all
+    await card.locator('select[data-opt="staff"]').selectOption('fire');
+    await sec.locator('h4', { hasText: '+90,450 XP' }).waitFor();
+    assert.deepEqual(await steps(), ['3,000 × Fire Bolt +67,500 XP', '400 × Superheat Item: Steel bar +21,200 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
+    assert.equal(flat(await then.locator('.step').innerText()), '3,639 × Fire Bolt +81,877.5 XP');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 3,639 Chaos rune( \([\d.,]+[KM]?\))? 9,917 Air rune/);
+    assert.match(flat(await then.innerText()), /Also bring: Staff of fire/);
+    assert.match(await tip('mg_fire_bolt'), /\nNeeds \(from scratch\): 1 Chaos rune, 3 Air rune\nTools: Staff of fire\n/);
+    assert.deepEqual((await goalOf('old_badger', 'magic')).opts, { staff: 'fire' });
+    // damage counted: every cast for half its max hit (12), 2 XP a point
+    await card.locator('select[data-opt="damage"]').selectOption('alldmg');
+    await sec.locator('h4', { hasText: '+126,450 XP' }).waitFor();
+    assert.equal(flat(await then.locator('.step').innerText()), '1,330 × Fire Bolt +45,885 XP');
+    bolt = await cells('mg_fire_bolt');
+    assert.equal(bolt[3], '34.5');
+    assert.match(await tip('mg_fire_bolt'), /^Fire Bolt: level 35, 34\.5 XP each \(the cast 22\.5 \+ damage 12\)\n/);
+    assert.deepEqual((await goalOf('old_badger', 'magic')).opts, { staff: 'fire', damage: 'alldmg' });
+    await page.screenshot({ path: `${SHOTS}/10s-magic.png`, fullPage: true });
+    await card.locator('select[data-opt="damage"]').selectOption('nodamage');
+    await card.locator('select[data-opt="staff"]').selectOption('nostaff');
+    await sec.locator('h4', { hasText: '+29,875 XP' }).waitFor();
+    assert.equal((await goalOf('old_badger', 'magic')).opts, undefined, 'the first of each list is how it starts: nothing to keep');
+    // rounded up: the spell you train with goes as far as its most plentiful rune (10,000 air runes: 3,333), and runes
+    // never hold back what's cast on something: all 300 rings, the cosmic runes short collected
+    assert.match(await card.locator('label:has(input[data-gopt="roundUp"])').getAttribute('title'), /Runes never hold it back: what you're short of is collected too\.$/);
+    await card.locator('input[data-gopt="roundUp"]').check();
+    await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank, supplies rounded up +106,742.5 XP → level 57');
+    const rounded = (await sec.locator('.step').allInnerTexts()).map(flat);
+    assert.equal(rounded.length, 3, rounded.join(' / '));
+    assert.match(rounded[0], /^3,333 × Fire Bolt \+74,992\.5 XP collect\s?333 Chaos rune\s?8,332 Fire rune$/);
+    assert.match(rounded[1], /^500 × Superheat Item: Steel bar \+26,500 XP .*collect\s?100 Iron ore\s?2,000 Fire rune$/);
+    assert.match(rounded[2], /^300 × Lvl-1 Enchant: Ring of recoil \+5,250 XP .*collect\s?200 Cosmic rune$/);
+    assert.match(flat(await sec.locator('.collect').innerText()), /^To round up your supplies, collect: 100 Iron ore.* 333 Chaos rune.* 10,332 Fire rune.* 200 Cosmic rune/);
+    await card.locator('input[data-gopt="roundUp"]').uncheck();
+    await sec.locator('h4', { hasText: '+29,875 XP' }).waitFor();
+    // a spell above your level waits for it; what gets you there takes the bank's runes
+    await card.locator('[data-tgroup="Utility"]').click();
+    assert.deepEqual(await names(), ['Bones to Bananas', 'Low Level Alchemy', 'Telekinetic Grab', ...['Bronze', 'Iron', 'Silver', 'Steel', 'Gold', 'Mithril', 'Adamantite', 'Runite'].map(b => `Superheat Item: ${b} bar`), 'High Level Alchemy', 'Charge']);
+    assert.match(await tip('mg_highlvl_alchemy'), /^High Level Alchemy: level 55, 65 XP each\nNeeds \(from scratch\): 1 Nature rune, 5 Fire rune\nAny item will do: what you alch, and the coins it turns into \(60% of its shop value\), aren't counted here\./);
+    assert.match(await tip('mg_superheat_steel_bar'), /^Superheat Item: Steel bar: level 43, 53 XP each\nNeeds \(from scratch\): 1 Iron ore, 2 Coal, 1 Nature rune, 4 Fire rune\nNeeds Smithing 30\. It gives the bar's Smithing XP too, which isn't counted here\./);
+    await card.locator('tr[data-method="mg_highlvl_alchemy"] td:nth-child(3)').click();
+    await then.locator('.step', { hasText: 'High Level Alchemy' }).waitFor();
+    assert.deepEqual((await then.locator('.step').allInnerTexts()).map(flat), ['First 1,363 × Low Level Alchemy +42,253 XP to reach level 55', 'Then 1,648 × High Level Alchemy +107,120 XP']);
+    assert.deepEqual(await steps(), ['400 × Superheat Item: Steel bar +21,200 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
+    // the other kinds
+    await card.locator('[data-tgroup="Curses"]').click();
+    assert.deepEqual(await names(), ['Confuse', 'Weaken', 'Curse', 'Bind', 'Snare', 'Vulnerability', 'Enfeeble', 'Entangle', 'Stun']);
+    assert.match(await tip('mg_stun'), /^Stun: level 80, 90 XP each\n.*\nLowers your target's Attack\. It can't be cast on one whose Attack is already lowered\. The XP is for the cast, whether it takes hold or not\. LostHQ's calculator says 80 XP; the server gives 90\./);
+    await card.locator('[data-tgroup="Enchantment"]').click();
+    assert.deepEqual((await names()).slice(0, 4).concat((await names()).slice(-2)), ['Lvl-1 Enchant: Ring of recoil', 'Lvl-1 Enchant: Amulet of magic', 'Lvl-1 Enchant: Games necklace(8)', 'Lvl-2 Enchant: Ring of dueling(8)',
+      'Lvl-5 Enchant: Ring of wealth', 'Lvl-5 Enchant: Amulet of glory(4)']);
+    assert.equal((await names()).length, 15);
+    assert.deepEqual((await cells('mg_enchant_ring_of_recoil')).slice(1, 4).concat((await cells('mg_enchant_ring_of_recoil'))[6]), ['7', 'Lvl-1 Enchant: Ring of recoil', '17.5', '100']);
+    assert.match(await tip('mg_water_orb'), /^Charge Water Orb: level 56, 66 XP each\nNeeds \(from scratch\): 1 Unpowered orb, 30 Water rune, 3 Cosmic rune\nCast at the Obelisk of Water, with an unpowered orb on you\. LostHQ's calculator says 56 XP; the server gives 66\./);
+    await card.locator('[data-tgroup="Teleports"]').click();
+    assert.deepEqual(await names(), ['Varrock Teleport', 'Lumbridge Teleport', 'Falador Teleport', 'Camelot Teleport', 'Ardougne Teleport', 'Watchtower Teleport', 'Trollheim Teleport']);
+    assert.match(await tip('mg_trollheim_teleport'), /\nOnce Eadgar's Ruse is done\. Not on LostHQ's calculator: the server's own level and XP\./);
+    assert.deepEqual((await cells('mg_camelot_teleport')).slice(1, 4).concat((await cells('mg_camelot_teleport'))[6]), ['45', 'Camelot Teleport', '55.5', '1,000']);
+    // its prices: by the bank's groups
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="magic"]');
+    await page.waitForSelector('[data-price="soulrune"]');
+    assert.match(flat(await text('#prices-body')), /^Runes .*Air rune.*Soul rune.*Jewellery to enchant .*Sapphire ring.*Ore to superheat .*Coal.*Orbs to charge .*Unpowered orb.*Made: enchanted jewellery .*Ring of recoil.*Made: bars .*Runite bar.*Made: orbs .*Air orb/);
+  } finally {
+    await page.evaluate(v => (v == null ? localStorage.removeItem('lchs.bank.old_badger') : localStorage.setItem('lchs.bank.old_badger', v)), saved);
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('[data-bskill="herblore"]');
+    await removeGoal(card);
+    await noGoalFor('Magic');
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="herblore"]');
+    await page.click('.tab[data-tab="goals"]');
+  }
+});
+
 // (back to Demo Main for the checks that follow, whatever happened above)
 try { await planAs('demo main', 'Demo Main'); } catch (e) { results.push(['FAIL', 'back to Demo Main after the Old Badger checks', e.message.split('\n')[0]]); }
 
@@ -2204,6 +2437,132 @@ await check('smithing: ore is smelted on the way; bars bought, smelted or superh
   }
 });
 
+await check("a number half typed is left alone: the page's own redraws wait until it's entered (a price, an amount to make, a bank amount)", async () => {
+  // Prices arriving redraw the page about once a second, and a field that's redrawn hands in what it holds so
+  // far (the browser's doing). Up to v2.8.0 a price or an amount typed slowly was taken half typed, the cursor
+  // left the field, and the redraw that was under way gave up with an error.
+  const seen = problems.length;
+  const card = goalCard('Mining');
+  const stored = key => page.evaluate(k => JSON.parse(localStorage.getItem(k) || 'null'), key);
+  // every Smithing price again: some nine seconds of them, one at a time
+  const refresh = async () => {
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="smithing"]');
+    if (await page.locator('[data-act="prices-stop"]').count()) await page.click('[data-act="prices-stop"]');
+    await page.click('[data-act="prices-refresh"]');
+  };
+  // typed and left there for two redraws' time: is it the very field that was typed in, holding the cursor?
+  const typed = async (field, keys) => {
+    await field.click();
+    await page.keyboard.type(keys);
+    await page.evaluate(() => { document.activeElement.typedHere = true; });
+    await page.waitForTimeout(2300);
+    assert.match(await text('#status-api'), /Prices [\d,]+\/[\d,]+/, 'prices were arriving all the while');
+    return page.evaluate(() => [document.activeElement.typedHere === true, document.activeElement.value]);
+  };
+  try {
+    await addGoal('mining', 90);
+    await card.locator('.plan').waitFor();
+    await card.locator('[data-tgroup="Bars"]').click();
+    // a price of your own
+    await refresh();
+    assert.deepEqual(await typed(page.locator('[data-price="iron_bar"]'), '123'), [true, '123']);
+    assert.equal((await stored('lchs.priceOverrides'))?.iron_bar, undefined, 'not taken half typed');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lchs.priceOverrides') || '{}').iron_bar === 123);
+    assert.equal(await page.locator('[data-psrc="iron_bar"][value="mine"]').isChecked(), true, 'entered: it is the price in use');
+    // an amount to make
+    await refresh();
+    await page.click('.tab[data-tab="goals"]');
+    assert.deepEqual(await typed(card.locator('[data-mix="mi_bar_steel_bar"]'), '1000'), [true, '1000']);
+    assert.equal((await goalOf('demo_main', 'mining')).mix, undefined, 'not taken half typed');
+    assert.equal(await card.locator('.plan-sec', { hasText: 'Your mix +' }).count(), 0);
+    await page.keyboard.press('Enter');
+    await card.locator('.plan-sec', { hasText: 'Your mix +135,000 XP' }).waitFor();
+    assert.deepEqual((await goalOf('demo_main', 'mining')).mix, { mi_bar_steel_bar: 1000 });
+    // (and the redraws that waited come now)
+    await page.evaluate(() => { document.querySelector('#goals-list').firstElementChild.waited = true; });
+    await page.waitForFunction(() => !document.querySelector('#goals-list').firstElementChild.waited, null, { timeout: 5000 });
+    // a bank amount
+    await refresh();
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('[data-bskill="smithing"]');
+    assert.deepEqual(await typed(page.locator('[data-bank="iron_ore"]'), '250'), [true, '250']);
+    assert.equal((await stored('lchs.bank.demo_main'))?.items?.iron_ore, undefined, 'not taken half typed');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lchs.bank.demo_main')).items.iron_ore === 250);
+    assert.deepEqual(problems.slice(seen).filter(p => p.startsWith('pageerror')), [], 'and nothing went wrong on the page');
+  } finally {
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="smithing"]');
+    if (await page.locator('[data-act="prices-stop"]').count()) await page.click('[data-act="prices-stop"]');
+    await page.fill('[data-price="iron_bar"]', '');
+    await page.press('[data-price="iron_bar"]', 'Enter');
+    await page.click('#prices-head [data-bskill="herblore"]');
+    await setBank('smithing', { iron_ore: '' });
+    await page.click('[data-bskill="herblore"]');
+    await removeGoal(card);
+    await noGoalFor('Mining');
+  }
+});
+
+await check('an amount or a price entered by clicking elsewhere: the click lands too (the next box takes the cursor, a row is picked, a group opens)', async () => {
+  // Up to v2.8.0 the page was redrawn the moment the field was left, under the click that left it: the
+  // amount was taken, and what was clicked had to be clicked again.
+  const card = goalCard('Mining');
+  const box = id => card.locator(`[data-mix="${id}"]`);
+  const mix = async () => (await goalOf('demo_main', 'mining')).mix;
+  const focused = () => page.evaluate(() => document.activeElement.dataset.mix || document.activeElement.dataset.price || document.activeElement.tagName);
+  try {
+    await addGoal('mining', 90);
+    await card.locator('.plan').waitFor();
+    await card.locator('[data-tgroup="Bars"]').click();
+    // the next amount box: it has the cursor, and what's typed next goes into it
+    await box('mi_bar_bronze_bar').click();
+    await page.keyboard.type('100');
+    await box('mi_bar_iron_bar').click();
+    await card.locator('.plan-sec', { hasText: 'Your mix +' }).waitFor();
+    assert.deepEqual(await mix(), { mi_bar_bronze_bar: 100 }, 'the amount is entered');
+    assert.equal(await focused(), 'mi_bar_iron_bar', 'and the box that was clicked has the cursor');
+    assert.equal(await box('mi_bar_bronze_bar').inputValue(), '100');
+    await page.keyboard.type('50');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lchs.goals.demo_main')).find(g => g.skill === 'mining').mix?.mi_bar_iron_bar === 50);
+    assert.deepEqual(await mix(), { mi_bar_bronze_bar: 100, mi_bar_iron_bar: 50 });
+    // a row of the table: it's the one to train with
+    await box('mi_bar_gold_bar').click();
+    await page.keyboard.type('7');
+    await card.locator('tr[data-method="mi_bar_steel_bar"] td:nth-child(2)').click();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lchs.goals.demo_main')).find(g => g.skill === 'mining').fillId === 'mi_bar_steel_bar');
+    assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'mi_bar_steel_bar');
+    assert.equal((await mix()).mi_bar_gold_bar, 7);
+    // a group of the table: it opens
+    await box('mi_bar_gold_bar').click();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('8');
+    await card.locator('[data-tgroup="Rocks"]').click();
+    await card.locator('.group-pick .chip.on', { hasText: 'Rocks' }).waitFor();
+    assert.equal((await mix()).mi_bar_gold_bar, 8);
+    // and a price: the next price box has the cursor
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="smithing"]');
+    await page.locator('[data-price="iron_bar"]').click();
+    await page.keyboard.type('123');
+    await page.locator('[data-price="steel_bar"]').click();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lchs.priceOverrides') || '{}').iron_bar === 123);
+    await page.locator('[data-psrc="iron_bar"][value="mine"]:checked').waitFor();
+    assert.equal(await focused(), 'steel_bar');
+  } finally {
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="smithing"]');
+    await page.fill('[data-price="iron_bar"]', '');
+    await page.press('[data-price="iron_bar"]', 'Enter');
+    await page.click('#prices-head [data-bskill="herblore"]');
+    await removeGoal(card);
+    await noGoalFor('Mining');
+  }
+});
+
 await check('firemaking: the bank\'s logs burn toward the goal, best first', async () => {
   await setBank('firemaking', { willow_logs: '10k' });
   assert.match(await text('#bank-head'), /Achey tree logs aren't listed/);
@@ -2236,7 +2595,7 @@ await check('bank: read from screenshots, review, then update', async () => {
   const shot = (name, opts) => ({ name, mimeType: 'image/png', buffer: encodePng(fakeBank(opts)) });
   const items = [
     { slot: 0, icon: 'lawrune', count: 3960 },
-    { slot: 1, icon: 'bloodrune', count: 3309 },
+    { slot: 1, icon: '1doseprayerrestore', count: 3309 },        // not a planner item (a blood rune stood here up to v2.8: Magic's now)
     { slot: 2, icon: 'blankrune', count: 150420 },
     { slot: 3, icon: 'bronze_arrow_5', count: 5000 },
     { slot: 4, icon: 'unidentified_guam', count: 25 },
@@ -2656,7 +3015,8 @@ await check('stale player counts are re-measured in the background', async () =>
 
 const finalStats = await mockStats();
 results.push(['info', `mock API: ${finalStats.api} requests, ${finalStats.limited} rate-limited`]);
-results.push(['info', problems.length ? 'page problems:\n  ' + problems.join('\n  ') : 'no page errors']);
+// (an error thrown on the page fails the run, whichever check it happened in; what the console says is passed on)
+results.push(problems.length ? [problems.some(p => p.startsWith('pageerror')) ? 'FAIL' : 'info', 'page problems:\n  ' + problems.join('\n  ')] : ['info', 'no page errors']);
 await browser.close();
 
 for (const r of results) console.log(r[0].padEnd(5), r[1], r[2] ? '— ' + r[2] : '');

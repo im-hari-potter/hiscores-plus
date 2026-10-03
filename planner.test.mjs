@@ -1676,7 +1676,7 @@ test('herblore: super attacks get the irits before superantipoisons, prayer poti
   const SA = 'hb_3dose2attack', SAP = 'hb_3dose2antipoison', PP = 'hb_3doseprayerrestore', FP = 'hb_3dosefisherspotion';
   assert.deepEqual(ix.byId.get(SAP).after, [SA]);
   assert.deepEqual(ix.byId.get(FP).after, [PP]);
-  assert.deepEqual(METHODS.filter(m => m.after).map(m => m.id), [SAP, FP], 'the only two');
+  assert.deepEqual(METHODS.filter(m => m.after && m.skill === 'herblore').map(m => m.id), [SAP, FP], "Herblore's only two");
   const at = { currentXp10: xp10ForLevel(60), targetXp10: xp10ForLevel(99), unlimited: VIALS, minor: VIALS };
   const fb = (bank, more = {}) => planGoal(ix, { ...at, bank, ...more }).fromBank;
 
@@ -2420,8 +2420,299 @@ test('agility: or every ticket at one batch\'s rate, a choice on the goal (v2.8)
 
 test('what only Thieving and Agility name is not what a bank is for (v2.8)', () => {
   // every item of the ten skills before them is still in the catalog, with the bank tabs as they were
-  assert.deepEqual(Object.keys(BANK_GROUPS), ['herblore', 'runecraft', 'firemaking', 'fletching', 'crafting', 'smithing', 'cooking']);
+  assert.deepEqual(Object.keys(BANK_GROUPS), ['herblore', 'runecraft', 'firemaking', 'fletching', 'crafting', 'smithing', 'cooking', 'prayer', 'magic']);      // (v2.9: Prayer and Magic have one)
   const banked = new Set(Object.values(BANK_GROUPS).flatMap(gs => gs.flatMap(g => g.items)));
   for (const k of ['silk', 'grey_wolf_fur', 'king_worm', 'lockpick', 'agilityarena_ticket', 'coins_25', 'rockcake']) assert.ok(ITEMS[k] && !banked.has(k), k);
   assert.ok(ITEMS.agilityarena_ticket.untradeable && ITEMS.rockcake.untradeable);
+});
+
+// ── Prayer (v2.9) ─────────────────────────────────────────────────────────
+// Bones, buried from the bank like Firemaking's logs. The rows are LostHQ's
+// Prayer calculator's, checked against the server when the data is built.
+const pr = indexMethods(METHODS.filter(m => m.skill === 'prayer'));
+
+test("prayer: LostHQ's bones, and the two the server has besides (v2.9)", () => {
+  assert.deepEqual(rowsOf(pr, 'Bones'), [['Bones', 1, 4.5], ['Burnt bones', 1, 4.5], ['Bat bones', 1, 4.5], ['Wolf bones', 1, 4.5], ['Monkey bones', 1, 5],
+    ['Big bones', 1, 15], ['Jogre bones', 1, 15], ['Shaikahan bones', 1, 25], ['Babydragon bones', 1, 30], ['Dragon bones', 1, 72]]);
+  assert.equal(pr.methods.length, 10);
+  assert.deepEqual(BANK_GROUPS.prayer, [{ name: 'Bones', items: ['bones', 'bones_burnt', 'bat_bones', 'wolf_bones', 'mm_normal_monkey_bones', 'big_bones', 'tbwt_jogre_bones', 'tbwt_beast_bones', 'babydragon_bones', 'dragon_bones'] }]);
+  // a bone goes in and nothing comes out
+  for (const m of pr.train) assert.deepEqual([m.kind, Object.values(m.in), m.out, m.id], ['xp', [1], {}, `pr_${Object.keys(m.in)[0]}`], m.id);
+  // what only the server has says so
+  assert.deepEqual(pr.train.filter(m => m.note).map(m => [m.id, m.note]), [
+    ['pr_mm_normal_monkey_bones', "Dropped by the monkeys of Karamja. Not on LostHQ's calculator: the server's own XP."],
+    ['pr_tbwt_beast_bones', "Dropped by the Shaikahan, east of Tai Bwo Wannai. Not on LostHQ's calculator: the server's own XP."]]);
+  for (const k of BANK_GROUPS.prayer[0].items) assert.ok(ITEMS[k] && !ITEMS[k].untradeable, k);
+  assert.equal(CHOICES.prayer, undefined);
+});
+
+test("prayer: a bank's bones are buried, the best first, and a plan carries on with what the bank mostly had (v2.9)", () => {
+  const at = { currentXp10: xp10ForLevel(56), targetXp10: xp10ForLevel(60) };
+  const plan = planGoal(pr, { ...at, bank: { dragon_bones: 120, big_bones: 900, bones: 40 } });
+  assert.deepEqual(plan.fromBank.steps.map(s => [s.id, s.runs, s.xp10]), [['pr_dragon_bones', 120, 86_400], ['pr_big_bones', 900, 135_000], ['pr_bones', 40, 1_800]]);
+  assert.deepEqual([plan.fromBank.xp10, plan.fromBank.endLevel, plan.fromBank.leftover.have('big_bones')], [223_200, 57, 0]);
+  assert.deepEqual([plan.fill.id, plan.fill.segments[0].runs, plan.fill.buy], ['pr_big_bones', 4493, { big_bones: 4493 }]);
+  assert.equal(Math.ceil((xp10ForLevel(60) - xp10ForLevel(56) - 223_200) / 150), 4493);
+  // with nothing in the bank, the most XP a bone gives
+  const empty = planGoal(pr, { ...at, bank: {} });
+  assert.deepEqual([empty.fromBank.steps, empty.fill.id, empty.fill.segments[0].runs], [[], 'pr_dragon_bones', 1246]);
+  // your own pick goes first, and the rest of the bank after it
+  assert.deepEqual(planGoal(pr, { ...at, bank: { dragon_bones: 120, bones: 40 }, fillId: 'pr_bones' }).fromBank.steps.map(s => s.id), ['pr_bones', 'pr_dragon_bones']);
+  // a bone costs what it costs: nothing comes back
+  assert.deepEqual(methodEconomics(pr, pr.byId.get('pr_dragon_bones'), k => ({ dragon_bones: 2500 })[k] ?? null), { inputs: { dragon_bones: 1 }, cost: 2500, value: 0, missing: [], net: -2500, gpPerXp: 2500 / 72 });
+  // one thing in, so there's nothing to round up
+  assert.ok(pr.train.every(m => Object.keys(m.in).length === 1));
+});
+
+// ── Magic (v2.9) ──────────────────────────────────────────────────────────
+// The rows are LostHQ's Magic calculator's, grouped by how you train with them
+// and checked against the server's spell tables when the data is built. They
+// stand on their own: nothing is shared with the Crafting and Smithing rows
+// that cast the same spells on the way.
+const mgAll = METHODS.filter(m => m.skill === 'magic');
+const mg = indexMethods(mgAll);
+const RUNES = { airrune: 10_000, firerune: 5000, chaosrune: 3000, naturerune: 2000, lawrune: 1000, cosmicrune: 100, waterrune: 800 };
+const MG = { currentXp10: xp10ForLevel(50), targetXp10: xp10ForLevel(60), fillGroup: 'Combat', minor: minorOf('magic') };
+const bankSteps = plan => plan.fromBank.steps.map(s => [s.id, s.runs]);
+
+test("magic: LostHQ's spells by how you train with them, with the server's numbers where they differ (v2.9)", () => {
+  assert.deepEqual([...new Set(mg.train.map(m => m.group))], ['Combat', 'Curses', 'Utility', 'Enchantment', 'Teleports']);
+  assert.deepEqual(rowsOf(mg, 'Combat'), [['Wind Strike', 1, 5.5], ['Water Strike', 5, 7.5], ['Earth Strike', 9, 9.5], ['Fire Strike', 13, 11.5], ['Wind Bolt', 17, 13.5], ['Water Bolt', 23, 16.5],
+    ['Earth Bolt', 29, 19.5], ['Fire Bolt', 35, 22.5], ['Crumble Undead', 39, 49], ['Wind Blast', 41, 25.5], ['Water Blast', 47, 28.5], ['Iban Blast', 50, 30], ['Earth Blast', 53, 31.5],
+    ['Fire Blast', 59, 34.5], ['Saradomin Strike', 60, 35], ['Claws of Guthix', 60, 35], ['Flames of Zamorak', 60, 35], ['Wind Wave', 62, 36], ['Water Wave', 65, 37.5], ['Earth Wave', 70, 40], ['Fire Wave', 75, 42.5]]);
+  assert.deepEqual(rowsOf(mg, 'Curses'), [['Confuse', 3, 13], ['Weaken', 11, 21], ['Curse', 19, 29], ['Bind', 20, 30], ['Snare', 50, 60], ['Vulnerability', 66, 76], ['Enfeeble', 73, 83], ['Entangle', 79, 89], ['Stun', 80, 90]]);
+  assert.deepEqual(rowsOf(mg, 'Utility'), [['Bones to Bananas', 15, 25], ['Low Level Alchemy', 21, 31], ['Telekinetic Grab', 33, 43],
+    ...['Bronze', 'Iron', 'Silver', 'Steel', 'Gold', 'Mithril', 'Adamantite', 'Runite'].map(b => [`Superheat Item: ${b} bar`, 43, 53]), ['High Level Alchemy', 55, 65], ['Charge', 80, 180]]);
+  assert.deepEqual(rowsOf(mg, 'Enchantment'), [['Lvl-1 Enchant: Ring of recoil', 7, 17.5], ['Lvl-1 Enchant: Amulet of magic', 7, 17.5], ['Lvl-1 Enchant: Games necklace(8)', 7, 17.5],
+    ['Lvl-2 Enchant: Ring of dueling(8)', 27, 37], ['Lvl-2 Enchant: Amulet of defence', 27, 37], ['Lvl-3 Enchant: Ring of forging', 49, 59], ['Lvl-3 Enchant: Amulet of strength', 49, 59],
+    ['Charge Water Orb', 56, 66], ['Lvl-4 Enchant: Ring of life', 57, 67], ['Lvl-4 Enchant: Amulet of power', 57, 67], ['Charge Earth Orb', 60, 70], ['Charge Fire Orb', 63, 73], ['Charge Air Orb', 66, 76],
+    ['Lvl-5 Enchant: Ring of wealth', 68, 78], ['Lvl-5 Enchant: Amulet of glory(4)', 68, 78]]);
+  assert.deepEqual(rowsOf(mg, 'Teleports'), [['Varrock Teleport', 25, 35], ['Lumbridge Teleport', 31, 41], ['Falador Teleport', 37, 48], ['Camelot Teleport', 45, 55.5],
+    ['Ardougne Teleport', 51, 61], ['Watchtower Teleport', 58, 68], ['Trollheim Teleport', 61, 68]]);
+  assert.equal(mg.methods.length, 65);
+  // where the server and the calculator differ, the row says so
+  const said = id => mg.byId.get(id).note.match(/LostHQ's calculator says [^;]+; the server gives [\d.]+\./)?.[0];
+  assert.deepEqual(Object.fromEntries(mgAll.filter(m => /LostHQ's calculator says/.test(m.note || '')).map(m => [m.id, said(m.id)])), {
+    mg_crumble_undead: "LostHQ's calculator says 24.5 XP; the server gives 49.", mg_enfeeble: "LostHQ's calculator says 89 XP; the server gives 83.",
+    mg_entangle: "LostHQ's calculator says 90 XP; the server gives 89.", mg_stun: "LostHQ's calculator says 80 XP; the server gives 90.",
+    mg_water_orb: "LostHQ's calculator says 56 XP; the server gives 66.", mg_falador_teleport: "LostHQ's calculator says 47 XP; the server gives 48." });
+  // and what only the server has
+  assert.deepEqual(mgAll.filter(m => /Not on LostHQ's calculator/.test(m.note || '')).map(m => m.id), ['mg_trollheim_teleport']);
+  assert.equal(mg.byId.get('mg_trollheim_teleport').note, "Once Eadgar's Ruse is done. Not on LostHQ's calculator: the server's own level and XP.");
+  assert.deepEqual(['mg_ardougne_teleport', 'mg_watchtower_teleport'].map(id => mg.byId.get(id).note), ['Once Plague City is done.', 'Once Watchtower is done.']);
+});
+
+test("magic: a cast takes the server's runes, and what it's cast on; every row is its own (v2.9)", () => {
+  const takes = id => mg.byId.get(id).in, makes = id => mg.byId.get(id).out;
+  assert.deepEqual(takes('mg_wind_strike'), { mindrune: 1, airrune: 1 });
+  assert.deepEqual(takes('mg_fire_wave'), { bloodrune: 1, firerune: 7, airrune: 5 });
+  assert.deepEqual(takes('mg_stun'), { soulrune: 1, waterrune: 12, earthrune: 12 });
+  assert.deepEqual(takes('mg_camelot_teleport'), { airrune: 5, lawrune: 1 });
+  assert.deepEqual([takes('mg_highlvl_alchemy'), takes('mg_lowlvl_alchemy')], [{ naturerune: 1, firerune: 5 }, { naturerune: 1, firerune: 3 }]);
+  assert.deepEqual(takes('mg_charge'), { firerune: 3, bloodrune: 3, airrune: 3 });
+  // alchemy counts the runes: what you alch, and its coins, aren't its business
+  assert.deepEqual(makes('mg_highlvl_alchemy'), {});
+  assert.match(mg.byId.get('mg_highlvl_alchemy').note, /^Any item will do: what you alch, and the coins it turns into \(60% of its shop value\), aren't counted here\.$/);
+  assert.match(mg.byId.get('mg_lowlvl_alchemy').note, /\(40% of its shop value\)/);
+  // Superheat Item: a row for each bar, the ore in and the bar out. One iron ore: the spell can't fail
+  assert.deepEqual([takes('mg_superheat_steel_bar'), makes('mg_superheat_steel_bar')], [{ iron_ore: 1, coal: 2, naturerune: 1, firerune: 4 }, { steel_bar: 1 }]);
+  assert.deepEqual([takes('mg_superheat_iron_bar'), makes('mg_superheat_iron_bar')], [{ iron_ore: 1, naturerune: 1, firerune: 4 }, { iron_bar: 1 }]);
+  assert.deepEqual(takes('mg_superheat_runite_bar'), { runite_ore: 1, coal: 8, naturerune: 1, firerune: 4 });
+  assert.equal(mg.byId.get('mg_superheat_iron_bar').note, "Needs Smithing 15. Never fails: one iron ore is a bar. With 2 coal on you the spell makes a steel bar of it instead. It gives the bar's Smithing XP too, which isn't counted here.");
+  assert.equal(mg.byId.get('mg_superheat_bronze_bar').note, "It gives the bar's Smithing XP too, which isn't counted here.");
+  // an enchant: a row for each thing it makes. A glory is what it's traded as, charged
+  assert.deepEqual([takes('mg_enchant_ring_of_recoil'), makes('mg_enchant_ring_of_recoil')], [{ sapphire_ring: 1, waterrune: 1, cosmicrune: 1 }, { ring_of_recoil: 1 }]);
+  assert.deepEqual([takes('mg_enchant_amulet_of_glory_4'), makes('mg_enchant_amulet_of_glory_4')], [{ strung_dragonstone_amulet: 1, earthrune: 15, waterrune: 15, cosmicrune: 1 }, { amulet_of_glory_4: 1 }]);
+  assert.equal(mg.byId.get('mg_enchant_amulet_of_glory_4').note, 'Cast on a dragonstone amulet. It comes out uncharged: the Fountain of Heroes charges it for nothing.');
+  assert.deepEqual([takes('mg_water_orb'), makes('mg_water_orb')], [{ stafforb: 1, waterrune: 30, cosmicrune: 3 }, { water_orb: 1 }]);
+  // nothing here is a Crafting or Smithing row, and those are what they were: the spells they cast on the way are theirs
+  assert.ok(mgAll.every(m => m.id.startsWith('mg_') && m.magic == null && !m.feeds && m.kind === 'xp'));
+  assert.deepEqual(METHODS.filter(m => m.magic || Object.values(m.opt || {}).some(v => v.magic)).reduce((a, m) => ({ ...a, [m.skill]: (a[m.skill] || 0) + 1 }), {}), { crafting: 15, smithing: 8 });
+  assert.equal(cr.byId.get('cr_ench_ring_of_recoil').magic, 175);
+  assert.equal(sm.byId.get('sm_steel_bar').opt.superheat.magic, 530);
+  // the Bank tab: the runes, then what each kind of spell is cast on and makes
+  assert.deepEqual(BANK_GROUPS.magic.map(g => [g.name, g.items.length]), [['Runes', 13], ['Jewellery to enchant', 11], ['Ore to superheat', 9], ['Orbs to charge', 1],
+    ['Made: enchanted jewellery', 12], ['Made: bars', 8], ['Made: orbs', 4]]);
+  assert.deepEqual(BANK_GROUPS.magic[0].items, ['airrune', 'waterrune', 'earthrune', 'firerune', 'mindrune', 'bodyrune', 'cosmicrune', 'chaosrune', 'naturerune', 'lawrune', 'deathrune', 'bloodrune', 'soulrune']);
+  const listed = new Set(BANK_GROUPS.magic.flatMap(g => g.items));
+  for (const m of mgAll) for (const k of [...Object.keys(m.in), ...Object.keys(m.out)]) assert.ok(listed.has(k), `${m.id}: ${k}`);
+});
+
+test('magic: a staff stands in for its rune, a choice on the goal (v2.9)', () => {
+  assert.deepEqual(CHOICES.magic.map(c => [c.id, c.label, c.options.map(o => [o.id, o.name])]), [
+    ['staff', 'Staff', [['nostaff', 'None'], ['air', 'Air'], ['water', 'Water'], ['earth', 'Earth'], ['fire', 'Fire'], ['lava', 'Lava (earth and fire)']]],
+    ['damage', 'Damage', [['nodamage', 'Leave it out'], ['halfdmg', 'Half the casts hit'], ['alldmg', 'Every cast hits']]]]);
+  assert.match(CHOICES.magic[0].tip, /a staff of air, an air battlestaff or a mystic air staff for air runes;.*A lava battlestaff or a mystic lava staff for both earth and fire runes\./);
+  assert.deepEqual(choicesInUse({ skill: 'magic', opts: { staff: 'lava', damage: 'alldmg' } }), ['lava', 'alldmg']);
+  assert.deepEqual(choicesInUse({ skill: 'magic', opts: { staff: 'nostaff', damage: 'nodamage' } }), [], 'the first of each list is how it starts');
+  const withStaff = id => indexMethods(mgAll, { opts: [id] });
+  const air = withStaff('air'), fire = withStaff('fire'), lava = withStaff('lava');
+  // its runes are no longer taken, however many; the staff is named to bring
+  assert.deepEqual([air.byId.get('mg_fire_bolt').in, air.byId.get('mg_fire_bolt').tools], [{ chaosrune: 1, firerune: 4 }, ['staff_of_air']]);
+  assert.deepEqual([fire.byId.get('mg_highlvl_alchemy').in, fire.byId.get('mg_highlvl_alchemy').tools], [{ naturerune: 1 }, ['staff_of_fire']]);
+  assert.deepEqual(air.byId.get('mg_air_orb').in, { stafforb: 1, cosmicrune: 3 }, '30 air runes an orb');
+  // a lava staff is two in one
+  assert.deepEqual([lava.byId.get('mg_fire_strike').in, lava.byId.get('mg_earth_wave').in, lava.byId.get('mg_enchant_ring_of_life').in, lava.byId.get('mg_fire_strike').tools],
+    [{ mindrune: 1, airrune: 2 }, { bloodrune: 1, airrune: 5 }, { diamond_ring: 1, cosmicrune: 1 }, ['lava_battlestaff']]);
+  // a spell that takes none of them is what it was
+  assert.deepEqual(fire.byId.get('mg_camelot_teleport'), mg.byId.get('mg_camelot_teleport'));
+  // a spell cast with a staff of its own has no hand free for another
+  assert.deepEqual(mgAll.filter(m => m.tools).map(m => [m.id, m.tools]), [['mg_iban_blast', ['ibanstaff']], ['mg_saradomin_strike', ['saradomin_staff']], ['mg_claws_of_guthix', ['guthix_staff']], ['mg_flames_of_zamorak', ['zamorak_staff']]]);
+  for (const m of mgAll.filter(x => x.tools)) assert.deepEqual([air.byId.get(m.id).in, air.byId.get(m.id).tools], [m.in, m.tools], m.id);
+  // every spell still takes something: no staff gives a rune a spell has no other rune beside
+  for (const ix2 of [air, fire, lava, withStaff('water'), withStaff('earth')]) for (const m of ix2.train) assert.ok(Object.keys(m.in).length > 0 && !gathers(m), m.id);
+  // a plan: no air runes to buy, and the staff to bring
+  const plan = planGoal(air, { ...MG, bank: RUNES, fillId: 'mg_fire_bolt' });
+  assert.deepEqual([bankSteps(plan), plan.fill.buy], [[['mg_fire_bolt', 1250]], { chaosrune: 4663, firerune: 25_652 }]);
+  assert.deepEqual(methodEconomics(air, air.byId.get('mg_fire_bolt'), k => ({ chaosrune: 180, firerune: 48, airrune: 48 })[k] ?? null).cost, 180 + 4 * 48);
+  assert.deepEqual(methodEconomics(mg, mg.byId.get('mg_fire_bolt'), k => ({ chaosrune: 180, firerune: 48, airrune: 48 })[k] ?? null).cost, 180 + 7 * 48);
+});
+
+test("magic: a combat spell's XP is for the cast, hit or miss; damage is a choice on the goal (v2.9)", () => {
+  const half = indexMethods(mgAll, { opts: ['halfdmg'] }), every = indexMethods(mgAll, { opts: ['alldmg'] });
+  // left out, it's the cast's: the most casts a goal can take, and what LostHQ's calculator shows
+  assert.equal(mg.byId.get('mg_fire_strike').xp, 115);
+  // every cast hitting: half the max hit on average, 2 XP a point (a Fire Strike's max is 8)
+  assert.deepEqual([every.byId.get('mg_fire_strike').xp, every.byId.get('mg_fire_strike').parts], [195, [['the cast', 115], ['damage', 80]]]);
+  assert.deepEqual([half.byId.get('mg_fire_strike').xp, half.byId.get('mg_fire_strike').parts], [155, [['the cast', 115], ['damage', 40]]]);
+  assert.deepEqual([every.byId.get('mg_fire_wave').xp, every.byId.get('mg_iban_blast').xp, every.byId.get('mg_crumble_undead').xp], [425 + 200, 300 + 250, 490 + 80]);
+  // every spell that does damage has it, the two binds that hit too; nothing else changes
+  const hits = mgAll.filter(m => m.opt?.alldmg).map(m => m.id);
+  assert.deepEqual(hits, [...mgAll.filter(m => m.group === 'Combat').map(m => m.id), 'mg_snare', 'mg_entangle']);
+  for (const m of mgAll) {
+    const max = Number(m.note?.match(/Max hit (\d+)/)?.[1] || 0);
+    assert.equal(every.byId.get(m.id).xp, m.xp + max * 10, m.id);
+    assert.equal(half.byId.get(m.id).xp, m.xp + max * 5, m.id);
+    assert.deepEqual(every.byId.get(m.id).in, m.in, m.id);
+  }
+  assert.match(mg.byId.get('mg_fire_bolt').note, /^Max hit 12 \(15 with chaos gauntlets\): every point of damage is 2 XP on top of the cast's\. See Damage on the goal\.$/);
+  assert.match(mg.byId.get('mg_crumble_undead').note, /^Only works on skeletons, zombies, ghosts and shades\. Max hit 8:/);
+  assert.match(mg.byId.get('mg_saradomin_strike').note, /^Learnt in the Mage Arena, and cast with the staff of Saradomin in hand\. Hits up to 30 for a while after a Charge, with the god's cape worn too\. Max hit 20:/);
+  assert.match(mg.byId.get('mg_iban_blast').note, /^Cast with Iban's staff in hand \(from the Underground Pass\): every cast takes one of the staff's charges\. Max hit 25:/);
+  assert.match(CHOICES.magic[1].tip, /^A combat spell gives its XP for the cast, hit or miss, and 2 XP more for every point of damage\..*\(a Fire Strike: 11\.5 \+ 8\)/);
+  // a curse gives its XP whether it takes hold or not, and can't be cast twice on the same target
+  assert.equal(mg.byId.get('mg_curse').note, "Lowers your target's Defence. It can't be cast on one whose Defence is already lowered. The XP is for the cast, whether it takes hold or not.");
+  assert.match(mg.byId.get('mg_bind').note, /^Holds your target for 5 seconds\. It can't be cast on one that's already held\./);
+  // a goal takes fewer casts with damage counted, and both choices go together with a staff
+  const casts = ix2 => planGoal(ix2, { ...MG, bank: {}, fillId: 'mg_fire_blast' }).fill.segments.map(s => [s.id, s.runs]);
+  assert.deepEqual([casts(mg), casts(every)], [[['mg_water_blast', 1238], ['mg_earth_blast', 3533], ['mg_fire_blast', 749]], [['mg_water_blast', 830], ['mg_earth_blast', 2394], ['mg_fire_blast', 512]]]);
+  assert.equal(Math.ceil((xp10ForLevel(53) - xp10ForLevel(50)) / 285), 1238);
+  assert.equal(Math.ceil((xp10ForLevel(53) - xp10ForLevel(50)) / 425), 830);
+  const both = indexMethods(mgAll, { opts: ['fire', 'halfdmg'] }).byId.get('mg_fire_bolt');
+  assert.deepEqual([both.in, both.xp, both.tools], [{ chaosrune: 1, airrune: 3 }, 285, ['staff_of_fire']]);
+});
+
+test('magic: a spell that only takes runes waits to be asked: a bank casts it as your pick, or in your order (v2.9)', () => {
+  // 42 of them, and the 23 that are cast on something
+  assert.deepEqual(mgAll.filter(m => !m.asked).map(m => m.group).reduce((a, g) => ({ ...a, [g]: (a[g] || 0) + 1 }), {}), { Utility: 8, Enchantment: 15 });
+  for (const m of mgAll) assert.equal(!!m.asked, Object.keys(m.in).every(k => /rune$/.test(k)), m.id);
+  // runes alone: the same ones cast dozens of spells, so the bank plan casts none by itself
+  const none = planGoal(mg, { ...MG, bank: RUNES });
+  assert.deepEqual([bankSteps(none), none.fromBank.xp10], [[], 0]);
+  // (every one of them could be cast, as its row says)
+  assert.deepEqual(['mg_fire_bolt', 'mg_camelot_teleport', 'mg_lowlvl_alchemy', 'mg_wind_bolt'].map(id => row(none, id).have), [1250, 1000, 1666, 3000]);
+  // the rest of the goal is the best combat spell at your level, and the bank's runes come off what it takes
+  assert.deepEqual([none.fill.id, none.fill.segments.map(s => s.runs), none.fill.buy], ['mg_water_blast', [6050], { deathrune: 6050, waterrune: 17_350, airrune: 8150 }]);
+  // picked, it gets the bank first: as far as the scarcest rune goes
+  const bolt = planGoal(mg, { ...MG, bank: RUNES, fillId: 'mg_fire_bolt' });
+  assert.deepEqual([bankSteps(bolt), bolt.fromBank.xp10, bolt.fromBank.endLevel], [[['mg_fire_bolt', 1250]], 281_250, 52]);
+  assert.deepEqual([bolt.fill.segments.map(s => [s.id, s.runs]), bolt.fill.buy], [[['mg_fire_bolt', 6413]], { chaosrune: 4663, firerune: 25_652, airrune: 12_989 }]);
+  // in your own order: cast from the bank, top first. The rest of the goal goes back to combat: the best spell
+  // at the level the bank leaves you (56), since most of the bank's XP was a teleport's
+  const tele = planGoal(mg, { ...MG, bank: RUNES, order: ['mg_camelot_teleport', 'mg_wind_bolt'] });
+  assert.deepEqual([bankSteps(tele), tele.fromBank.endLevel, tele.fill.id], [[['mg_camelot_teleport', 1000], ['mg_wind_bolt', 2500]], 56, 'mg_earth_blast']);
+  // (where a combat spell is most of it, the plan carries on with that)
+  assert.equal(planGoal(mg, { ...MG, bank: RUNES, order: ['mg_wind_bolt'] }).fill.id, 'mg_wind_bolt');
+  // one above your level waits for it: what gets you there comes off the bank's runes
+  const alch = planGoal(mg, { ...MG, bank: RUNES, fillId: 'mg_highlvl_alchemy' });
+  assert.deepEqual([bankSteps(alch), alch.fill.locked, alch.fill.segments.map(s => [s.id, s.runs, s.toLevel]), alch.fill.buy],
+    [[], true, [['mg_lowlvl_alchemy', 2107, 55], ['mg_highlvl_alchemy', 1648, undefined]], { naturerune: 1755, firerune: 9561 }]);
+  // unticked, it isn't cast even when asked
+  assert.deepEqual(bankSteps(planGoal(mg, { ...MG, bank: RUNES, order: ['mg_camelot_teleport'], excluded: new Set(['mg_camelot_teleport']) })), []);
+  // with nothing asked, planBank never tries one as the lead
+  assert.deepEqual(planBank(mg, { bank: RUNES, startXp10: MG.currentXp10 }).steps, []);
+  assert.deepEqual(planBank(mg, { bank: RUNES, startXp10: MG.currentXp10, prefer: 'mg_fire_bolt', own: true }).steps.map(s => [s.id, s.runs]), [['mg_fire_bolt', 1250]]);
+});
+
+test('magic: what you enchant, superheat or charge is planned from a bank by itself; iron ore goes to steel while there is coal (v2.9)', () => {
+  const bank = { ...RUNES, sapphire_ring: 300, iron_ore: 400, coal: 1000 };
+  const plan = planGoal(mg, { ...MG, bank });
+  // 400 ore and 1,000 coal are 400 steel bars; 100 cosmic runes enchant 100 of the rings
+  assert.deepEqual([bankSteps(plan), plan.fromBank.xp10], [[['mg_superheat_steel_bar', 400], ['mg_enchant_ring_of_recoil', 100]], 400 * 530 + 100 * 175]);
+  assert.deepEqual(plan.fromBank.steps.map(s => s.made), [{ steel_bar: 400 }, { ring_of_recoil: 100 }]);
+  assert.deepEqual(mg.byId.get('mg_superheat_iron_bar').after, ['mg_superheat_steel_bar']);
+  // with coal for 50, the other 350 are iron bars
+  assert.deepEqual(bankSteps(planGoal(mg, { ...MG, bank: { ...RUNES, iron_ore: 400, coal: 100 } })), [['mg_superheat_steel_bar', 50], ['mg_superheat_iron_bar', 350]]);
+  // and the spell you train with is cast with what the rest leaves: Superheat took 1,600 of the fire runes
+  const bolt = planGoal(mg, { ...MG, bank, fillId: 'mg_fire_bolt' });
+  assert.deepEqual(bankSteps(bolt), [['mg_fire_bolt', 1250], ['mg_enchant_ring_of_recoil', 100]], 'your pick first: no fire runes left to superheat with');
+  // an orb is charged where there are orbs
+  assert.deepEqual(bankSteps(planGoal(mg, { ...MG, currentXp10: xp10ForLevel(66), targetXp10: xp10ForLevel(70), bank: { stafforb: 20, airrune: 10_000, cosmicrune: 100 } })), [['mg_air_orb', 20]]);
+  // a row's worth: what comes out, less what goes in
+  const price = k => ({ sapphire_ring: 900, ring_of_recoil: 1500, waterrune: 20, cosmicrune: 150 })[k] ?? null;
+  assert.deepEqual(methodEconomics(mg, mg.byId.get('mg_enchant_ring_of_recoil'), price), { inputs: { sapphire_ring: 1, waterrune: 1, cosmicrune: 1 }, cost: 1070, value: 1500, missing: [], net: 430, gpPerXp: -430 / 17.5 });
+});
+
+test('magic: rounding up: runes never hold an enchant back, and a spell that only takes runes goes as far as its most plentiful one (v2.9)', () => {
+  assert.deepEqual([...minorOf('magic')].sort(), BANK_GROUPS.magic[0].items.slice().sort(), 'every rune');
+  const bank = { ...RUNES, sapphire_ring: 300, iron_ore: 400, coal: 1000 };
+  // your pick first, rounded up to the air runes (10,000 are 3,333 Fire Bolts): the chaos and fire runes it's short of are collected
+  const bolt = planGoal(mg, { ...MG, bank: RUNES, fillId: 'mg_fire_bolt', roundUp: true });
+  assert.deepEqual(bolt.fromBank.steps.map(s => [s.id, s.runs, s.collect]), [['mg_fire_bolt', 3333, { chaosrune: 333, firerune: 8332 }]]);
+  assert.deepEqual([bolt.fromBank.collect, bolt.fill.segments[0].runs, bolt.fill.buy], [{ chaosrune: 333, firerune: 8332 }, 4330, { chaosrune: 4330, firerune: 17_320, airrune: 12_989 }]);
+  // the bank as it is, for comparison, is in bankNow
+  assert.deepEqual(bolt.bankNow.steps.map(s => [s.id, s.runs]), [['mg_fire_bolt', 1250]]);
+  // what's cast on something: every ring is enchanted, the 200 cosmic runes short collected; spare runes call for no more rings
+  const rings = planGoal(mg, { ...MG, bank, roundUp: true });
+  assert.deepEqual(rings.fromBank.steps.map(s => [s.id, s.runs, !!s.rounded, s.collect]), [
+    ['mg_superheat_steel_bar', 400, false, undefined], ['mg_enchant_ring_of_recoil', 300, false, { cosmicrune: 200 }],
+    ['mg_superheat_steel_bar', 100, true, { iron_ore: 100 }],                    // (the 200 coal left over: one thing short)
+    ['mg_water_blast', 3333, true, { deathrune: 3333, waterrune: 9499 }]]);      // (not picked, the spell the plan carries on with joins in)
+  assert.ok(!rings.fromBank.steps.some(s => /enchant_(?!ring_of_recoil)/.test(s.id)), 'no emerald rings bought for the air runes');
+  // the table's Round up column says the same of each row on its own
+  assert.deepEqual(row(bolt, 'mg_fire_bolt').balance, { runs: 3333, collect: { chaosrune: 333, firerune: 8332 } });
+  assert.deepEqual(row(rings, 'mg_enchant_ring_of_recoil').balance, { runs: 300, collect: { cosmicrune: 200 } });
+  assert.equal(row(rings, 'mg_enchant_ring_of_dueling_8').balance, null, 'nothing to round up to');
+  // off, nothing changes for a spell that's asked for
+  assert.deepEqual(bankSteps(planGoal(mg, { ...MG, bank: RUNES, fillId: 'mg_fire_bolt' })), [['mg_fire_bolt', 1250]]);
+});
+
+test('magic: nothing picked, a plan finishes with the best combat spell; what waits for a quest, a staff or a target is yours to pick (v2.9)', () => {
+  const at = (level, more = {}) => planGoal(mg, { currentXp10: xp10ForLevel(level), targetXp10: xp10ForLevel(level) + 100, bank: {}, fillGroup: 'Combat', ...more });
+  const picks = [];
+  for (let l = 1; l <= 99; l++) { const id = at(l).fill.id; if (picks[picks.length - 1]?.[1] !== id) picks.push([l, id]); }
+  assert.deepEqual(picks, [[1, 'mg_wind_strike'], [5, 'mg_water_strike'], [9, 'mg_earth_strike'], [13, 'mg_fire_strike'], [17, 'mg_wind_bolt'], [23, 'mg_water_bolt'], [29, 'mg_earth_bolt'], [35, 'mg_fire_bolt'],
+    [41, 'mg_wind_blast'], [47, 'mg_water_blast'], [53, 'mg_earth_blast'], [59, 'mg_fire_blast'], [62, 'mg_wind_wave'], [65, 'mg_water_wave'], [70, 'mg_earth_wave'], [75, 'mg_fire_wave']]);
+  assert.deepEqual(mgAll.filter(m => m.aside).map(m => m.id), ['mg_crumble_undead', 'mg_iban_blast', 'mg_saradomin_strike', 'mg_claws_of_guthix', 'mg_flames_of_zamorak', 'mg_bones_to_bananas', 'mg_telekinetic_grab',
+    ...['bronze', 'iron', 'silver', 'steel', 'gold', 'mithril', 'adamantite', 'runite'].map(b => `mg_superheat_${b}_bar`), 'mg_charge', 'mg_water_orb', 'mg_earth_orb', 'mg_fire_orb', 'mg_air_orb',
+    'mg_ardougne_teleport', 'mg_watchtower_teleport', 'mg_trollheim_teleport']);
+  // picked, they're planned like any other
+  assert.deepEqual(at(60, { fillId: 'mg_crumble_undead' }).fill.segments.map(s => [s.id, s.runs]), [['mg_crumble_undead', 1]]);
+  // a spell above your level: the spells of its own kind on the way, the best at each level, and none that's set aside
+  const wave = planGoal(mg, { currentXp10: xp10ForLevel(50), targetXp10: xp10ForLevel(80), bank: {}, fillGroup: 'Combat', fillId: 'mg_fire_wave' });
+  assert.deepEqual(wave.fill.segments.map(s => [s.id, s.toLevel]), [['mg_water_blast', 53], ['mg_earth_blast', 59], ['mg_fire_blast', 62], ['mg_wind_wave', 65], ['mg_water_wave', 70], ['mg_earth_wave', 75], ['mg_fire_wave', undefined]]);
+  const glory = planGoal(mg, { currentXp10: xp10ForLevel(50), targetXp10: xp10ForLevel(70), bank: {}, fillGroup: 'Combat', fillId: 'mg_enchant_amulet_of_glory_4' });
+  assert.deepEqual(glory.fill.segments.map(s => [s.id, s.toLevel]), [['mg_enchant_ring_of_forging', 57], ['mg_enchant_ring_of_life', 68], ['mg_enchant_amulet_of_glory_4', undefined]], 'no orbs on the way');
+  const tele = planGoal(mg, { currentXp10: xp10ForLevel(40), targetXp10: xp10ForLevel(65), bank: {}, fillGroup: 'Combat', fillId: 'mg_trollheim_teleport' });
+  assert.deepEqual(tele.fill.segments.map(s => [s.id, s.toLevel]), [['mg_falador_teleport', 45], ['mg_camelot_teleport', 61], ['mg_trollheim_teleport', undefined]], 'no teleport that waits for a quest');
+});
+
+test('a method takes less when a choice says so, and one that takes nothing but loose supplies is held to them (v2.9)', () => {
+  // less: what a choice takes away; with in and add, in that order
+  const spell = { id: 'x', skill: 't', group: 'G', kind: 'xp', name: 'X', level: 1, xp: 100, in: { a: 2, b: 1 }, out: {}, asked: 1,
+    opt: { noA: { less: ['a'], tools: ['staff'] }, other: { in: { c: 1, a: 5 } }, plus: { add: { d: 1 } } } };
+  const takes = opts => indexMethods([spell], { opts }).byId.get('x').in;
+  assert.deepEqual([takes(['noA']), takes(['other', 'noA']), takes(['noA', 'plus']), takes(['noA', 'other'])], [{ b: 1 }, { c: 1 }, { b: 1, d: 1 }, { c: 1, a: 5 }]);
+  assert.deepEqual(indexMethods([spell], { opts: ['noA'] }).byId.get('x').tools, ['staff']);
+  assert.deepEqual(spell.in, { a: 2, b: 1 }, 'the data is left as it is');
+  // asked: only as your pick or in your order. An item spell beside it is made by itself
+  const ring = { id: 'r', skill: 't', group: 'G', kind: 'xp', name: 'R', level: 1, xp: 50, in: { ring: 1, a: 1 }, out: { done: 1 } };
+  const ix2 = indexMethods([spell, ring]);
+  const run = more => planBank(ix2, { bank: { a: 100, b: 10, ring: 30 }, startXp10: 0, ...more }).steps.map(s => [s.id, s.runs]);
+  assert.deepEqual([run({}), run({ prefer: 'x', own: true }), run({ order: ['x'] })], [[['r', 30]], [['x', 10], ['r', 30]], [['x', 10], ['r', 30]]]);
+  // rounding up with a and b as the cheap supplies: the ring is never held back by a, and x, which takes nothing else, goes by what's there of them
+  const minor = new Set(['a', 'b']);
+  const rounded = planGoal(ix2, { bank: { a: 100, b: 10, ring: 300 }, currentXp10: 0, targetXp10: 10_000_000, fillId: 'x', roundUp: true, minor });
+  assert.deepEqual(rounded.fromBank.steps.map(s => [s.id, s.runs, s.collect]), [['x', 50, { b: 40 }], ['r', 300, { a: 300 }]], 'x: 100 of a are 50, with 40 more b');
+  assert.ok(Number.isFinite(rounded.fromBank.xp10) && rounded.fromBank.xp10 === 50 * 100 + 300 * 50);
 });

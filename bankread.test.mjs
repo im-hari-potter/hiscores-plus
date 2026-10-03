@@ -16,7 +16,7 @@ const item = (merged, slug) => merged.items.find(i => i.slug === slug);
 const BANK = [
   { slot: 0, icon: 'lawrune', count: 3960 },
   { slot: 1, icon: 'naturerune', count: 1524 },
-  { slot: 2, icon: 'bloodrune', count: 3309 },                 // looks like a rune, isn't a planner item
+  { slot: 2, icon: '1doseprayerrestore', count: 3309 },        // looks like a potion of ours, isn't a planner item (up to v2.8 a blood rune stood here: Magic's now)
   { slot: 3, icon: 'blankrune', count: 150_420 },              // shown as 150K
   { slot: 4, icon: 'bronze_arrow_5', count: 5000 },            // the icon of a big stack of arrows
   { slot: 5, icon: 'unidentified_guam', count: 25 },
@@ -57,7 +57,7 @@ test('reads items, counts and lookalikes from a whole screenshot', () => {
   assert.equal(r.scroll, 0);
   const s = bySlot(r);
   assert.equal(s[0].entry.slug, 'lawrune'); assert.equal(s[0].count, 3960);
-  assert.equal(s[2].entry.other, 1, 'blood runes are something else');
+  assert.equal(s[2].entry.other, 1, 'a one-dose potion is something else');
   assert.equal(s[3].count, 150000); assert.equal(s[3].approx, true);
   assert.equal(s[4].entry.of, 'bronze_arrow'); assert.equal(s[4].count, 5000);
   assert.equal(s[7].entry.slug, 'unstrung_yew_longbow'); assert.equal(s[7].count, 1);
@@ -79,7 +79,7 @@ test('several screenshots: slots are the bank\'s own, so overlaps count once', (
   assert.equal(item(m, 'bronze_arrow').count, 5000);
   assert.equal(item(m, '3doseprayerrestore').count, 1536, 'from the scrolled one');
   assert.deepEqual([item(m, 'blankrune').min, item(m, 'blankrune').max], [150000, 150999]);
-  assert.equal(item(m, 'bloodrune'), undefined);
+  assert.equal(item(m, '1doseprayerrestore'), undefined);
   assert.equal(m.others, 1);
   assert.equal(m.complete, true, 'every slot up to the first empty one was seen');
   assert.equal(mergeReads([lower]).complete, false, 'the top of the bank wasn\'t');
@@ -116,7 +116,12 @@ test('every planner item but lantadyme has an icon to be read by', () => {
   const onlyNew = Object.keys(ITEMS).filter(k => !banked.has(k) && !ITEMS[k].set && !ITEMS[k].charge);
   assert.deepEqual(onlyNew.filter(k => ours.has(k)), [], 'none of them is read as a planner item');
   assert.ok(['silk', 'king_worm', 'lockpick', 'agilityarena_ticket', 'coins_25'].every(k => onlyNew.includes(k)));
-  assert.equal(BANK_ICONS.length, 921, 'the icons a bank is read by are the ones v2.7 had');
+  // (v2.9) Prayer's bones and the staves Magic's own spells are cast with are read now, with what looks like them:
+  // 929 icons, where v2.7 and v2.8 had 921. Death, blood and soul runes were lookalikes before, and are Magic's now.
+  assert.equal(BANK_ICONS.length, 929);
+  for (const k of ['bones', 'big_bones', 'dragon_bones', 'wolf_bones', 'bones_burnt', 'deathrune', 'bloodrune', 'soulrune']) assert.ok(BANK_ICONS.some(e => e.slug === k && !e.other && !e.of), k);
+  // (a staff a choice has you bring is named, never counted: not read)
+  for (const k of ['staff_of_air', 'staff_of_fire', 'lava_battlestaff']) assert.ok(ITEMS[k] && !ours.has(k), k);
   assert.ok(!BANK_ICONS.some(e => (e.of || e.slug) === 'coins' && !e.other), 'a stack of coins is not read as a planner item');
 });
 
