@@ -34,10 +34,7 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 ### Planner
 
 The planner works out what it takes to reach a goal, from your XP on the hiscores, what's in your bank
-and the prices you set. Any skill can have a goal. A skill with its full planner (marked with a dot
-when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woodcutting**,
-**Firemaking**, **Fletching**, **Crafting**, **Mining**, **Smithing**, **Fishing**, **Cooking**,
-**Thieving**, **Agility**, **Prayer** and **Magic**, with the other skills to follow.
+and the prices you set. Every skill has its planner: set a goal in any of them and open its plan.
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
@@ -45,6 +42,10 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
   - **Edit** (beside a goal's title) moves the goalpost: type a new target, or switch the goal to
     another kind (level, XP, rank, top %). Its plan, ticks, order and progress bar stay as they are.
+  - **Combat level**, under the skill picker: your combat level now, and what it is once your goals
+    in the combat skills are reached. **Combat calculator** opens the card Lookup has under Combat:
+    how the level is made up, what gets the next one, and a box for each combat skill. The boxes
+    start from your levels with your goals reached; type a level to try it, and reset to go back.
 
 #### How the calculators work
 
@@ -60,7 +61,9 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
   [Agility](https://2004.losthq.rs/?p=calculators&calc=agility),
   [Prayer](https://2004.losthq.rs/?p=calculators&calc=prayer),
   [Magic](https://2004.losthq.rs/?p=calculators&calc=magic)), each one checked against the
-  server; where the two differ, the server's number is used.
+  server; where the two differ, the server's number is used. The combat skills do the sum of its
+  [Combat XP](https://2004.losthq.rs/?p=calculators&calc=combat_xp) calculator, on the server's
+  own monsters.
 - How many you need = the XP still to go ÷ the XP each one gives, rounded up.
 - **Gross** is what something is worth, with nothing taken off. **Net** takes off what you pay for its
   supplies, so it can be negative: a loss.
@@ -246,23 +249,26 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
     - Shortcuts are as the server has them: the Falador wall gives 12.5 XP (the calculator says 0.5),
       and the Karamja stepping stones ask for no level (30). Added: the Yanille Agility dungeon's
       ledge, pipe and rubble, and the climbing rocks on the Watchtower.
-    - **The Agility Arena is one row, a ticket**, in place of the calculator's 14 obstacles and five
-      exchanges. A ticket is worth the XP on the way to it, plus what it's exchanged for:
-      - **On the way: 57.8 XP.** The arena is 25 platforms with an obstacle between every two next to
-        each other, and a ticket pillar on all but one. The server lights a pillar at random, and a
-        ticket takes the way from one pillar to the next. Read off the server's map, the shortest way
-        is 3.3 obstacles on average over every pair of pillars, worth 57.8 XP. (Below level 40 some
-        obstacles are shut and the way round is longer, so it's a little more.)
-      - **Exchanged: 240 to 320 XP**, by the batch: 240 for one ticket, 248 each for 10, 260 for 25,
-        280 for 100, 320 for 1,000.
+    - **The Agility Arena** is three rows, in place of the calculator's 14 obstacles and five
+      exchanges. A pillar gives a ticket, and the ticket is exchanged for XP; the rows are named for
+      the XP they count:
+      - **XP per pillar: 57.8 XP**, what getting to a pillar gives on the way. For when your tickets go
+        on herbs or another reward instead of XP. The arena is 25 platforms with an obstacle between
+        every two next to each other, and a ticket pillar on all but one. The server lights a pillar
+        at random, and a ticket takes the way from one pillar to the next. Read off the server's map,
+        the shortest way is 3.3 obstacles on average over every pair of pillars, worth 57.8 XP. (Below
+        level 40 some obstacles are shut and the way round is longer, so it's a little more.)
+      - **XP per ticket: 240 to 320 XP**, what a ticket is exchanged for, by the batch: 240 for one
+        ticket, 248 each for 10, 260 for 25, 280 for 100, 320 for 1,000. It's also the row for
+        tickets you've saved: type how many under Plan to make. They're exchanged with the ones still
+        to earn (950 saved: 50 more fill the 1,000).
+      - **Total XP**: the two together, a ticket earned and exchanged.
       - **Together**: a plan exchanges its tickets together, in the biggest batches they fill, and
         counts each at the average. 1,666 tickets are 1 × 1,000, 6 × 100, 2 × 25, 1 × 10 and 6 single
         ones: 303.1 XP each, 360.9 with the way there. A batch has to be whole, so a goal just past
         what 999 tickets give takes 1,000, and the plan says how much that is over.
       - **Tickets exchanged**, on the goal, pins a batch instead: every ticket at 320 XP, say, when
         you're saving up for 1,000 at a time, whatever the plan's size.
-      - **Arena ticket you already have** is for the ones you've saved: type how many under Plan to
-        make. They're exchanged with the ones still to earn (950 saved: 50 more fill the 1,000).
       - The count is exact: the fewest tickets that reach the goal once they're exchanged. The average
         is to a tenth of an XP. Saved tickets finished with something else, laps say, are rounded
         down, so the laps never come out short.
@@ -280,12 +286,27 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
     **Combat**, **Curses**, **Utility**, **Enchantment** and **Teleports**. Every row has its own
     XP, runes, bank use, prices and Net. Nothing is shared with the Crafting and Smithing rows that
     cast the same spells on the way: those are as they were.
-    - **Runes and your bank.** What a spell is cast on says which spell it's for, so rings to
-      enchant, ore to superheat and orbs to charge are planned from your bank by themselves. Runes
-      don't: the same ones cast dozens of spells. So a spell that only takes runes is cast from
-      your bank once it's the one you train with (click it in the table), or once you put it in
-      your order. Either way your bank's runes come off what the rest of the goal has you collect.
-    - With nothing picked, a plan finishes with the best combat spell at your level.
+    - **Your bank.** Magic stays a goal of its own, and counts every rune your bank holds:
+      - **What a spell is cast on** comes first: rings to enchant, ore to superheat and orbs to
+        charge are planned from your bank by themselves, and get the runes they share with other
+        spells before those do.
+      - **Made on the way.** A bank holds gold bars and gems, or molten glass, more often than the
+        rings and orbs themselves. So gems are cut, jewellery made (and strung), glass blown into
+        orbs and key halves turned into dragonstones on the way, where your Crafting level allows,
+        and your cosmic runes are counted for them: 300 gold bars, 250 sapphires and 250 cosmic and
+        water runes are 250 rings of recoil. That Crafting XP isn't part of the Magic goal; a line
+        under the plan says what it comes to. What the rest of the goal has you buy is still the
+        ring or the orb itself.
+      - **Law runes** go to teleports, and **mind, chaos, death and blood runes** to combat spells:
+        the best your Magic level and the runes beside them allow, and the next best once a rune
+        runs out (Fire Bolt while the fire runes last, then Wind Bolt). A level gained on the way
+        opens the next spell. As everywhere, it's the order that gets the most XP out of your bank.
+      - **Asked for**: a curse, alchemy and the odd ones wait until you train with one (click it in
+        the table) or put it in your order, since runes alone don't say you mean them. So do the
+        teleports that wait for a quest, and the spells cast with a staff of their own.
+      - Either way your bank's runes come off what the rest of the goal has you collect.
+    - With nothing picked, a plan finishes with the best combat spell at your level, or carries on
+      with the combat spell your bank's runes mostly went to.
     - **Staff**, on the goal: None, Air, Water, Earth, Fire or Lava. A staff stands in for its
       rune, so those runes are left out of what a spell takes and costs, and the plan says to
       bring it. Any staff of the element does (a staff of air, an air battlestaff, a mystic air
@@ -314,8 +335,10 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
       the Fountain of Heroes charges it for nothing.
     - **Round up my supplies**: runes never hold back what you enchant, superheat or charge. With
       300 sapphire rings and 100 cosmic runes all 300 are enchanted, and the 200 cosmic runes
-      you're short of go on the list to collect. Spare runes never call for more rings. The spell
-      you train with is rounded up to the rune you have most of.
+      you're short of go on the list to collect. Spare runes never call for more rings, nor for
+      more runes: a spell your bank casts by itself goes as far as its runes and no further. The
+      spell you train with is rounded up to the rune you have most of. Gold bars with too few
+      gems round up to the bars, with the gems to collect.
     - Where the calculator and the server differ, the server is followed: Crumble Undead gives
       49 XP (the calculator says 24.5), Enfeeble 83 (89), Entangle 89 (90), Stun 90 (80), Falador
       Teleport 48 (47) and Charge Water Orb 66 (56). Trollheim Teleport (level 61, 68 XP) is
@@ -323,6 +346,46 @@ when you add a goal) also gets a plan: so far **Herblore**, **Runecraft**, **Woo
     - Not what a plan picks by itself (click one to train with it): Crumble Undead (the undead
       only), Iban Blast and the god spells (a staff of their own), the teleports that wait for a
       quest, the superheat and orb rows, Bones to Bananas, Telekinetic Grab and Charge.
+  - **Attack, Strength, Defence, Hitpoints and Ranged** are trained on monsters: a row is a
+    monster, and a plan counts kills. They never use your bank or any prices: food, gear,
+    ammunition and drops aren't counted.
+    - **A kill is the monster's hitpoints in damage**, however many hits it takes (a hit can't do
+      more damage than the monster has left). Every point of damage gives XP by your style, the
+      server's own sum:
+      - 4 XP to the skill the style trains: Accurate (Attack), Aggressive (Strength), Defensive
+        (Defence), Accurate or Rapid (Ranged).
+      - **Controlled**: 1.33 XP each to Attack, Strength and Defence. **Longrange**: 2 XP each to
+        Ranged and Defence.
+      - And 1.33 Hitpoints XP whatever the style. A Hitpoints goal counts that.
+      - **Style**, on the goal, picks which. A moss giant (60 hitpoints) is 240 Attack XP on
+        Accurate, 79.8 on Controlled.
+      - LostHQ's calculator counts Hitpoints, and each skill of Controlled, as a third of the 4
+        (1.333); the server gives 1.33, and rounds each hit's XP down to a tenth, so many small
+        hits come to a little less than a row says.
+    - **The monsters** are the server's: every NPC with an Attack option and hitpoints that's in
+      the world, 315 of them. A row is a name, a combat level and hitpoints; where two share a name
+      and a level, the hitpoints say which.
+      - **Search** by part of a name, or by a combat level (`giant`, `skeleton 22`). It looks
+        through every monster, whatever band of levels is shown.
+      - Or browse: the bands of combat level above the table (Level 1–10 … Level 111 and up, All),
+        and the same list under **Train with**. Click a row to train on it.
+      - Hover over a row for what else a kill gives, what the monster leaves to bury, how many of
+        it the world has, and any catch (marked \*): a citizen of Canifis turns into a werewolf
+        unless you wield a Wolfbane dagger, a ghast has to be made visible first, a quest's foe can
+        only be attacked at some point of its quest, a shade is a shadow until it's attacked.
+      - Left out: random events, Tutorial Island, and what only a quest's script brings in for one
+        fight. The Mage Arena's battle mages are a row of Hitpoints alone: only Magic works there.
+      - Where LostHQ's data and the server differ, the server is followed: two skeletons whose
+        level and hitpoints are the other way round.
+    - **With no monster picked**, a plan trains on the one that gives the most XP a kill among
+      those no more than half your combat level: rock crabs for most of the way, then white
+      knights, moss giants and ice giants. Never one there are fewer than five of (a quest's foe,
+      a boss), or one with a catch.
+    - **Also from these kills**, under each part of the plan: the Hitpoints XP on the way (and
+      the other skills', on Controlled or Longrange), with the level it takes you to, and the
+      Prayer XP of the bones they leave if you bury them.
+    - The Black Knight Titan gives 1 XP a point of damage whatever the style, and Chronozon 2.5%
+      of the usual: the server's own rules, and their rows say so.
 - Click an item a plan says to collect, buy or bring to open its page on the market.
 
 #### Check your prices first
@@ -357,7 +420,8 @@ potion and it gets the snape grass first.
 #### Plan a mix (Use my bank off)
 
 With your bank left out, you can plan your own path to the goal: type how many of each you'll make in
-the table's **Plan to make** column (1,000 prayer potions, then 2,000 super attacks, say).
+the table's **Plan to make** column (1,000 prayer potions, then 2,000 super attacks, say). For a
+combat skill it's **Plan to kill**: 500 fire giants, then the rest on moss giants.
 
 - **Your mix** shows what that comes to: the XP and the level it gets you to, what buying it all costs,
   what it makes is worth, and the net. It's made lowest level first, and anything that needs a level
@@ -390,7 +454,8 @@ the table's **Plan to make** column (1,000 prayer potions, then 2,000 super atta
 | **Total net gp toward goal** | Gross from banked supplies + net after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy. Net after rounding up my supplies isn't part of it, since rounding up would count those supplies twice | not shown |
 
 Sort the table by level, XP each, cheapest XP, or (with your bank in use) **Total net**, most gp toward
-your goal first. Agility has nothing to price, so its table has no Net/item and gp/XP.
+your goal first. Agility and the combat skills have nothing to price, so their tables have no Net/item
+and gp/XP. A combat skill's table shows each monster's combat level (**Lvl**) and hitpoints (**HP**).
 
 For example, Herblore 74 → 78 with Super attack: with the bank off, **4,328** to the goal. With it on,
 **2,305** still needed after everything the bank makes, and the supplies those need. And with
@@ -544,8 +609,8 @@ restore.
 - The numbers are the game's own (Lost City's server content), so a few may surprise you: achey tree
   logs give no Firemaking XP in this version, any axe can be used at any Woodcutting level, a
   steel bar makes 2 nails, a cooked chompy is 14 Cooking XP, a gnome's pocket always has a king worm
-  in it, Falador's crumbling wall gives 12.5 Agility XP, and Crumble Undead gives 49 Magic XP a
-  cast.
+  in it, Falador's crumbling wall gives 12.5 Agility XP, Crumble Undead gives 49 Magic XP a
+  cast, and a point of damage is 1.33 Hitpoints XP, not a third of 4.
 - A number you're typing (an amount to make, a price, a bank amount) is left alone until you enter
   it with Enter, Tab or a click elsewhere: prices that arrive in the meantime show once it's in.
 - After an update, press Ctrl+R once if something looks off: a browser can hold on to the last
@@ -574,6 +639,11 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
     between two ticket pillars is worked out from it.
   - Spell icons are the client's own, from Content's `sprites/magicon.png` and `magicon2.png`:
     the spellbook (`magic.if`) says which is whose. They sit after the items on `items.png`.
+  - Monsters are read from Content's NPC configs. Which are in the world comes from its maps
+    (`maps/*.jm2`) and from the scripts that turn one NPC into another; the XP of a point of
+    damage from `give_combat_experience`. What a monster leaves to bury is LostHQ's drop data
+    (`js/npcdb/npc_data.json`), or the server's own default. `gamedata.js` lists each monster once
+    (`MONSTERS`) and makes the five skills' rows from that list.
 - Planner files:
   - `planner.js` holds the maths, all in tenths of XP like the game.
   - `planner-ui.js` builds the Goals, Bank and Prices views.
@@ -589,8 +659,9 @@ Plain HTML, CSS and JavaScript, with no build step for the site.
 - Hiscores come from the Lost City hiscores API.
 - Levels and XP for the planner, spell icons, and the bank layout and font the screenshot reader
   uses, come from Lost City's server content and client (MIT).
-- Item names and icons, and the rows of the Crafting, Mining, Smithing, Fishing, Cooking, Thieving,
-  Agility, Prayer and Magic calculators, come from [LostHQ](https://2004.losthq.rs) (GPL-3.0).
+- Item names and icons, the rows of the Crafting, Mining, Smithing, Fishing, Cooking, Thieving,
+  Agility, Prayer and Magic calculators, and what monsters drop, come from
+  [LostHQ](https://2004.losthq.rs) (GPL-3.0).
 - Prices come from [markets.lostcity.rs](https://markets.lostcity.rs). How they're read follows
   LostKit's own price check.
 - Skill icons and RuneScape fonts come from [LostKit](https://github.com/LostHQ/LostKit-Electron)

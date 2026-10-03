@@ -4,7 +4,7 @@
 // per account so alts can have their own. The maths lives in planner.js; this
 // file only turns it into LostKit-style panels.
 
-import { SKILLS, SKILL_BY_KEY, SKILL_IDS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels } from './skills.js';
+import { SKILLS, SKILL_BY_KEY, SKILL_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels, combatFromProfile, combatLevel } from './skills.js';
 import { ITEMS, METHODS, BANK_GROUPS, SALE_GROUPS, PLACES, CHOICES, ICONS_PER_ROW, ICON_SIZE, ICON_SHEET, UNID_HERBS } from './gamedata.js';
 import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, minorLast, castsIn, xpEach, chanceUnits, sureLevel, averaged, WHOLE, MAX_XP10 } from './planner.js';
 import { store, players } from './store.js';
@@ -39,16 +39,25 @@ const PLACED = {};
 // ticket counts at: planner.js, averaged). It changes with the goal, so only
 // the last few of those are kept.
 const AVERAGED = new Map();
-function indexFor(goal, set = null) {
+// A row that takes a level in another skill is left out while the account is
+// below it. Magic: craft, the Crafting level of the jewellery and orbs a bank
+// plan makes on the way. GATE: per skill, the highest level any row asks for
+// (from there on nothing changes).
+const GATE = {};
+for (const m of METHODS) if (m.craft) GATE[m.skill] = Math.max(GATE[m.skill] || 0, m.craft);
+// craft: the account's Crafting level, where the skill has such rows.
+function indexFor(goal, set = null, craft = null) {
   const place = placeOf(goal);
   const at = place && place !== PLACES[goal.skill].options[0] ? place.id : null;
   const opts = choicesInUse(goal);
-  if (!at && !opts.length && !set) return INDEX[goal.skill];
-  const key = `${goal.skill}|${at || ''}|${opts.join('+')}`;
-  if (!set) return (PLACED[key] ||= indexMethods(METHODS.filter(m => m.skill === goal.skill), { at, opts }));
+  const gate = GATE[goal.skill] ? Math.min(craft ?? 1, GATE[goal.skill]) : null;
+  if (!at && !opts.length && !set && gate == null) return INDEX[goal.skill];
+  const rows = () => METHODS.filter(m => m.skill === goal.skill && !(gate != null && m.craft > gate));
+  const key = `${goal.skill}|${at || ''}|${opts.join('+')}${gate != null ? `|c${gate}` : ''}`;
+  if (!set) return (PLACED[key] ||= indexMethods(rows(), { at, opts }));
   const mine = `${key}|${JSON.stringify(set)}`;
   if (!AVERAGED.has(mine)) {
-    AVERAGED.set(mine, indexMethods(METHODS.filter(m => m.skill === goal.skill), { at, opts, set }));
+    AVERAGED.set(mine, indexMethods(rows(), { at, opts, set }));
     if (AVERAGED.size > 24) AVERAGED.delete(AVERAGED.keys().next().value);
   }
   return AVERAGED.get(mine);
@@ -84,9 +93,19 @@ const SKILL_TEXT = {
   agility: { what: 'Course or obstacle', each: 'lap', noBank: 'Agility takes nothing and makes nothing to sell, so this plan doesn\'t use your bank or any prices.' },
   prayer: { what: 'Bones', each: 'bone', bankHint: 'bones' },
   // (idle: what an empty bank plan says besides, where some rows wait to be asked: a spell that only takes runes)
-  magic: { what: 'Spell', each: 'cast', bankHint: 'runes, and what you enchant, superheat or charge',
-    idle: 'Runes alone don\'t say which spell they\'re for: click a spell in the table below to train with it, and your bank\'s runes go to it first.' },
+  magic: { what: 'Spell', each: 'cast', bankHint: 'runes, and what you enchant, superheat or charge (or what those are made of)',
+    idle: 'Your bank\'s runes go to the best teleport and combat spell they allow by themselves. A curse, alchemy and the like wait to be asked: click a spell in the table below to train with it, and your bank\'s runes go to it first.' },
+  // (kills: a skill trained on monsters. Its rows are counted in kills, can be searched by name, and say what else a kill gives)
+  attack: killsText('Food, gear and drops'),
+  strength: killsText('Food, gear and drops'),
+  defence: killsText('Food, gear, ammunition and drops'),
+  hitpoints: killsText('Food, gear, ammunition, runes and drops'),
+  ranged: killsText('Ammunition, food, gear and drops'),
 };
+function killsText(left) {
+  return { what: 'Monster', each: 'kill', kills: true,
+    noBank: `A kill counts as the monster's hitpoints in damage, however many hits that takes. ${left} aren't counted, so this plan doesn't use your bank or any prices.` };
+}
 const textFor = key => SKILL_TEXT[key] || { what: 'Make', each: 'action', bankHint: 'the items it uses' };
 
 // Cheap supplies that shouldn't hold a plan back (still shown as needed).
@@ -109,7 +128,7 @@ for (const m of METHODS) {
 for (const m of METHODS) if (m.skill === 'magic') for (const k of Object.keys(m.in)) if (/rune$/.test(k)) (SPELL_RUNES.magic ||= new Set()).add(k);
 // What an item is finished with, rather than made of: the wool an amulet is
 // strung with. And what's worn while you work: a ring of forging.
-const FINISHING = { crafting: ['ball_of_wool'], smithing: ['ring_of_forging'] };
+const FINISHING = { crafting: ['ball_of_wool'], smithing: ['ring_of_forging'], magic: ['ball_of_wool'] };
 // Round up my supplies never lets these hold it back, and never rounds up to
 // them: the supplies above (bought as you go or not), those runes and the
 // finishing. Herbs with no vials left are still made into potions, emeralds
@@ -118,7 +137,7 @@ const FINISHING = { crafting: ['ball_of_wool'], smithing: ['ring_of_forging'] };
 // of wool don't call for 60 more dragonstones.
 export const minorOf = key => new Set([...(DEFAULT_ASSUME[key] || []), ...(SPELL_RUNES[key] || []), ...(FINISHING[key] || [])]);
 // "Vials of water never hold it back", for the tooltip
-const MINOR_TEXT = { herblore: 'Vials of water never hold', crafting: 'Thread, runes and balls of wool never hold', smithing: 'Rings of forging and runes never hold', magic: 'Runes never hold' };
+const MINOR_TEXT = { herblore: 'Vials of water never hold', crafting: 'Thread, runes and balls of wool never hold', smithing: 'Rings of forging and runes never hold', magic: 'Runes and balls of wool never hold' };
 // Read from a screenshot but not added to your bank: tools (a plan names them,
 // it never counts them), and thread.
 const TOOLS = new Set(METHODS.flatMap(m => m.tools || []));
@@ -140,6 +159,11 @@ const LIKELIER_TWIN = { ashes: 'soda_ash', raw_ugthanki_meat: 'raw_beef', cooked
 // For Magic a combat spell: a curse is more XP a cast, and can't be cast twice
 // on the same target.
 const DEFAULT_FILL_GROUP = { fletching: 'Bows', mining: 'Rocks', cooking: 'Fish', thieving: 'NPCs', agility: 'Courses', magic: 'Combat' };
+// What burying a bone gives (Prayer's rows), for the bones a plan's kills leave.
+const BURY_XP = Object.fromEntries(METHODS.filter(m => m.skill === 'prayer').map(m => [Object.keys(m.in)[0], m.xp]));
+// The monster search: words of a name, and a number for a combat level ("giant", "skeleton 22").
+export const searchTerms = text => String(text || '').toLowerCase().split(/\s+/).filter(Boolean);
+export const searchHit = (name, cb, terms) => terms.every(t => (/^\d+$/.test(t) ? String(cb) === t : name.includes(t)));
 // Every bank item in the order of the skill tabs and their groups.
 const SKILL_ORDER = new Map([...new Set(Object.values(BANK_GROUPS).flatMap(gs => gs.flatMap(g => g.items)))].map((s, i) => [s, i]));
 const TARGET_TTL = 30 * 60e3;          // re-check who holds a rank after this long
@@ -222,7 +246,7 @@ const idb = (() => {
 })();
 
 export function createPlanner(ctx) {
-  const { api, totals, prices, esc, fmt, ago, iconImg, showMsg, errorText } = ctx;
+  const { api, totals, prices, esc, fmt, ago, iconImg, showMsg, errorText, combatCard } = ctx;
   const $ = id => document.getElementById(id);
   // Item icons come from the sheet the data names, stamp and all: where an icon
   // sits is in ITEMS, so the two must be from the same release. (A browser that
@@ -252,13 +276,15 @@ export function createPlanner(ctx) {
     tab: null,
     more: new Set(),                          // goals showing what else their bank could make
     editing: null,                            // the goal being changed: { id, type, draft, problem }
+    search: {},                               // goal id -> what's typed in its monster search
+    combat: { open: !!ui.combatOpen, typed: {} },   // the combat card: its calculator shown, and levels typed into it
   };
   // The All view's items can be dragged into your own order (not by their
   // amount box, which is for typing). Set up in wire().
   let bankDrag = null;
   // So can the lines under From your bank: the top one gets your bank first.
   let stepDrag = null;
-  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only, bankSkill: S.bankSkill, bankView: S.bankView, allSort: S.allSort, tgroup: S.tgroup });
+  const saveUi = () => store.set('planUi', { newSkill: S.newGoal.skill, newType: S.newGoal.type, open: [...S.open], sort: S.sort, show: S.show, only: S.only, bankSkill: S.bankSkill, bankView: S.bankView, allSort: S.allSort, tgroup: S.tgroup, combatOpen: S.combat.open });
   // The items of one skill's bank tab, or of the whole bank ('all'), that you have.
   function bankSubset(items, view) {
     const list = view === 'all' ? Object.keys(items) : [...new Set((BANK_GROUPS[view] || []).flatMap(g => g.items))];
@@ -313,6 +339,7 @@ export function createPlanner(ctx) {
     S.account = toDisplayName(name);
     store.set('plan.account', S.account);
     S.profile = null;
+    S.combat.typed = {};
     showMsg('goals-msg', '');
     loadProfile();
     return true;
@@ -351,6 +378,83 @@ export function createPlanner(ctx) {
     const b = boundUnrankedLevels(levels, p.stats[0]?.level)[skillKey];
     const level = b ? b.min : 1;
     return { xp10: xp10ForLevel(level), level, rank: null, ranked: false, range: b };
+  }
+
+  // ── Combat level ────────────────────────────────────────────────────────
+  // The card Lookup has under its Combat filter, here for the account you plan
+  // for: your combat level, and what it is once your goals are reached. Its
+  // calculator starts from your levels with your goals reached; a level you
+  // type into it stays until you reset it.
+  //
+  // The account's combat level: real is what the hiscores say (a range while a
+  // combat skill is below 15: low has the lowest levels those can be), goal is
+  // those levels with every goal in a combat skill reached.
+  function combatNow() {
+    const p = S.profile;
+    if (!p) return null;
+    const levels = {};
+    for (const s of SKILLS) if (s.id && p.stats[s.id]) levels[s.key] = p.stats[s.id].level;
+    const real = combatFromProfile(levels, p.stats[0]?.level);
+    const goal = { ...real.low };
+    for (const g of goals()) {
+      if (!COMBAT_KEYS.includes(g.skill)) continue;
+      // (a rank or top % goal: the XP of whoever holds that rank, once it's been looked up)
+      const xp10 = g.type === 'level' || g.type === 'xp' ? goalTargetXp10(g) : g.target?.xp10;
+      if (xp10 != null) goal[g.skill] = Math.max(goal[g.skill], levelForXp10(xp10));
+    }
+    return { real, goal };
+  }
+  function combatLevels() {
+    const c = combatNow();
+    return c ? { ...c.goal, ...S.combat.typed } : null;
+  }
+  function combatHead(c, L) {
+    const { real, goal } = c;
+    const name = esc(S.profile.name);
+    const now = combatCard.text(real), level = combatLevel(L);
+    const from = n => `${n - real.min >= 0 ? '+' : ''}${n - real.min} from ${name}'s ${now}`;
+    const typed = COMBAT_KEYS.some(k => L[k] !== goal[k]);
+    const planned = COMBAT_KEYS.some(k => goal[k] !== real.low[k]);
+    const button = `<span class="grow"></span><button type="button" class="btn small" data-act="combat-toggle" aria-expanded="${S.combat.open}">${S.combat.open ? 'Hide calculator' : 'Combat calculator'}</button>`;
+    // Shut: now, and with your goals. Open: the level its boxes come to.
+    if (!S.combat.open) {
+      const after = combatLevel(goal);
+      return `Combat level <span class="big">${now}</span>${planned ? ` <span class="cc-style">${after > real.min ? `→ <b>${after}</b> once your goals are reached` : 'and the same once your goals are reached'}</span>` : ''}${button}`;
+    }
+    if (typed) return `What-if combat level <span class="big">${level}</span> <span class="cc-style">${from(level)}</span>${button}`;
+    if (planned) return `Combat level once your goals are reached <span class="big">${level}</span> <span class="cc-style">${from(level)}</span>${button}`;
+    return `Combat level <span class="big">${now}</span>${button}`;
+  }
+  function renderCombat() {
+    const el = $('goals-combat');
+    if (!el) return;
+    const c = S.account ? combatNow() : null;
+    if (!c) { el.innerHTML = ''; return; }
+    const L = combatLevels();
+    if (!S.combat.open) { el.innerHTML = `<div class="card combat-card shut"><div class="cc-head">${iconImg(combatCard.icon)} ${combatHead(c, L)}</div></div>`; return; }
+    const planned = COMBAT_KEYS.filter(k => c.goal[k] !== c.real.low[k]).map(k => SKILL_BY_KEY.get(k).name);
+    const typed = Object.keys(S.combat.typed).length > 0;
+    el.innerHTML = `<div class="card combat-card">
+      <div id="gc-live"></div>
+      <div class="calc">
+        <div class="c-faint small-note">Combat calculator: it starts from ${esc(S.profile.name)}'s levels${planned.length ? `, with your goals reached (${esc(planned.join(', '))})` : ''}. Type a level to see what it does.</div>
+        ${combatCard.grid(L, 'gcalc')}
+        <div class="bar"><button type="button" class="btn small" data-act="combat-reset"${typed ? '' : ' disabled'}>${planned.length ? 'Reset to your goals' : `Reset to ${esc(S.profile.name)}`}</button></div>
+      </div>
+    </div>`;
+    renderCombatLive();
+  }
+  // (the part that follows the levels: redrawn alone as you type one)
+  function renderCombatLive() {
+    const el = $('gc-live');
+    const c = el && combatNow();
+    if (!c) return;
+    const L = combatLevels();
+    const unknown = c.real.min !== c.real.max
+      ? `<div class="cc-line">Some combat skills are below 15, so they're not on the hiscores. Their lowest possible levels are used below, and you can change them in the calculator.</div>` : '';
+    el.innerHTML = combatCard.live(L, combatHead(c, L), unknown);
+    const reset = document.querySelector('#goals-combat [data-act="combat-reset"]');
+    if (reset) reset.disabled = !Object.keys(S.combat.typed).length;
   }
 
   // ── Goal targets ────────────────────────────────────────────────────────
@@ -392,16 +496,30 @@ export function createPlanner(ctx) {
     }
   }
 
+  // With no monster picked, a plan trains on the one that gives the most XP a
+  // kill among those no more than half your combat level: what you can fight
+  // without much trouble. Never one that's set aside (a quest's foe, a boss,
+  // anything with a catch).
+  function usualMonster(ix) {
+    const cb = combatNow()?.real.min;
+    if (cb == null) return null;
+    let best = null;
+    for (const m of ix.train) if (!m.aside && m.cb <= cb / 2 && (!best || m.xp > best.xp)) best = m;
+    return best || ix.train.find(m => !m.aside) || null;
+  }
+
   function planFor(goal) {
     const cur = currentOf(goal.skill);
     const target = cur ? targetOf(goal, cur) : null;
-    const base = INDEX[goal.skill] && indexFor(goal);
+    // (what's made on the way: only what the account's Crafting level allows)
+    const craft = GATE[goal.skill] ? currentOf('crafting')?.level ?? 1 : null;
+    const base = INDEX[goal.skill] && indexFor(goal, null, craft);
     if (!cur || !target || target.pending || !base) return { cur, target, ix: base };
     const targetXp10 = target.reached ? cur.xp10 : target.xp10;
     // Tickets handed in later (the Agility Arena's): this plan's are handed in
     // together, and each counts at their average. pool says what that came to.
     const av = base.exchanges ? averaged(base, { currentXp10: cur.xp10, targetXp10, mix: goal.mix || null, fillId: goal.fillId }) : null;
-    const ix = av ? indexFor(goal, av.set) : base;
+    const ix = av ? indexFor(goal, av.set, craft) : base;
     const plan = planGoal(ix, {
       bank: bank().items,
       currentXp10: cur.xp10,
@@ -409,7 +527,8 @@ export function createPlanner(ctx) {
       excluded: new Set(goal.excluded || []),
       unlimited: new Set(goal.assume ?? DEFAULT_ASSUME[goal.skill] ?? []),
       useBank: goal.useBank !== false && usesBank(goal.skill),
-      fillId: goal.fillId,
+      // (a monster: yours, or with none picked (or one that's no longer in the data) the usual one for your combat level)
+      fillId: textFor(goal.skill).kills && !ix.byId.has(goal.fillId) ? usualMonster(ix)?.id : goal.fillId,
       fillGroup: DEFAULT_FILL_GROUP[goal.skill] || null,
       priceOf: prices.priceOf,
       mix: goal.mix || null,
@@ -555,14 +674,12 @@ export function createPlanner(ctx) {
     if (stepDrag?.hold()) return;          // don't pull a plan's lines out from under a drag
     renderAccount('plan-account', 'goals');
     renderNewGoal();
+    renderCombat();
     const list = goals();
     const box = $('goals-list');
     if (!S.account) { box.innerHTML = ''; return; }
     if (!list.length) {
-      const names = Object.keys(INDEX).map(k => SKILL_BY_KEY.get(k).name);
-      const which = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
-      box.innerHTML = `<div class="empty">No goals yet. Pick a skill above and set a level, XP, rank or top % to reach.<br>
-        ${esc(which)} ${names.length > 1 ? 'have' : 'has'} the full planner (marked with a dot); more skills follow.</div>`;
+      box.innerHTML = `<div class="empty">No goals yet. Pick a skill above and set a level, XP, rank or top % to reach.</div>`;
       return;
     }
     // A goal set before your XP had loaded starts counting from the first XP seen.
@@ -602,6 +719,7 @@ export function createPlanner(ctx) {
       : `<div class="empty">No goals match. <button type="button" class="linkish" data-act="show-all-goals">Show all goals</button></div>`);
     const again = armed && [...box.querySelectorAll('[data-goal]')].find(c => c.dataset.goal === armed)?.querySelector('[data-act="remove-goal"]');
     if (again) arm(again);
+    for (const card of box.querySelectorAll('[data-goal]')) applySearch(card);
     const keys = [...new Set(list.map(g => g.skill).filter(hasCalculator))];
     if (keys.length && S.profile) wantPrices(keys);
   }
@@ -643,7 +761,7 @@ export function createPlanner(ctx) {
     el.innerHTML = `<div class="card goal-new">
       <div class="skill-picker">${SKILL_IDS.map(id => {
         const s = SKILLS.find(x => x.id === id);
-        return `<button type="button" class="skill-btn${s.key === g.skill ? ' on' : ''}" data-nskill="${s.key}" title="${esc(s.name)}${hasCalculator(s.key) ? ' (planner)' : ''}" aria-label="${esc(s.name)}" aria-pressed="${s.key === g.skill}">${iconImg(s)}${hasCalculator(s.key) ? '<span class="calc-dot"></span>' : ''}</button>`;
+        return `<button type="button" class="skill-btn${s.key === g.skill ? ' on' : ''}" data-nskill="${s.key}" title="${esc(s.name)}" aria-label="${esc(s.name)}" aria-pressed="${s.key === g.skill}">${iconImg(s)}</button>`;
       }).join('')}</div>
       <form class="bar wrap" data-form="goal" autocomplete="off">
         <span class="goal-skill">${iconImg(skill)} ${esc(skill.name)}</span>
@@ -779,7 +897,7 @@ export function createPlanner(ctx) {
     const err = S.goalErr[goal.id] ? `<div class="msg error">${S.goalErr[goal.id]}</div>` : '';
     const toggle = ix
       ? `<button type="button" class="btn small" data-act="toggle-plan" aria-expanded="${open}">${open ? 'Hide plan' : 'Plan'}</button>`
-      : `<span class="c-faint small-note">The ${esc(skill.name)} calculator comes in a later update. This goal tracks your progress meanwhile.</span>`;
+      : '';
     const editing = S.editing?.id === goal.id;
     return `<div class="card goal" data-goal="${goal.id}">
       <div class="goal-head">${iconImg(skill)} <span class="goal-name">${esc(skill.name)}</span>
@@ -897,6 +1015,51 @@ export function createPlanner(ctx) {
     return `<div class="tip magic" title="${title}"><span>Magic XP on the way: <b class="c-xp">+${xpText(mg.xp10)} XP</b> from ${casts.join(', ')}</span></div>`;
   }
 
+  // The Crafting XP of what a Magic plan makes on the way (the rings it then
+  // enchants, the orbs it charges), as a tip under it: said, never counted.
+  // counts: [[method id, how many]].
+  function craftTip(ix, counts) {
+    const by = new Map();
+    for (const [id, n] of counts) {
+      const m = ix.byId.get(id);
+      if (m?.gives?.crafting && m.hp == null && n > 0) by.set(m, (by.get(m) || 0) + n);
+    }
+    if (!by.size) return '';
+    const xp10 = [...by].reduce((a, [m, n]) => a + m.gives.crafting * n, 0);
+    const cur = currentOf('crafting');
+    const after = cur?.ranked ? levelForXp10(Math.min(MAX_XP10, cur.xp10 + xp10)) : 0;
+    const title = `Not part of the XP above: it's what making these on the way gives your Crafting.${after > (cur?.level || 0) ? ` On its own it takes your Crafting from ${cur.level} to ${after}.` : ''}`;
+    // (one span: a tip lays its children out in a row, which would set the commas apart)
+    return `<div class="tip crafting" title="${esc(title)}"><span>Crafting XP on the way: <b class="c-xp">+${xpText(xp10)} XP</b> from ${[...by].map(([m, n]) => `${fmt(n)} × ${esc(m.name)}`).join(', ')}</span></div>`;
+  }
+
+  // What else a plan's kills give, as a tip under it: the XP that goes to the
+  // other skills of the style and to Hitpoints (every point of damage gives
+  // those too), and the bones they leave. counts: [[method id, how many]].
+  function killsTip(ix, counts) {
+    const also = {}, bones = {};
+    for (const [id, n] of counts) {
+      const m = ix.byId.get(id);
+      if (!m || m.hp == null || !(n > 0)) continue;
+      for (const [k, x] of Object.entries(m.gives || {})) also[k] = (also[k] || 0) + x * n;
+      if (m.bones) bones[m.bones] = (bones[m.bones] || 0) + n;
+    }
+    const list = parts => (parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0] || '');
+    const xp = Object.entries(also).filter(([, x]) => x > 0).map(([k, x]) => {
+      const cur = currentOf(k);
+      const to = cur?.ranked ? levelForXp10(Math.min(MAX_XP10, cur.xp10 + x)) : 0;
+      return `<b class="c-xp">+${xpText(x)}</b> ${esc(SKILL_BY_KEY.get(k).name)} XP${to > (cur?.level || 0) ? ` <span class="c-faint">(level ${cur.level} → ${to})</span>` : ''}`;
+    });
+    const kinds = Object.entries(bones);
+    const buried = kinds.reduce((a, [item, n]) => a + n * (BURY_XP[item] || 0), 0);
+    const left = !kinds.length ? '' : `${xp.length ? 'They' : 'These kills'} leave ${list(kinds.map(([item, n]) => `<b>${fmt(n)}</b> ${itemName(item)}`))}: <b class="c-xp">+${xpText(buried)}</b> Prayer XP if you bury them.`;
+    if (!xp.length && !left) return '';
+    const title = 'Not part of the XP above. Every point of damage gives 1.33 Hitpoints XP as well, whatever your style; Controlled and Longrange share theirs between skills. '
+      + 'The server rounds each hit\'s XP down to a tenth, so at 1.33 a point many small hits come to a little less.';
+    // (one span: a tip lays its children out in a row, which would set the commas apart)
+    return `<div class="tip kills" title="${esc(title)}"><span>${xp.length ? `Also from these kills: ${list(xp)}. ` : ''}${left}</span></div>`;
+  }
+
   // With your supplies rounded up, each thing is one line: what your bank makes
   // of it together with what rounding up adds.
   function roundedSteps(fb, minor) {
@@ -1012,7 +1175,8 @@ export function createPlanner(ctx) {
       <span class="c-faint">${known ? '(your banked supplies are already yours)' : '(some prices are still unknown)'}</span>
     </div>`;
     const reach = fb.goalReached ? `<span class="c-win">That reaches your goal.</span>` : '';
-    const magic = magicTip(ix, fb.steps.flatMap(s => [[s.id, s.runs], ...Object.entries(s.sub)]));
+    const onTheWay = fb.steps.flatMap(s => [[s.id, s.runs], ...Object.entries(s.sub)]);
+    const magic = magicTip(ix, onTheWay) + craftTip(ix, onTheWay);
     const collectLine = !rounded ? '' : toCollect
       ? `<div class="collect"><span class="c-muted">To round up your supplies, collect:</span> ${itemList(toCollect)}</div>`
       : `<div class="c-faint small-note">Nothing to collect: your bank leaves nothing over.</div>`;
@@ -1046,8 +1210,9 @@ export function createPlanner(ctx) {
     const mx = plan.fromMix;
     const priced = PRICED[goal.skill];
     if (!mx) {
-      return `<div class="plan-sec"><h4>Your mix</h4><div class="c-faint small-note">Plan a mix of ways to train: type how many of each you'll make in the
-        table's <b>Plan to make</b> column below. Their XP counts toward your goal, and the rest is planned after them.</div></div>`;
+      return `<div class="plan-sec"><h4>Your mix</h4><div class="c-faint small-note">${textFor(goal.skill).kills
+        ? 'Plan a mix of monsters: type how many of each you\'ll kill in the table\'s <b>Plan to kill</b> column below.'
+        : 'Plan a mix of ways to train: type how many of each you\'ll make in the table\'s <b>Plan to make</b> column below.'} Their XP counts toward your goal, and the rest is planned after them.</div></div>`;
     }
     const gp = g => (g.missing.length ? '<span class="c-faint">?</span>' : `<b class="${g.total >= 0 ? 'c-win' : 'c-lose'}">${signed(g.total)}</b>`);
     const rows = mx.steps.map(st => {
@@ -1072,7 +1237,7 @@ export function createPlanner(ctx) {
         <button type="button" class="linkish small-note" data-act="mix-clear">Clear the mix</button></h4>
       <div class="steps">${rows}</div>
       ${buys ? `<div class="collect"><span class="c-muted">To collect or buy:</span> ${itemList(mx.buy)}</div>` : ''}
-      ${money}${magicTip(ix, mx.steps.flatMap(st => Object.entries(st.casts || {})))}${plan.fill && TICKETS.has(plan.fill.id) ? '' : ticketTip(goal, plan, pool)}</div>`;
+      ${money}${magicTip(ix, mx.steps.flatMap(st => Object.entries(st.casts || {})))}${killsTip(ix, mx.steps.map(st => [st.id, st.runs]))}${plan.fill && TICKETS.has(plan.fill.id) ? '' : ticketTip(goal, plan, pool)}</div>`;
   }
 
   function thenHtml(goal, plan, ix, pool = null) {
@@ -1080,8 +1245,15 @@ export function createPlanner(ctx) {
     const f = plan.fill;
     const bankShown = usesBank(goal.skill) && goal.useBank !== false;
     const choices = ix.train.filter(m => !(goal.excluded || []).includes(m.id));
+    const kills = !!textFor(goal.skill).kills;
+    // (a monster: its combat level, its hitpoints and the XP of a kill)
+    const optText = m => (kills ? `${esc(m.short)} (level ${m.cb}, ${fmt(m.hp)} HP, ${xpText(xpEach(ix, m))} XP)`
+      : `${esc(m.name)} (lvl ${m.level}, ${xpText(xpEach(ix, m))} XP${m.unit ? ` per ${esc(m.unit)}` : ''})`);
     const sel = `<select class="input small" data-gopt="fill" aria-label="Train with">${groupsOf(choices).map(([name, list]) =>
-      `<optgroup label="${esc(name)}">${list.map(m => `<option value="${m.id}"${m.id === f.id ? ' selected' : ''}>${esc(m.name)} (lvl ${m.level}, ${xpText(xpEach(ix, m))} XP${m.unit ? ` per ${esc(m.unit)}` : ''})</option>`).join('')}</optgroup>`).join('')}</select>`;
+      `<optgroup label="${esc(name)}">${list.map(m => `<option value="${m.id}"${m.id === f.id ? ' selected' : ''}>${optText(m)}</option>`).join('')}</optgroup>`).join('')}</select>`;
+    // (no monster picked yet: say how this one was come by)
+    const cb = kills && !ix.byId.has(goal.fillId) ? combatNow()?.real.min : null;
+    const usual = cb == null ? '' : ` <span class="c-faint small-note">Not your pick yet: the most XP a kill among monsters no more than half your combat level (${cb}). Pick yours here, or find it in the table below.</span>`;
     // "First 1,234 × Willow logs to reach level 45", "Then …"
     const segs = f.segments.map((s, i) => {
       const m = ix.byId.get(s.id);
@@ -1116,15 +1288,18 @@ export function createPlanner(ctx) {
     const each = fm.unit ? Object.values(fm.out)[0] : 1;
     // (only while the plan makes of it what it would on its own: in an order of your
     // own something above it may take the snape grass first, and the tip would promise too much)
-    const balance = row?.balance && bankShown && !plan.bankNow && row.fromPlan >= row.have
+    // (nor for a spell that takes only runes, once the bank plan above has spent the runes it would go by)
+    const spoken = !!row?.balance && Object.keys(fm.in).every(k => /rune$/.test(k))
+      && Object.entries(fm.in).some(([k, q]) => plan.fromBank.leftover.have(k) + (row.balance.collect[k] || 0) < row.balance.runs * q);
+    const balance = row?.balance && bankShown && !plan.bankNow && row.fromPlan >= row.have && !spoken
       ? `<div class="tip">Tip: collect ${itemList(row.balance.collect, { small: true, named: true })} and your bank makes <b>${fmt(row.balance.runs * each)}</b> ${esc(fm.unit ? plural(ITEMS[methodItem(fm)]?.name || fm.name, 2) : fm.name)} instead of ${fmt(row.have * each)}.</div>` : '';
     // (nothing left by the XP so far, and still some to add: the tickets before these count at the average of a batch these complete)
     const head = plan.remaining > 0 ? `${bankShown || plan.fromMix ? 'Then, to' : 'To'} reach your goal: <span class="c-xp">${xpText(plan.remaining)} XP</span>` : 'Then, to fill the batch';
     return `<div class="plan-sec"><h4>${head}</h4>
-      <div class="bar wrap"><span class="c-muted">Train with</span> ${sel}</div>
+      <div class="bar wrap"><span class="c-muted">Train with</span> ${sel}${usual}</div>
       <div class="steps">${segs}</div>
       ${buys ? `<div class="collect"><span class="c-muted">To collect or buy:</span> ${itemList(f.buy)}</div>` : ''}
-      ${toolLine}${noteLine}${money}${magicTip(ix, Object.entries(f.steps))}${TICKETS.has(f.id) ? ticketTip(goal, plan, pool) : ''}${balance}</div>`;
+      ${toolLine}${noteLine}${money}${magicTip(ix, Object.entries(f.steps))}${craftTip(ix, Object.entries(f.steps))}${killsTip(ix, f.segments.map(sg => [sg.id, sg.runs]))}${TICKETS.has(f.id) ? ticketTip(goal, plan, pool) : ''}${balance}</div>`;
   }
 
   // What a plan's Agility Arena tickets are exchanged for, under the part of the
@@ -1161,6 +1336,7 @@ export function createPlanner(ctx) {
     // (some rows counted in what they use: logs for arrows, bars for arrowtips; or in what they're for: the bar some ore makes)
     const [unit, many] = ix.train.filter(m => m.unit).map(m => [m.unit, m.units || m.unit + 's'])[0] || [];
     const counted = units.length === 1 && units[0] ? ` Counts are in ${units[0]}.` : mixed ? ` A row marked "per ${unit}" counts ${many}.` : '';
+    if (textFor(key).kills) return `Lvl = combat level · HP = hitpoints: a kill is that much damage · XP = what a kill gives in the style you picked · To goal = kills of it alone · Plan to kill = your mix of monsters${mix ? ' · Still needed to goal = after your mix' : ''}.`;
     if (!usesBank(key)) return `To goal = how many on their own · Plan to make = your mix of ways to train${mix ? ' · Still needed to goal = after your mix' : ''}${PRICED[key] ? ` · Net/item is ${textFor(key).net || `what one ${each} sells for`}` : ''}.${mixed ? counted : ''}`;
     // (bars you make yourself: their XP is in the XP column and in every count)
     const own = (ix.through ? ` XP and counts include ${textFor(key).onTheWay || "what's made on the way"}.` : '')
@@ -1255,26 +1431,32 @@ export function createPlanner(ctx) {
     }
     const mixed = new Set(ix.train.map(m => m.unit || '')).size > 1;
     const cur1 = cur?.level || 1;
+    // (a skill trained on monsters: a row is one, with its combat level and hitpoints, and the table can be searched)
+    const kills = !!textFor(goal.skill).kills;
+    const skillName = SKILL_BY_KEY.get(goal.skill).name;
     // [header, cell] for each column, in order
     const columns = [
-      ['<th>Lvl</th>', (r, m) => `<td>${m.level}</td>`],
-      [`<th class="l">${textFor(goal.skill).what}</th>`, (r, m) => `<td class="l"><span class="sk-cell">${methodIcon(m, true)} ${esc(m.name)}${multipleBadge(m, Math.max(cur1, m.level))}${burnBadge(ix, m, cur1)}${mixed && m.unit ? ` <span class="per">per ${esc(m.unit)}</span>` : ''}</span></td>`],
+      kills ? ['<th title="Combat level">Lvl</th>', (r, m) => `<td>${m.cb}</td>`] : ['<th>Lvl</th>', (r, m) => `<td>${m.level}</td>`],
+      kills ? ['<th class="l">Monster</th>', (r, m) => `<td class="l"><span class="sk-cell">${esc(m.short)}${m.note ? ' <span class="catch" aria-hidden="true">*</span>' : ''}</span></td>`]
+        : [`<th class="l">${textFor(goal.skill).what}</th>`, (r, m) => `<td class="l"><span class="sk-cell">${methodIcon(m, true)} ${esc(m.name)}${multipleBadge(m, Math.max(cur1, m.level))}${burnBadge(ix, m, cur1)}${mixed && m.unit ? ` <span class="per">per ${esc(m.unit)}</span>` : ''}</span></td>`],
+      ...(kills ? [['<th title="Hitpoints: a kill is this much damage">HP</th>', (r, m) => `<td>${fmt(m.hp)}</td>`]] : []),
       // (with your own bars made on the way, their XP is in it)
-      ['<th>XP</th>', (r, m) => `<td>${xpText(r.xpAll ?? m.xp)}</td>`],
-      ['<th title="What one sells for, less what it takes, bought from scratch">Net/item</th>', r => {
+      [kills ? `<th title="${esc(skillName)} XP a kill, in the style you picked">XP</th>` : '<th>XP</th>', (r, m) => `<td>${xpText(r.xpAll ?? m.xp)}</td>`],
+      // (not where nothing has a price. Agility: nothing to sell and nothing to buy)
+      ...(!priced ? [] : [['<th title="What one sells for, less what it takes, bought from scratch">Net/item</th>', r => {
         const e = r.econ;
         return `<td>${e.net == null ? '<span class="c-faint">?</span>' : `<span class="${e.net >= 0 ? 'c-win' : 'c-lose'}">${signed(e.net)}</span>`}</td>`;
       }],
       ['<th title="gp per XP: what each XP costs you (negative: you make money)">gp/XP</th>', r => {
         const e = r.econ;
         return `<td>${e.gpPerXp == null ? '<span class="c-faint">?</span>' : `<span class="${e.gpPerXp <= 0 ? 'c-win' : ''}">${gpShort(e.gpPerXp)}</span>`}</td>`;
-      }],
+      }]]),
     ];
-    if (!priced) columns.splice(3, 2);          // (Agility: nothing to sell and nothing to buy)
     if (!bankOn) {
-      columns.push(['<th title="How many on their own, from your XP now">To goal</th>', r => `<td>${r.needed ? fmt(r.needed) : '–'}</td>`]);
-      columns.push(['<th class="wrap" title="Your mix: how many of each you plan to make. Their XP counts toward your goal, and the rest is planned after them.">Plan to<br>make</th>',
-        (r, m) => `<td><input class="input small num mix-in" data-mix="${m.id}" inputmode="decimal" value="${r.planned ? fmt(r.planned) : ''}" placeholder="0" aria-label="How many ${esc(m.name)} you plan to make" title="How many you plan to make"></td>`]);
+      const verb = kills ? 'kill' : 'make';
+      columns.push([`<th title="${kills ? 'Kills of it alone, from your XP now' : 'How many on their own, from your XP now'}">To goal</th>`, r => `<td>${r.needed ? fmt(r.needed) : '–'}</td>`]);
+      columns.push([`<th class="wrap" title="Your mix: how many of each you plan to ${verb}. Their XP counts toward your goal, and the rest is planned after them.">Plan to<br>${verb}</th>`,
+        (r, m) => `<td><input class="input small num mix-in" data-mix="${m.id}" inputmode="decimal" value="${r.planned ? fmt(r.planned) : ''}" placeholder="0" aria-label="How many ${esc(m.name)} you plan to ${verb}" title="How many you plan to ${verb}"></td>`]);
       if (plan.fromMix) columns.push(['<th class="wrap" title="How many more to reach your goal, after your mix">Still needed<br>to goal</th>', r => `<td>${r.toMake ? fmt(r.toMake) : '–'}</td>`]);
     } else {
       columns.push(['<th title="What your bank makes of it now">From bank</th>', r => `<td>${r.have ? `<span class="c-level">${fmt(r.have)}</span>` : '0'}</td>`]);
@@ -1313,12 +1495,27 @@ export function createPlanner(ctx) {
         (r, m) => `<td class="c"><input type="checkbox" data-use="${m.id}" ${excluded.has(m.id) ? '' : 'checked'} title="Let the bank plan make this" aria-label="Use ${esc(m.name)} in the bank plan"></td>`]);
     }
     const nameCol = columns.findIndex(([head]) => head.includes(`>${textFor(goal.skill).what}<`));
-    const body = groups.filter(g => !shown || g === shown).map(gname => {
+    // A monster's row says what a kill gives besides, what it leaves, and how many there are.
+    const killTitle = m => {
+      const also = Object.entries(m.gives || {}).filter(([, x]) => x > 0).map(([k, x]) => `${xpText(x)} ${SKILL_BY_KEY.get(k).name} XP`);
+      const few = m.n === 1 ? 'One of a kind.' : `${fmt(m.n)} in the world.`;
+      return `${m.name}: ${fmt(m.hp)} hitpoints, ${xpText(m.xp)} ${skillName} XP a kill` +
+        (also.length ? `\nA kill also gives ${also.length > 1 ? `${also.slice(0, -1).join(', ')} and ${also[also.length - 1]}` : also[0]}` : '') +
+        (m.bones ? `\nLeaves ${ITEMS[m.bones]?.name || m.bones}: ${xpText(BURY_XP[m.bones] || 0)} Prayer XP if you bury them` : '\nLeaves nothing to bury') +
+        `\n${few}` + (m.note ? `\n${m.note}` : '');
+    };
+    // (monsters: every group's rows are there, for the search to show; applySearch hides the rest)
+    const body = groups.filter(g => kills || !shown || g === shown).map(gname => {
       const inGroup = rows.filter(x => x.m.group === gname);
       // (the group's name sits above the names, not under Use)
-      return `<tr class="grp">${nameCol > 0 ? `<td colspan="${nameCol}"></td>` : ''}<td colspan="${columns.length - Math.max(0, nameCol)}">${esc(gname)}</td></tr>` + inGroup.map(({ r, m }) => {
+      return `<tr class="grp"${kills ? ` data-grp="${esc(gname)}"` : ''}>${nameCol > 0 ? `<td colspan="${nameCol}"></td>` : ''}<td colspan="${columns.length - Math.max(0, nameCol)}">${esc(gname)}</td></tr>` + inGroup.map(({ r, m }) => {
         const e = r.econ;
         const chosen = plan.fill?.id === m.id;
+        if (kills) {
+          return `<tr class="${chosen ? 'hl' : ''}" data-method="${m.id}" data-grp="${esc(gname)}" data-find="${esc(m.short.toLowerCase())}" data-cb="${m.cb}" title="${esc(killTitle(m))}">
+          ${columns.map(([, cell]) => cell(r, m)).join('')}
+        </tr>`;
+        }
         const per = m.unit ? ` per ${m.unit}` : ' each';
         const needs = Object.entries(e.inputs).map(([k, n]) => `${amountText(n)} ${ITEMS[k]?.name || k}`).join(', ');
         const title = `${m.name}: level ${m.level}, ${xpText(m.xp)} XP${per}${m.parts ? ` (${partsText(m)})` : ''}` +
@@ -1336,13 +1533,42 @@ export function createPlanner(ctx) {
     const sBtn = (k, label, tip = '') => `<button type="button" class="${sort === k ? 'on' : ''}" data-tsort-plan="${k}"${tip ? ` title="${esc(tip)}"` : ''}>${label}</button>`;
     const gBtn = (g, label) => `<button type="button" class="chip${(shown || 'all') === g ? ' on' : ''}" data-tgroup="${esc(g)}" aria-pressed="${(shown || 'all') === g}">${esc(label)}</button>`;
     const groupBar = groupOrder.length > 1 ? `<div class="group-pick" role="group" aria-label="Which options">${groupOrder.map(g => gBtn(g, g)).join('')}${gBtn('all', 'All')}</div>` : '';
-    return `<div class="plan-sec"><h4>Every option <span class="c-faint">(on its own, from ${cur ? `level ${cur.level}` : 'now'}; click one to train with it)</span></h4>
-      ${groupBar}
+    // The search looks through every monster, whatever group is shown.
+    const search = !kills ? '' : `<div class="bar wrap find-bar"><input class="input small find-in" type="search" data-search="1" value="${esc(S.search[goal.id] || '')}" placeholder="Search monsters: a name, or a combat level" aria-label="Search monsters" autocomplete="off" spellcheck="false">
+        <span class="c-faint small-note" data-found></span></div>`;
+    return `<div class="plan-sec"><h4>${kills ? 'Every monster' : 'Every option'} <span class="c-faint">(on its own, from ${cur ? `level ${cur.level}` : 'now'}; click one to train ${kills ? 'on' : 'with'} it)</span></h4>
+      ${search}${groupBar}
       <div class="bar wrap"><span class="c-muted small-note">Sort</span><div class="seg">${sBtn('level', 'Level')}${sBtn('xp', 'XP each')}${priced ? sBtn('cheap', 'Cheapest XP') : ''}${bankOn ? sBtn('net', 'Total net', 'Most gp toward your goal first (Total net gp toward goal)') : ''}</div>
         <span class="c-faint small-note">${unitNote(goal.skill, ix, mixed, { bankOn, even: evenCol, assumed: assumed.length ? ASSUME_LABEL[goal.skill] : null, mix: !!plan.fromMix, whatIf })}</span></div>
-      <div class="table-wrap"><table class="grid plan-t">
+      <div class="table-wrap"><table class="grid plan-t"${kills ? ` data-shown="${esc(shown || '')}"` : ''}>
         <thead><tr>${columns.map(([th]) => th).join('')}</tr></thead>
         <tbody>${body}</tbody></table></div></div>`;
+  }
+
+  // The monster search of a goal's table: rows are shown or hidden where they
+  // stand, so typing never redraws the table (and never loses a click). With
+  // nothing typed, the group picked is what shows.
+  function applySearch(card) {
+    const table = card.querySelector('table.plan-t[data-shown]');
+    if (!table) return;
+    const terms = searchTerms(S.search[card.dataset.goal]);
+    const shown = table.dataset.shown;
+    const groups = new Set();
+    let n = 0;
+    for (const tr of table.querySelectorAll('tr[data-method]')) {
+      const on = terms.length ? searchHit(tr.dataset.find, tr.dataset.cb, terms) : !shown || tr.dataset.grp === shown;
+      tr.hidden = !on;
+      if (on) { n++; groups.add(tr.dataset.grp); }
+    }
+    for (const tr of table.querySelectorAll('tr.grp')) tr.hidden = !groups.has(tr.dataset.grp);
+    const out = card.querySelector('[data-found]');
+    if (out) out.textContent = !terms.length ? '' : n ? `${fmt(n)} found, whatever their level` : 'No monster matches that. Try part of its name, or its combat level.';
+    // (searching, no group's button is the one shown)
+    for (const chip of card.querySelectorAll('.group-pick [data-tgroup]')) {
+      const on = !terms.length && chip.dataset.tgroup === (shown || 'all');
+      chip.classList.toggle('on', on);
+      chip.setAttribute('aria-pressed', String(on));
+    }
   }
 
   // Skill tabs on the Bank and Prices views, for the skills the planner covers
@@ -1641,6 +1867,7 @@ export function createPlanner(ctx) {
       firemaking: 'Achey tree logs aren\'t listed: lighting them gives no XP in this version. Your logs are shared with Fletching (it\'s one bank).',
       fletching: 'Unstrung bows are marked (u); in-game they have the same name as the strung bow. Feathers count for both arrows and darts.',
       cooking: 'Raw fish and meat cook into food; a pie, a pizza, a cake, a stew or a wine is put together first, and anything on the way counts (flour and water, dough, a pie shell). Burnt food is counted on a Cooking goal, where you also say what you cook on. Dough takes a bucket of water here; in the game a jug does too. Cooked meat and anchovies are food and a filling or topping: one entry each. Your raw fish are the ones Fishing catches (it\'s one bank).',
+      magic: 'A Magic goal casts your runes as the best teleport and combat spell they allow. Jewellery and orbs can be entered as what they\'re made of (gold bars, gems, molten glass): a goal makes them on the way, where your Crafting level allows. Those are shared with Crafting, and ore with Smithing (it\'s one bank).',
       crafting: 'Hides are tanned before they\'re worked: type in hides or leather, and both are used. The tanner\'s fee is counted (pick the tanner on a Crafting goal). Key halves and crystal keys count as the uncut dragonstone the crystal chest always gives (its other loot is luck, and isn\'t counted). Dragonhide\'s colour is added in brackets, the two key halves are told apart as tooth and loop, and unstrung amulets are marked (u), since in-game those share a name. Dragonhide sets are priced on the Prices tab: in a bank they\'re their three pieces. Bow strings, vials and runes are shared with other skills (it\'s one bank).',
     }[view] || '';
     $('bank-head').innerHTML = `${skillSwitch(Object.keys(BANK_GROUPS), view, { all: true, values })}<div class="bank-sum">
@@ -1650,7 +1877,7 @@ export function createPlanner(ctx) {
       <button type="button" class="btn small" data-act="bank-prices">Get prices</button>
       <button type="button" class="btn small danger" data-act="bank-clear">Clear bank</button>
     </div>
-    <p class="note">Type what you have: 1500, 1.5k or 2m all work. Click an item's name to open it on the market. Only the items the planner uses are listed; more skills come in later updates.
+    <p class="note">Type what you have: 1500, 1.5k or 2m all work. Click an item's name to open it on the market. Only the items the planner uses are listed.
       ${hint}</p>`;
   }
 
@@ -1723,7 +1950,7 @@ export function createPlanner(ctx) {
   // in is found again afterwards, with its text and caret where they were.
   function fieldKey(el) {
     if (el.dataset?.psrc) return `[data-psrc="${el.dataset.psrc}"][value="${el.value}"]`;
-    for (const a of ['bank', 'price', 'gopt', 'use', 'mix', 'shot']) if (el.dataset?.[a]) return `[data-${a}="${el.dataset[a]}"]`;
+    for (const a of ['bank', 'price', 'gopt', 'use', 'mix', 'shot', 'search', 'gcalc']) if (el.dataset?.[a]) return `[data-${a}="${el.dataset[a]}"]`;
     if (el.dataset?.shotAs) return `[data-shot-as="${el.dataset.shotAs}"]`;
     const form = el.closest('[data-form]');
     if (form && el.name) return `[data-form="${form.dataset.form}"] [name="${el.name}"]`;
@@ -1807,7 +2034,7 @@ export function createPlanner(ctx) {
       root.addEventListener('input', onInput);
       // (an amount or a price being typed, for rerender: from its first key until it's entered or left
       // for something else on the page. Another window in front isn't leaving it.)
-      root.addEventListener('input', e => { const d = e.target.dataset; if (d?.mix || d?.price || d?.bank) typing = e.target; });
+      root.addEventListener('input', e => { const d = e.target.dataset; if (d?.mix || d?.price || d?.bank || d?.gcalc) typing = e.target; });
       root.addEventListener('change', e => { if (e.target === typing) typing = null; }, true);
       root.addEventListener('focusout', e => { if (e.target === typing && document.hasFocus()) typing = null; });
     }
@@ -1914,7 +2141,8 @@ export function createPlanner(ctx) {
     const tgroup = t.closest('[data-tgroup]');
     if (tgroup && card) {
       const skill = goals().find(g => g.id === card.dataset.goal)?.skill;
-      if (skill) { S.tgroup = { ...S.tgroup, [skill]: tgroup.dataset.tgroup }; saveUi(); renderGoals(); }
+      // (and ends a search: the group is what shows again)
+      if (skill) { S.tgroup = { ...S.tgroup, [skill]: tgroup.dataset.tgroup }; delete S.search[card.dataset.goal]; saveUi(); renderGoals(); }
       return;
     }
     const first = t.closest('[data-first]');
@@ -1976,6 +2204,8 @@ export function createPlanner(ctx) {
         break;
       }
       case 'edit-cancel': S.editing = null; renderGoals(); break;
+      case 'combat-toggle': S.combat.open = !S.combat.open; saveUi(); renderCombat(); break;
+      case 'combat-reset': S.combat.typed = {}; renderCombat(); break;
       case 'to-bank':
         if (BANK_GROUPS[act.dataset.skill]) { S.bankView = act.dataset.skill; saveUi(); }
         ctx.goTab('bank');
@@ -2026,6 +2256,7 @@ export function createPlanner(ctx) {
         return;
       }
     }
+    if (t.dataset.gcalc) { const L = combatLevels(); if (L) t.value = L[t.dataset.gcalc]; return; }
     const card = t.closest('[data-goal]');
     if (card && t.dataset.gopt) {
       const id = card.dataset.goal;
@@ -2107,6 +2338,23 @@ export function createPlanner(ctx) {
     const t = e.target;
     // (what's typed into a goal being changed survives a redraw)
     if (S.editing && t.name === 'value' && t.closest('[data-form="edit-goal"]')) { S.editing.draft = t.value; return; }
+    if (t.dataset.search) {
+      const card = t.closest('[data-goal]');
+      if (card) { S.search[card.dataset.goal] = t.value; applySearch(card); }
+      return;
+    }
+    if (t.dataset.gcalc) {
+      const v = parseInt(t.value, 10);
+      if (Number.isFinite(v)) {
+        const key = t.dataset.gcalc;
+        const level = Math.min(MAX_LEVEL, Math.max(key === 'hitpoints' ? 10 : 1, v));
+        // (typed back to what it started from: nothing to reset)
+        if (level === combatNow()?.goal[key]) delete S.combat.typed[key];
+        else S.combat.typed[key] = level;
+        renderCombatLive();
+      }
+      return;
+    }
     if (!t.dataset.bank) return;
     const n = parseAmount(t.value);
     const p = prices.gp(t.dataset.bank);

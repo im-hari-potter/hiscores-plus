@@ -37,8 +37,10 @@
 // food, a big net's fish). It's still made from a bank, and you can pick it.
 // asked: a method a bank plan only makes when asked to: it's the one you train
 // with, or it has a place in your own order. A spell that takes nothing but
-// runes: the same runes cast dozens of them, so a bank can't say which. (What
-// the rest of a goal takes still comes out of the bank's runes.)
+// runes, where a bank can't say which its runes are for (a curse, alchemy; not
+// the teleports and combat spells anyone can cast, which a bank's runes go to by
+// themselves, the best first). (What the rest of a goal takes still comes out of
+// the bank's runes.)
 // chance: a method that can fail (Cooking: food burns). [low, high] is what the
 // server's roll is given; how often it works depends on your level (chanceUnits).
 // Plans count the tries a success takes on average, level by level: see
@@ -571,6 +573,13 @@ function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new S
     // (a method that waits to be asked: only as your pick, in your order, or
     // rounding up the one the plan carries on with)
     const unasked = m => !!m.asked && m !== pick && !rank.has(m.id) && !(stage === 1 && roundUp?.also?.includes(m.id));
+    // (what takes nothing but the cheap supplies, a spell that only takes runes, is
+    // rounded up as your pick, in your order, or as the one the plan carries on
+    // with. Otherwise it's made as far as the bank goes and no further: spare
+    // runes alone don't call for more runes. Once the rounding up is done it's
+    // made as usual again: the levels that gave may have unlocked a spell the
+    // bank's runes can cast.)
+    const spare = m => (stage === 1 || stage === 2) && held.has(m.id) && m !== first && !rank.has(m.id) && !(stage === 1 && roundUp?.also?.includes(m.id));
     // (waiting for the more useful thing its ingredient makes, while that can be made)
     const waits = m => !!m.after && !rank.has(m.id) && !mine(m) && m.after.some(id => {
       const first = ix.byId.get(id);
@@ -583,13 +592,13 @@ function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new S
       const r = can(m, ctx);
       if (r > 0) { best = m; bestRuns = r; break; }
     }
-    if (!best && pick && pick.xp > 0 && pick.level <= level && !waits(pick)) {
+    if (!best && pick && pick.xp > 0 && pick.level <= level && !waits(pick) && !spare(pick)) {
       const r = can(pick, ctx);
       if (r > 0) { best = pick; bestRuns = r; }
     }
     if (!best) {
       for (const m of usable) {
-        if (m.level > level || unasked(m)) continue;
+        if (m.level > level || unasked(m) || spare(m)) continue;
         if (best && m.xp < best.xp) continue;
         const r = can(m, ctx);
         if (r > 0 && (!best || m.xp > best.xp || (m.xp === best.xp && m.level < best.level)) && !waits(m)) { best = m; bestRuns = r; }
@@ -610,7 +619,7 @@ function bankRun(ix, { bank = {}, startXp10, targetXp10 = null, excluded = new S
       : bestRank === INF && best !== pick && (m === pick || m.xp > best.xp || !!best.after?.includes(m.id))
         && !(m.after?.includes(best.id) && !mine(m)));
     {
-      const better = usable.filter(m => m.level > level && !unasked(m) && outranks(m) &&
+      const better = usable.filter(m => m.level > level && !unasked(m) && !spare(m) && outranks(m) &&
         can(m, { level: m.level, kinds: BANK_KINDS, unlimited, excluded }) > 0);
       if (better.length) {
         const unlock = Math.min(...better.map(m => m.level));

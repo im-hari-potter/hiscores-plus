@@ -1899,7 +1899,7 @@ await check("thieving: no bank; pockets, stalls, chests and doors with the serve
   }
 });
 
-await check('agility: no bank and nothing to price; laps of a course; an Agility Arena ticket at the average of the batches a plan exchanges, or pinned to one', async () => {
+await check("agility: no bank and nothing to price; laps of a course; the Agility Arena's Total XP, XP per ticket and XP per pillar, a ticket at the average of the batches a plan exchanges or pinned to one", async () => {
   await planAs('old badger', 'Old Badger');
   await addGoal('agility', 70);
   const card = goalCard('Agility');
@@ -1940,16 +1940,31 @@ await check('agility: no bank and nothing to price; laps of a course; an Agility
     assert.equal(await tip('ag_stones_karamja'), "Stepping stones (Karamja): level 1, 3 XP each\nWorks about 62 in 100 tries at level 53; 99 in 100 at level 99.\nA slip still gives 1 XP. LostHQ's calculator says level 30; the server asks for none.");
     assert.equal(await tip('ag_ledge_yanille'), "Balancing ledge (Yanille Dungeon): level 40, 22.5 XP each\nWorks about 86 in 100 tries at level 53; every time from level 66.\nNot on LostHQ's calculator: the server's own level and XP.");
     assert.match(await card.locator('tr[data-method="ag_bars_yanille"]').getAttribute('class'), /\bdim\b/, 'level 57');
-    // the Agility Arena: one row, a ticket. Its XP on the way, and what the tickets of this goal are exchanged for on average
+    // the Agility Arena: three rows, named for the XP they count (v2.10). Total XP is a ticket earned and exchanged: its XP
+    // on the way, and what the tickets of this goal are exchanged for on average. XP per ticket is the exchange alone,
+    // XP per pillar the way there alone
     await card.locator('[data-tgroup="Agility Arena"]').click();
     await card.locator('tr[data-method="ag_ticket"]').waitFor();
-    assert.deepEqual(await names(), ['Agility Arena ticket', 'Arena ticket you already have']);
-    assert.deepEqual(await cells('ag_ticket'), ['1', 'Agility Arena ticket', '360.9', '1,666', '']);
-    assert.match(await tip('ag_ticket'), /^Agility Arena ticket: level 1, 360\.9 XP each \(on the way 57\.8 \+ exchanged 303\.1\)\nOn average 3\.3 obstacles lie between one ticket pillar and the next: 57\.8 XP on the way\. Below level 40 some are shut and the way round is longer, so it's a little more\. A pillar a minute at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss\. Going in costs 200 coins\.$/);
+    assert.deepEqual(await names(), ['Total XP', 'XP per ticket', 'XP per pillar']);
+    assert.deepEqual(await cells('ag_ticket'), ['1', 'Total XP', '360.9', '1,666', '']);
+    assert.deepEqual(await cells('ag_ticket_held'), ['1', 'XP per ticket', '303.1', '1,983', '']);
+    assert.deepEqual(await cells('ag_pillar'), ['1', 'XP per pillar', '57.8', '10,397', '']);
+    const WAY = "On average 3\\.3 obstacles lie between one ticket pillar and the next: 57\\.8 XP on the way\\. Below level 40 some are shut and the way round is longer, so it's a little more\\. A pillar a minute at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss\\. Going in costs 200 coins\\.";
+    assert.match(await tip('ag_ticket'), new RegExp(`^Total XP: level 1, 360\\.9 XP each \\(on the way 57\\.8 \\+ exchanged 303\\.1\\)\\nA pillar's ticket, earned and exchanged for XP\\. ${WAY}$`));
+    assert.match(await tip('ag_pillar'), new RegExp(`^XP per pillar: level 1, 57\\.8 XP each\\nGetting to a pillar alone: for when its ticket goes on herbs or another reward instead of XP\\. ${WAY}$`));
+    assert.equal(await tip('ag_ticket_held'), "XP per ticket: level 1, 303.1 XP each\nFor tickets you've saved up: only what they're exchanged for counts. Type how many you have under Plan to make.");
+    assert.deepEqual((await card.locator('select[data-gopt="fill"] optgroup[label="Agility Arena"] option').allInnerTexts()).map(flat), ['Total XP (lvl 1, 360.9 XP)', 'XP per ticket (lvl 1, 303.1 XP)', 'XP per pillar (lvl 1, 57.8 XP)']);
     assert.equal(await card.locator('.tip', { hasText: 'Arena tickets' }).count(), 0, 'no tickets in the plan yet');
+    // the pillars alone, for when the tickets go on herbs: nothing is exchanged, so nothing is said of batches
+    await card.locator('tr[data-method="ag_pillar"] td:nth-child(2)').click();
+    await plan.locator('.step', { hasText: 'their tickets kept' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '10,397 Agility Arena pillars, their tickets kept +600,946.6 XP');
+    assert.equal(await card.locator('.tip', { hasText: 'Arena tickets' }).count(), 0);
+    assert.match(flat(await plan.innerText()), /Getting to a pillar alone: for when its ticket goes on herbs or another reward instead of XP\./);
+    assert.equal((await goalOf('old_badger', 'agility')).fillId, 'ag_pillar');
     await card.locator('tr[data-method="ag_ticket"] td:nth-child(2)').click();
-    await plan.locator('.step', { hasText: 'Agility Arena ticket' }).waitFor();
-    assert.equal(flat(await plan.locator('.step').innerText()), '1,666 × Agility Arena ticket +601,259.4 XP');
+    await plan.locator('.step', { hasText: 'earned and exchanged' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '1,666 Agility Arena tickets earned and exchanged +601,259.4 XP');
     const tickets = plan.locator('.tip', { hasText: 'Arena tickets' });
     assert.equal(flat(await tickets.innerText()), 'Arena tickets: the 1,666 in this plan are exchanged together, as 1 × 1,000, 6 × 100, 2 × 25, 1 × 10 and 6 on their own: 303.1 XP each on average.');
     assert.equal(await plan.locator('.step .item').getAttribute('title'), 'Agility arena ticket');
@@ -1959,7 +1974,7 @@ await check('agility: no bank and nothing to price; laps of a course; an Agility
     assert.match(await card.locator('label:has(select[data-opt="tickets"])').getAttribute('title'), /240 XP for one, 248 XP each for 10, 260 XP each for 25, 280 XP each for 100, 320 XP each for 1,000\./);
     await batch.selectOption('x1000');
     await plan.locator('.step', { hasText: '1,591' }).waitFor();
-    assert.equal(flat(await plan.locator('.step').innerText()), '1,591 × Agility Arena ticket +601,079.8 XP');
+    assert.equal(flat(await plan.locator('.step').innerText()), '1,591 Agility Arena tickets earned and exchanged +601,079.8 XP');
     assert.equal(flat(await tickets.innerText()), 'Arena tickets: counted at 320 XP each, as exchanged 1,000 at a time. This plan has 1,591: the last 591 give theirs with the next full 1,000.');
     assert.deepEqual((await cells('ag_ticket')).slice(2, 4), ['377.8', '1,591']);
     assert.deepEqual((await goalOf('old_badger', 'agility')).opts, { tickets: 'x1000' });
@@ -1978,9 +1993,9 @@ await check('agility: no bank and nothing to price; laps of a course; an Agility
     await card.locator('[data-mix="ag_wilderness"]').fill('100');
     await card.locator('[data-mix="ag_wilderness"]').press('Tab');
     await card.locator('.plan-sec', { hasText: 'Your mix +240,140 XP' }).waitFor();
-    assert.deepEqual((await card.locator('.plan-sec', { hasText: 'Your mix' }).locator('.step').allInnerTexts()).map(flat), ['600 × Arena ticket you already have +183,000 XP', '100 laps of the Wilderness course +57,140 XP']);
+    assert.deepEqual((await card.locator('.plan-sec', { hasText: 'Your mix' }).locator('.step').allInnerTexts()).map(flat), ['600 Agility Arena tickets exchanged +183,000 XP', '100 laps of the Wilderness course +57,140 XP']);
     assert.match(flat(await plan.locator('h4').innerText()), /^Then, to reach your goal: 360,793 XP$/);
-    assert.equal(flat(await plan.locator('.step').innerText()), '1,000 × Agility Arena ticket +362,800 XP');
+    assert.equal(flat(await plan.locator('.step').innerText()), '1,000 Agility Arena tickets earned and exchanged +362,800 XP');
     assert.equal(flat(await tickets.innerText()), "Arena tickets: the 1,600 in this plan are exchanged together, as 1 × 1,000 and 6 × 100: 305 XP each on average. That's 2,007 XP more than your goal needs: the batch has to be whole.");
     await page.screenshot({ path: `${SHOTS}/10q-agility.png`, fullPage: true });
     // 1,950 saved: at 320 each they'd cover the goal, but only as two whole thousands. The 50 that fill the batch are planned
@@ -1991,7 +2006,7 @@ await check('agility: no bank and nothing to price; laps of a course; an Agility
     await card.locator('.plan-sec', { hasText: 'Your mix +624,000 XP' }).waitFor();
     assert.doesNotMatch(flat(await card.locator('.plan-sec', { hasText: 'Your mix +624,000 XP' }).locator('h4').innerText()), /That reaches your goal/);
     assert.match(flat(await plan.locator('h4').innerText()), /^Then, to fill the batch$/);
-    assert.equal(flat(await plan.locator('.step').innerText()), '50 × Agility Arena ticket +18,890 XP');
+    assert.equal(flat(await plan.locator('.step').innerText()), '50 Agility Arena tickets earned and exchanged +18,890 XP');
     assert.equal(flat(await tickets.innerText()), "Arena tickets: the 2,000 in this plan are exchanged together, as 2 × 1,000: 320 XP each. That's 41,957 XP more than your goal needs: the batch has to be whole.");
     assert.deepEqual([(await cells('ag_ticket'))[5], (await cells('ag_ticket_held'))[5]], ['50', '–']);
     // only what's in the mix when the rest is laps: 250 tickets are two batches of 100 and two of 25
@@ -2005,6 +2020,18 @@ await check('agility: no bank and nothing to price; laps of a course; an Agility
     assert.equal(flat(await mix.locator('.tip', { hasText: 'Arena tickets' }).innerText()), 'Arena tickets: the 250 in this plan are exchanged together, as 2 × 100 and 2 × 25: 276 XP each on average.');
     assert.equal(flat(await plan.locator('.step').innerText()), '906 laps of the Wilderness course +517,688.4 XP');
     assert.equal(await plan.locator('.tip', { hasText: 'Arena tickets' }).count(), 0, 'said once, where the tickets are');
+    await card.locator('[data-act="mix-clear"]').click();
+    // pillars in a mix beside tickets you hold: only the tickets are exchanged, the pillars' are kept
+    await card.locator('[data-tgroup="Agility Arena"]').click();
+    await card.locator('[data-mix="ag_pillar"]').fill('200');
+    await card.locator('[data-mix="ag_pillar"]').press('Tab');
+    await card.locator('.plan-sec', { hasText: 'Your mix +11,560 XP' }).waitFor();
+    await card.locator('[data-mix="ag_ticket_held"]').fill('100');
+    await card.locator('[data-mix="ag_ticket_held"]').press('Tab');
+    const kept = card.locator('.plan-sec', { hasText: 'Your mix +39,560 XP' });
+    await kept.waitFor();
+    assert.deepEqual((await kept.locator('.step').allInnerTexts()).map(flat), ['200 Agility Arena pillars, their tickets kept +11,560 XP', '100 Agility Arena tickets exchanged +28,000 XP']);
+    assert.equal(flat(await kept.locator('.tip', { hasText: 'Arena tickets' }).innerText()), 'Arena tickets: the 100 in this plan are exchanged together, as 1 × 100: 280 XP each.');
     await card.locator('[data-act="mix-clear"]').click();
     // nothing to price: no Prices tab, and no bank of its own
     await page.click('.tab[data-tab="prices"]');
@@ -2093,33 +2120,51 @@ await check('prayer: bones are buried from the bank, the best first; the two bon
   }
 });
 
-await check("magic: spells by how you train with them, each with its own runes; a rune-only spell waits to be picked; a staff, damage and rounding up", async () => {
+await check("magic: spells by how you train with them, each with its own runes; a bank's runes go to teleports and combat spells by themselves, a curse or alchemy waits to be picked; jewellery made on the way; a staff, damage and rounding up", async () => {
   await planAs('old badger', 'Old Badger');
   const card = goalCard('Magic');
-  const RUNES = { airrune: '10000', firerune: '5000', chaosrune: '3000', naturerune: '2000', lawrune: '1000', cosmicrune: '100', waterrune: '800' };
   const saved = await page.evaluate(() => localStorage.getItem('lchs.bank.old_badger'));
   try {
-    await setBank('magic', RUNES);
-    // the Magic bank: the runes, then what each kind of spell is cast on and makes
+    // nature and fire runes: alchemy's, and nothing a bank casts by itself
+    await setBank('magic', { naturerune: '2000', firerune: '5000' });
+    // the Magic bank: the runes, then what each kind of spell is cast on (or what that's made of: v2.10) and makes
     assert.deepEqual((await page.locator('#bank-body .bank-group h4').allInnerTexts()).map(flat),
-      ['Runes', 'Jewellery to enchant', 'Ore to superheat', 'Orbs to charge', 'Made: enchanted jewellery', 'Made: bars', 'Made: orbs']);
+      ['Runes', 'Jewellery to enchant', 'Ore to superheat', 'Orbs to charge', 'What jewellery and orbs are made of', 'Made: enchanted jewellery', 'Made: bars', 'Made: orbs']);
+    assert.deepEqual(await page.locator('#bank-body .bank-group', { hasText: 'What jewellery and orbs are made of' }).locator('[data-bank]').evaluateAll(els => els.map(el => el.dataset.bank)),
+      ['uncut_sapphire', 'uncut_emerald', 'uncut_ruby', 'uncut_diamond', 'uncut_dragonstone', 'sapphire', 'emerald', 'ruby', 'diamond', 'dragonstone', 'keyhalf1', 'keyhalf2', 'crystal_key', 'wool', 'ball_of_wool',
+        'bucket_sand', 'soda_ash', 'molten_glass']);
+    assert.match(flat(await text('#bank-head')), /A Magic goal casts your runes as the best teleport and combat spell they allow\. Jewellery and orbs can be entered as what they're made of \(gold bars, gems, molten glass\)/);
     await addGoal('magic', 60);
     await card.locator('.plan').waitFor();
     assert.match(flat(await card.innerText()), /Level 50 → 60/);
     // the choices on the goal: a staff and what to count of the damage
-    assert.match(flat(await card.locator('.plan-opts').innerText()), /^Use my bank Round up my supplies Staff None Air Water Earth Fire Lava \(earth and fire\) Damage Leave it out Half the casts hit Every cast hits 7 kinds of item in your bank/);
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /^Use my bank Round up my supplies Staff None Air Water Earth Fire Lava \(earth and fire\) Damage Leave it out Half the casts hit Every cast hits 2 kinds of item in your bank/);
     assert.match(await card.locator('label:has(select[data-opt="staff"])').getAttribute('title'), /^A staff in your hand stands in for its rune, however many a spell takes: a staff of air, an air battlestaff or a mystic air staff for air runes;/);
     assert.match(await card.locator('label:has(select[data-opt="damage"])').getAttribute('title'), /^A combat spell gives its XP for the cast, hit or miss, and 2 XP more for every point of damage\./);
-    // runes alone don't say which spell they're for: nothing is cast from the bank until you pick
     const sec = card.locator('.plan-sec').first();
     const then = card.locator('.plan-sec', { hasText: 'to reach your goal' }).first();
     const steps = async () => (await sec.locator('.step').allInnerTexts()).map(x => flat(x).replace(/ · .*$/, ''));
-    assert.equal(flat(await sec.innerText()), "From your bank Nothing in your bank is used by itself yet. Runes alone don't say which spell they're for: click a spell in the table below to train with it, and your bank's runes go to it first.");
-    // the rest of the goal: the best combat spell at level 50, with the bank's runes taken off what it takes
+    // alchemy waits to be asked: its runes alone don't say you mean it
+    assert.equal(flat(await sec.innerText()), "From your bank Nothing in your bank is used by itself yet. Your bank's runes go to the best teleport and combat spell they allow by themselves. "
+      + "A curse, alchemy and the like wait to be asked: click a spell in the table below to train with it, and your bank's runes go to it first.");
+    // the rest of the goal: the best combat spell at level 50
     assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'mg_water_blast');
     assert.equal(flat(await then.locator('.step').innerText()), '6,046 × Water Blast +172,311 XP');
-    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 6,046 Death rune( \([\d.,]+[KM]?\))? 17,338 Water rune( \([\d.,]+[KM]?\))? 8,138 Air rune/);
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 6,046 Death rune( \([\d.,]+[KM]?\))? 18,138 Water rune( \([\d.,]+[KM]?\))? 18,138 Air rune/);
     assert.equal(await then.locator('.step .item.sprite').getAttribute('title'), 'Water Blast', "the spell's own icon");
+    // law and chaos runes are cast by themselves (v2.10): the best teleports and bolts the runes beside them allow at
+    // level 50. Falador while the water runes last (it takes fewer air runes than Camelot), Fire Bolt while the fire runes do
+    await setBank('magic', { airrune: '10000', chaosrune: '3000', lawrune: '1000', cosmicrune: '100', waterrune: '800' });
+    await page.click('.tab[data-tab="goals"]');
+    await sec.locator('.step', { hasText: 'Falador Teleport' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +96,862.5 XP → level 56');
+    assert.deepEqual(await steps(), ['800 × Falador Teleport +38,400 XP', '200 × Camelot Teleport +11,100 XP', '1,250 × Fire Bolt +28,125 XP', '1,425 × Wind Bolt +19,237.5 XP']);
+    assert.equal(await card.locator('.tip.magic, .tip.crafting').count(), 0);
+    // the rest of the goal goes back to combat: the best spell at the level the bank leaves you
+    assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'mg_earth_blast');
+    assert.equal(flat(await then.locator('.step').innerText()), '2,396 × Earth Blast +75,474 XP');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 2,396 Death rune( \([\d.,]+[KM]?\))? 9,584 Earth rune( \([\d.,]+[KM]?\))? 7,188 Air rune/);
+    assert.equal(await then.locator('.tip', { hasText: 'Tip: collect' }).count(), 0, "the bank's air runes are spent above: no promise of Earth Blasts from them");
     // five kinds of spell, one at a time: combat's showing
     const names = async () => (await card.locator('tr[data-method] td:nth-child(3)').allInnerTexts()).map(flat);
     const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
@@ -2136,34 +2181,36 @@ await check("magic: spells by how you train with them, each with its own runes; 
     assert.match(await tip('mg_fire_bolt'), /^Fire Bolt: level 35, 22\.5 XP each\nNeeds \(from scratch\): 1 Chaos rune, 4 Fire rune, 3 Air rune\nMax hit 12 \(15 with chaos gauntlets\): every point of damage is 2 XP on top of the cast's\. See Damage on the goal\./);
     assert.match(await tip('mg_crumble_undead'), /^Crumble Undead: level 39, 49 XP each\n.*\nOnly works on skeletons, zombies, ghosts and shades\. Max hit 8: .* LostHQ's calculator says 24\.5 XP; the server gives 49\./);
     assert.match(await tip('mg_saradomin_strike'), /\nTools: Staff of saradomin\nLearnt in the Mage Arena, and cast with the staff of Saradomin in hand\./);
-    // what's cast on something is planned by itself: iron ore goes to steel while there's coal, and 100 cosmic runes enchant 100 rings
+    // what's cast on something gets the runes first: iron ore goes to steel while there's coal, and 100 cosmic runes enchant
+    // 100 rings. Their fire and water runes aren't cast away as bolts and teleports before them
     await setBank('magic', { sapphire_ring: '300', iron_ore: '400', coal: '1000' });
     await page.click('.tab[data-tab="goals"]');
     await sec.locator('.step', { hasText: 'Steel bar' }).waitFor();
-    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +22,950 XP → level 52');
-    assert.deepEqual(await steps(), ['400 × Superheat Item: Steel bar +21,200 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
-    assert.equal(flat(await then.locator('.step').innerText()), '5,241 × Water Blast +149,368.5 XP');
-    // picked, a spell that only takes runes gets the bank first: 5,000 fire runes are 1,250 Fire Bolts, and leave none to superheat with
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +115,162.5 XP → level 57');
+    assert.deepEqual(await steps(), ['1,000 × Camelot Teleport +55,500 XP', '400 × Superheat Item: Steel bar +21,200 XP', '850 × Fire Bolt +19,125 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP',
+      '350 × Water Bolt +5,775 XP', '875 × Wind Bolt +11,812.5 XP']);
+    assert.equal(flat(await then.locator('.step').innerText()), '1,815 × Earth Blast +57,172.5 XP');
+    // picked, a spell gets the bank before anything else: 5,000 fire runes are 1,250 Fire Bolts, and leave none to superheat with
     await card.locator('tr[data-method="mg_fire_bolt"] td:nth-child(3)').click();
-    await sec.locator('.step', { hasText: 'Fire Bolt' }).waitFor();
-    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +29,875 XP → level 52');
-    assert.deepEqual(await steps(), ['1,250 × Fire Bolt +28,125 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
-    assert.equal(flat(await then.locator('.step').innerText()), '6,331 × Fire Bolt +142,447.5 XP');
-    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 4,581 Chaos rune( \([\d.,]+[KM]?\))? 25,324 Fire rune( \([\d.,]+[KM]?\))? 12,743 Air rune/);
+    await sec.locator('h4', { hasText: '+94,862.5 XP' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +94,862.5 XP → level 56');
+    assert.deepEqual(await steps(), ['1,250 × Fire Bolt +28,125 XP', '1,000 × Camelot Teleport +55,500 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP', '350 × Water Bolt +5,775 XP', '275 × Wind Bolt +3,712.5 XP']);
+    assert.equal(flat(await then.locator('.step').innerText()), '3,443 × Fire Bolt +77,467.5 XP');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 2,318 Chaos rune( \([\d.,]+[KM]?\))? 13,772 Fire rune( \([\d.,]+[KM]?\))? 10,329 Air rune/);
     assert.doesNotMatch(flat(await then.innerText()), /Also bring/);
-    // a staff of fire: no fire runes in anything, so the bank's go further and the ore is superheated after all
+    // a staff of fire: no fire runes in anything, so the bank's chaos runes all go to Fire Bolt and the ore is superheated after all
     await card.locator('select[data-opt="staff"]').selectOption('fire');
-    await sec.locator('h4', { hasText: '+90,450 XP' }).waitFor();
-    assert.deepEqual(await steps(), ['3,000 × Fire Bolt +67,500 XP', '400 × Superheat Item: Steel bar +21,200 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
-    assert.equal(flat(await then.locator('.step').innerText()), '3,639 × Fire Bolt +81,877.5 XP');
-    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 3,639 Chaos rune( \([\d.,]+[KM]?\))? 9,917 Air rune/);
+    await sec.locator('h4', { hasText: '+101,550 XP' }).waitFor();
+    assert.deepEqual(await steps(), ['3,000 × Fire Bolt +67,500 XP', '200 × Camelot Teleport +11,100 XP', '400 × Superheat Item: Steel bar +21,200 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
+    assert.equal(flat(await then.locator('.step').innerText()), '3,145 × Fire Bolt +70,762.5 XP');
+    assert.match(flat(await then.locator('.collect').first().innerText()), /^To collect or buy: 3,145 Chaos rune( \([\d.,]+[KM]?\))? 9,435 Air rune/);
     assert.match(flat(await then.innerText()), /Also bring: Staff of fire/);
     assert.match(await tip('mg_fire_bolt'), /\nNeeds \(from scratch\): 1 Chaos rune, 3 Air rune\nTools: Staff of fire\n/);
     assert.deepEqual((await goalOf('old_badger', 'magic')).opts, { staff: 'fire' });
     // damage counted: every cast for half its max hit (12), 2 XP a point
     await card.locator('select[data-opt="damage"]').selectOption('alldmg');
-    await sec.locator('h4', { hasText: '+126,450 XP' }).waitFor();
-    assert.equal(flat(await then.locator('.step').innerText()), '1,330 × Fire Bolt +45,885 XP');
+    await sec.locator('h4', { hasText: '+137,550 XP' }).waitFor();
+    assert.equal(flat(await then.locator('.step').innerText()), '1,008 × Fire Bolt +34,776 XP');
     bolt = await cells('mg_fire_bolt');
     assert.equal(bolt[3], '34.5');
     assert.match(await tip('mg_fire_bolt'), /^Fire Bolt: level 35, 34\.5 XP each \(the cast 22\.5 \+ damage 12\)\n/);
@@ -2171,11 +2218,12 @@ await check("magic: spells by how you train with them, each with its own runes; 
     await page.screenshot({ path: `${SHOTS}/10s-magic.png`, fullPage: true });
     await card.locator('select[data-opt="damage"]').selectOption('nodamage');
     await card.locator('select[data-opt="staff"]').selectOption('nostaff');
-    await sec.locator('h4', { hasText: '+29,875 XP' }).waitFor();
+    await sec.locator('h4', { hasText: '+94,862.5 XP' }).waitFor();
     assert.equal((await goalOf('old_badger', 'magic')).opts, undefined, 'the first of each list is how it starts: nothing to keep');
     // rounded up: the spell you train with goes as far as its most plentiful rune (10,000 air runes: 3,333), and runes
-    // never hold back what's cast on something: all 300 rings, the cosmic runes short collected
-    assert.match(await card.locator('label:has(input[data-gopt="roundUp"])').getAttribute('title'), /Runes never hold it back: what you're short of is collected too\.$/);
+    // never hold back what's cast on something: all 300 rings, the cosmic runes short collected. Nothing else is cast:
+    // spare runes alone don't call for more
+    assert.match(await card.locator('label:has(input[data-gopt="roundUp"])').getAttribute('title'), /Runes and balls of wool never hold it back: what you're short of is collected too\.$/);
     await card.locator('input[data-gopt="roundUp"]').check();
     await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
     assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank, supplies rounded up +106,742.5 XP → level 57');
@@ -2186,16 +2234,18 @@ await check("magic: spells by how you train with them, each with its own runes; 
     assert.match(rounded[2], /^300 × Lvl-1 Enchant: Ring of recoil \+5,250 XP .*collect\s?200 Cosmic rune$/);
     assert.match(flat(await sec.locator('.collect').innerText()), /^To round up your supplies, collect: 100 Iron ore.* 333 Chaos rune.* 10,332 Fire rune.* 200 Cosmic rune/);
     await card.locator('input[data-gopt="roundUp"]').uncheck();
-    await sec.locator('h4', { hasText: '+29,875 XP' }).waitFor();
-    // a spell above your level waits for it; what gets you there takes the bank's runes
+    await sec.locator('h4', { hasText: '+94,862.5 XP' }).waitFor();
+    // a spell above your level waits for it, and the bank's own spells get you there (v2.10): teleports and steel bars
+    // to level 55, then High Level Alchemy before anything else
     await card.locator('[data-tgroup="Utility"]').click();
     assert.deepEqual(await names(), ['Bones to Bananas', 'Low Level Alchemy', 'Telekinetic Grab', ...['Bronze', 'Iron', 'Silver', 'Steel', 'Gold', 'Mithril', 'Adamantite', 'Runite'].map(b => `Superheat Item: ${b} bar`), 'High Level Alchemy', 'Charge']);
     assert.match(await tip('mg_highlvl_alchemy'), /^High Level Alchemy: level 55, 65 XP each\nNeeds \(from scratch\): 1 Nature rune, 5 Fire rune\nAny item will do: what you alch, and the coins it turns into \(60% of its shop value\), aren't counted here\./);
     assert.match(await tip('mg_superheat_steel_bar'), /^Superheat Item: Steel bar: level 43, 53 XP each\nNeeds \(from scratch\): 1 Iron ore, 2 Coal, 1 Nature rune, 4 Fire rune\nNeeds Smithing 30\. It gives the bar's Smithing XP too, which isn't counted here\./);
     await card.locator('tr[data-method="mg_highlvl_alchemy"] td:nth-child(3)').click();
-    await then.locator('.step', { hasText: 'High Level Alchemy' }).waitFor();
-    assert.deepEqual((await then.locator('.step').allInnerTexts()).map(flat), ['First 1,363 × Low Level Alchemy +42,253 XP to reach level 55', 'Then 1,648 × High Level Alchemy +107,120 XP']);
-    assert.deepEqual(await steps(), ['400 × Superheat Item: Steel bar +21,200 XP', '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP']);
+    await sec.locator('.step', { hasText: 'High Level Alchemy' }).waitFor();
+    assert.deepEqual(await steps(), ['1,000 × Camelot Teleport +55,500 XP', '184 × Superheat Item: Steel bar +9,752 XP', '852 × High Level Alchemy +55,380 XP', '1 × Superheat Item: Steel bar +53 XP',
+      '100 × Lvl-1 Enchant: Ring of recoil +1,750 XP', '350 × Water Bolt +5,775 XP', '2,150 × Wind Bolt +29,025 XP']);
+    assert.deepEqual((await then.locator('.step').allInnerTexts()).map(flat), ['232 × High Level Alchemy +15,080 XP']);
     // the other kinds
     await card.locator('[data-tgroup="Curses"]').click();
     assert.deepEqual(await names(), ['Confuse', 'Weaken', 'Curse', 'Bind', 'Snare', 'Vulnerability', 'Enfeeble', 'Entangle', 'Stun']);
@@ -2210,11 +2260,33 @@ await check("magic: spells by how you train with them, each with its own runes; 
     assert.deepEqual(await names(), ['Varrock Teleport', 'Lumbridge Teleport', 'Falador Teleport', 'Camelot Teleport', 'Ardougne Teleport', 'Watchtower Teleport', 'Trollheim Teleport']);
     assert.match(await tip('mg_trollheim_teleport'), /\nOnce Eadgar's Ruse is done\. Not on LostHQ's calculator: the server's own level and XP\./);
     assert.deepEqual((await cells('mg_camelot_teleport')).slice(1, 4).concat((await cells('mg_camelot_teleport'))[6]), ['45', 'Camelot Teleport', '55.5', '1,000']);
+    // made on the way (v2.10): a bank of gold bars, gems and molten glass. Old Badger's Crafting is 56: the sapphires are cut
+    // and set in rings on the way, and the cosmic runes counted for them. (The glass waits: Charge Air Orb is Magic 66.)
+    await page.evaluate(() => {
+      const b = JSON.parse(localStorage.getItem('lchs.bank.old_badger'));
+      b.items = { gold_bar: 300, uncut_sapphire: 200, sapphire: 50, cosmicrune: 500, waterrune: 500, molten_glass: 100, airrune: 5000 };
+      localStorage.setItem('lchs.bank.old_badger', JSON.stringify(b));
+    });
+    await card.locator('select[data-gopt="fill"]').selectOption('mg_water_blast');
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('.tab[data-tab="goals"]');
+    await sec.locator('.step', { hasText: 'Ring of recoil' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +4,375 XP → level 50');
+    assert.match(flat(await sec.locator('.step').innerText()), /^250 × Lvl-1 Enchant: Ring of recoil \+4,375 XP .*incl\. 200 × Sapphire \(cut\), 250 × Sapphire ring$/);
+    // that Crafting XP is Crafting's: said under the plan, not counted in it (200 cuts at 50, 250 rings at 40)
+    assert.equal(flat(await sec.locator('.tip.crafting').innerText()), 'Crafting XP on the way: +20,000 XP from 200 × Sapphire (cut), 250 × Sapphire ring');
+    assert.match(await sec.locator('.tip.crafting').getAttribute('title'), /^Not part of the XP above: it's what making these on the way gives your Crafting\./);
+    await card.locator('[data-tgroup="Enchantment"]').click();
+    const recoil = await cells('mg_enchant_ring_of_recoil');
+    assert.deepEqual([recoil[6], flat(recoil[8])], ['250', '50 → 300'], 'From bank; and rounded up to the gold bars, with 50 sapphires to collect');
+    assert.equal((await cells('mg_air_orb'))[6], '100', 'the glass is 100 orbs, once Magic is 66');
+    // what the rest of a goal takes is still the ring itself
+    assert.match(await tip('mg_enchant_ring_of_recoil'), /\nNeeds \(from scratch\): 1 Sapphire ring, 1 Water rune, 1 Cosmic rune\n/);
     // its prices: by the bank's groups
     await page.click('.tab[data-tab="prices"]');
     await page.click('#prices-head [data-bskill="magic"]');
     await page.waitForSelector('[data-price="soulrune"]');
-    assert.match(flat(await text('#prices-body')), /^Runes .*Air rune.*Soul rune.*Jewellery to enchant .*Sapphire ring.*Ore to superheat .*Coal.*Orbs to charge .*Unpowered orb.*Made: enchanted jewellery .*Ring of recoil.*Made: bars .*Runite bar.*Made: orbs .*Air orb/);
+    assert.match(flat(await text('#prices-body')), /^Runes .*Air rune.*Soul rune.*Jewellery to enchant .*Sapphire ring.*Ore to superheat .*Coal.*Orbs to charge .*Unpowered orb.*What jewellery and orbs are made of .*Uncut sapphire.*Molten glass.*Made: enchanted jewellery .*Ring of recoil.*Made: bars .*Runite bar.*Made: orbs .*Air orb/);
   } finally {
     await page.evaluate(v => (v == null ? localStorage.removeItem('lchs.bank.old_badger') : localStorage.setItem('lchs.bank.old_badger', v)), saved);
     await page.click('.tab[data-tab="bank"]');
@@ -2229,6 +2301,381 @@ await check("magic: spells by how you train with them, each with its own runes; 
 
 // (back to Demo Main for the checks that follow, whatever happened above)
 try { await planAs('demo main', 'Demo Main'); } catch (e) { results.push(['FAIL', 'back to Demo Main after the Old Badger checks', e.message.split('\n')[0]]); }
+
+// (as Old Badger, whose XP nothing in this run changes: Attack 51, Strength 53, Defence 52, Hitpoints 54, Ranged 55, Prayer 56,
+// Magic 50, so combat level 67)
+await check('combat: Attack is trained on monsters: kills to the goal, the usual monster for your combat level, the style, and what else a kill gives', async () => {
+  await planAs('old badger', 'Old Badger');
+  await addGoal('attack', 60);
+  const card = goalCard('Attack');
+  try {
+    await card.locator('.plan').waitFor();
+    const t = flat(await card.innerText());
+    assert.match(t, /Level 51 → 60/);
+    assert.match(t, /A kill counts as the monster's hitpoints in damage, however many hits that takes\. Food, gear and drops aren't counted, so this plan doesn't use your bank or any prices\./);
+    assert.doesNotMatch(t, /From your bank|Use my bank|Round up|To collect or buy|Buying it all|is worth|Net\/item|gp\/XP|Cheapest XP|Plan to make/);
+    assert.match(t, /To reach your goal: 161,697 XP/);
+    // no monster picked: the most XP a kill among those no more than half your combat level (67: a rock crab, level 13, 50 hitpoints)
+    const plan = card.locator('.plan-sec', { hasText: 'To reach your goal' });
+    const fill = card.locator('select[data-gopt="fill"]');
+    assert.equal(await fill.inputValue(), 'at_rock_crab_13');
+    assert.equal(flat(await plan.locator('.step').innerText()), '809 × Rock Crab (level 13) +161,800 XP');
+    assert.equal(flat(await plan.locator('.bar .small-note').innerText()), 'Not your pick yet: the most XP a kill among monsters no more than half your combat level (67). Pick yours here, or find it in the table below.');
+    assert.equal((await goalOf('old_badger', 'attack')).fillId, undefined, 'nothing is kept until you pick');
+    assert.equal(await plan.locator('.step .item.blank .ico-attack').count(), 1, "no item to show: the skill's icon in its place");
+    assert.equal(await plan.locator('.money').count(), 0, 'no money to speak of');
+    // the list under Train with: every monster, by band of combat level, with its level, hitpoints and the XP of a kill
+    assert.deepEqual(await fill.locator('optgroup').evaluateAll(els => els.map(el => [el.label, el.children.length])),
+      [['Level 1–10', 58], ['Level 11–20', 48], ['Level 21–30', 49], ['Level 31–50', 67], ['Level 51–80', 43], ['Level 81–110', 30], ['Level 111 and up', 19]]);
+    assert.equal(flat(await fill.locator('option:checked').innerText()), 'Rock Crab (level 13, 50 HP, 200 XP)');
+    assert.deepEqual((await fill.locator('optgroup[label="Level 31–50"] option').allInnerTexts()).map(flat).filter(x => /^Guard \(/.test(x)), ['Guard (level 37, 40 HP, 160 XP)', 'Guard (level 37, 50 HP, 200 XP)'], 'the same name and level: the hitpoints say which');
+    // what else those kills give: Hitpoints XP on every point of damage, with the level it takes you to. (A rock crab leaves nothing to bury.)
+    const also = plan.locator('.tip.kills');
+    assert.equal(flat(await also.innerText()), 'Also from these kills: +53,798.5 Hitpoints XP (level 54 → 57).');
+    assert.match(await also.getAttribute('title'), /^Not part of the XP above\. Every point of damage gives 1\.33 Hitpoints XP as well, whatever your style;/);
+    assert.equal(809 * 665, 537985);
+    // the style is a choice on the goal. Controlled: 1.33 XP a point to each of Attack, Strength and Defence, so three times the kills and a few more
+    const style = card.locator('select[data-opt="style"]');
+    assert.deepEqual((await style.locator('option').allInnerTexts()).map(flat), ['Accurate', 'Controlled']);
+    assert.match(await card.locator('label:has(select[data-opt="style"])').getAttribute('title'), /^Every point of damage gives XP by the style you fight in\. Accurate: 4 Attack XP\. Controlled: 1\.33 XP each to Attack, Strength and Defence\. Whatever the style, a point of damage is 1\.33 Hitpoints XP as well\./);
+    await style.selectOption('controlled');
+    await plan.locator('.step', { hasText: '2,432' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '2,432 × Rock Crab (level 13) +161,728 XP');
+    assert.equal(flat(await fill.locator('option:checked').innerText()), 'Rock Crab (level 13, 50 HP, 66.5 XP)');
+    assert.equal(flat(await also.innerText()), 'Also from these kills: +161,728 Strength XP (level 53 → 60), +161,728 Defence XP (level 52 → 60) and +161,728 Hitpoints XP (level 54 → 61).');
+    assert.deepEqual((await goalOf('old_badger', 'attack')).opts, { style: 'controlled' });
+    await style.selectOption('accurate');
+    await plan.locator('.step', { hasText: '809' }).waitFor();
+    assert.equal((await goalOf('old_badger', 'attack')).opts, undefined, 'the first of the list is how it starts: nothing to keep');
+    // the table: a monster a row, its combat level and hitpoints, the XP of a kill and the kills to the goal. No money columns
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Monster', 'HP', 'XP', 'To goal', 'Plan to kill']);
+    assert.deepEqual(await card.locator('.plan-t thead th').evaluateAll(ths => ths.map(th => th.title).slice(0, 4)), ['Combat level', '', 'Hitpoints: a kill is this much damage', 'Attack XP a kill, in the style you picked']);
+    assert.deepEqual((await card.locator('.bar .seg button').allInnerTexts()).map(flat), ['Level', 'XP each']);
+    assert.match(flat(await card.locator('.plan-sec').last().locator('h4').innerText()), /^Every monster \(on its own, from level 51; click one to train on it\)$/);
+    assert.equal(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()),
+      'Lvl = combat level · HP = hitpoints: a kill is that much damage · XP = what a kill gives in the style you picked · To goal = kills of it alone · Plan to kill = your mix of monsters.');
+    // (a row's cells, shown or not: the search and the bands only hide rows)
+    const cells = id => card.locator(`tr[data-method="${id}"]`).evaluate(tr => [...tr.cells].map(td => td.textContent.replace(/\s+/g, ' ').trim()));
+    const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
+    assert.deepEqual(await cells('at_rock_crab_13'), ['13', 'Rock Crab', '50', '200', '809', '']);
+    assert.match(await card.locator('tr[data-method="at_rock_crab_13"]').getAttribute('class'), /\bhl\b/);
+    assert.equal(await tip('at_rock_crab_13'), 'Rock Crab (level 13): 50 hitpoints, 200 Attack XP a kill\nA kill also gives 66.5 Hitpoints XP\nLeaves nothing to bury\n34 in the world.');
+    assert.deepEqual(await cells('at_moss_giant_42'), ['42', 'Moss giant', '60', '240', '674', '']);
+    assert.equal(await tip('at_moss_giant_42'), 'Moss giant (level 42): 60 hitpoints, 240 Attack XP a kill\nA kill also gives 79.8 Hitpoints XP\nLeaves Big bones: 15 Prayer XP if you bury them\n22 in the world.');
+    assert.equal(await tip('at_lesser_demon_82'), 'Lesser demon (level 82): 79 hitpoints, 316 Attack XP a kill\nA kill also gives 105 Hitpoints XP\nLeaves nothing to bury\n34 in the world.');
+    assert.equal(await tip('at_king_black_dragon_276'), 'King black dragon (level 276): 240 hitpoints, 960 Attack XP a kill\nA kill also gives 319.2 Hitpoints XP\nLeaves Dragon bones: 72 Prayer XP if you bury them\nOne of a kind.');
+    // a monster with a catch is marked, and its row says what
+    assert.deepEqual(await cells('at_loar_shade_40'), ['40', 'Loar Shade *', '38', '152', '1,064', '']);
+    assert.match(await tip('at_loar_shade_40'), /\n25 in the world\.\nA Loar Shadow until you attack it, or it attacks you\.$/);
+    assert.match(await tip('at_man_24'), /\nA citizen of Canifis: your first hit turns it into a Wolfman \(level 88, 100 hitpoints\), unless you wield a Wolfbane dagger\.$/);
+    assert.match(await tip('at_black_knight_titan_120'), /^Black Knight Titan \(level 120\): 142 hitpoints, 142 Attack XP a kill\nA kill also gives 188\.8 Hitpoints XP\n.*\nOne of a kind\.\nThe server gives 1 XP a point of damage for it, whatever your style \(and Hitpoints XP as usual\)\.$/s);
+    assert.equal(await card.locator('tr[data-method="at_battle_mage_54"]').count(), 0, 'only Magic works in the Mage Arena');
+    // nothing to price and nothing banked: no tab on Prices or Bank
+    await page.click('.tab[data-tab="prices"]');
+    assert.equal(await page.locator('#prices-head [data-bskill="attack"], #prices-head [data-bskill="hitpoints"], #prices-head [data-bskill="ranged"]').count(), 0);
+    await page.click('.tab[data-tab="bank"]');
+    assert.equal(await page.locator('#bank-head [data-bskill="attack"], #bank-head [data-bskill="strength"], #bank-head [data-bskill="defence"]').count(), 0);
+    await page.click('.tab[data-tab="goals"]');
+    await page.screenshot({ path: `${SHOTS}/10t-combat.png`, fullPage: true });
+  } finally {
+    await removeGoal(card);
+    await noGoalFor('Attack');
+  }
+});
+
+await check('combat: a monster is found by its name or its combat level, or browsed by band; typing a search never redraws the plan; a mix is planned in kills', async () => {
+  await planAs('old badger', 'Old Badger');
+  await addGoal('attack', 60);
+  const card = goalCard('Attack');
+  try {
+    await card.locator('.plan').waitFor();
+    const plan = card.locator('.plan-sec', { hasText: /reach your goal/ });
+    const shown = async () => (await card.locator('tr[data-method]:not([hidden])').evaluateAll(trs => trs.map(tr => `${tr.cells[1].innerText.trim()} ${tr.cells[0].innerText.trim()}`)));
+    const heads = async () => (await card.locator('tr.grp:not([hidden])').allInnerTexts()).map(flat);
+    const found = () => card.locator('[data-found]').innerText();
+    const search = card.locator('[data-search]');
+    // every monster is in the table; the band of the monster you train on is what shows
+    assert.deepEqual((await card.locator('.group-pick .chip').allInnerTexts()).map(flat), ['Level 1–10', 'Level 11–20', 'Level 21–30', 'Level 31–50', 'Level 51–80', 'Level 81–110', 'Level 111 and up', 'All']);
+    assert.equal(flat(await card.locator('.group-pick .chip.on').innerText()), 'Level 11–20');
+    assert.deepEqual([await card.locator('tr[data-method]').count(), (await shown()).length, await heads()], [314, 48, ['Level 11–20']]);
+    assert.equal(await search.getAttribute('placeholder'), 'Search monsters: a name, or a combat level');
+    // part of a name: every band is searched, and each match sits under its band
+    await card.evaluate(el => { el.mark = true; });
+    await search.fill('giant');
+    assert.deepEqual(await shown(), ['Giant spider 2', 'Giant rat 3', 'Giant rat 6', 'Blessed Giant rat 9', 'Giant bat 27', 'Giant spider 27', 'Giant 28', 'Moss giant 42', 'Ice giant 49', 'Fire giant 86']);
+    assert.deepEqual(await heads(), ['Level 1–10', 'Level 21–30', 'Level 31–50', 'Level 81–110']);
+    assert.equal(await found(), '10 found, whatever their level');
+    assert.equal(await card.locator('.group-pick .chip.on').count(), 0, 'no band is the one shown while you search');
+    // a name and a combat level, in any order and any case
+    await search.fill('Skeleton 22');
+    assert.deepEqual([await shown(), await found()], [['Skeleton 22'], '1 found, whatever their level']);
+    await search.fill('28');
+    assert.deepEqual(await shown(), ['Giant 28', 'Hobgoblin 28', 'Kalphite Worker 28', 'Pit Scorpion 28', 'Soldier 28', 'Terrorbird 28', 'Tower guard 28'], 'a number is a combat level');
+    await search.fill('zzz');
+    assert.deepEqual([await shown(), await heads(), await found()], [[], [], 'No monster matches that. Try part of its name, or its combat level.']);
+    // typing is all on the page as it is: nothing was redrawn, so the box never loses a letter
+    assert.equal(await card.evaluate(el => el.mark), true, 'the goal is the one that was there before the search');
+    // a redraw (your XP read again) keeps what's typed and what's found
+    await search.fill('fire g');
+    assert.deepEqual(await shown(), ['Fire giant 86']);
+    await page.evaluate(() => { document.querySelector('#goals-list').firstElementChild.mark = true; });
+    await search.focus();
+    await page.click('[data-act="refresh-xp"]');
+    await page.waitForFunction(() => !document.querySelector('#goals-list').firstElementChild.mark, null, { timeout: 10000 });
+    assert.deepEqual([await search.inputValue(), await shown(), await found()], ['fire g', ['Fire giant 86'], '1 found, whatever their level']);
+    // click the monster found to train on it: the plan is in fire giants (111 hitpoints, 444 XP a kill), and it's your pick now
+    await card.locator('tr[data-method="at_fire_giant_86"] td:nth-child(2)').click();
+    await plan.locator('.step', { hasText: 'Fire giant' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '365 × Fire giant (level 86) +162,060 XP');
+    assert.equal((await goalOf('old_badger', 'attack')).fillId, 'at_fire_giant_86');
+    assert.equal(await plan.locator('.bar .small-note').count(), 0, 'your pick: nothing to say about how it was come by');
+    assert.deepEqual([await search.inputValue(), await shown()], ['fire g', ['Fire giant 86']], 'the search stays as it was');
+    // a band's button ends the search and shows the band
+    await card.locator('[data-tgroup="Level 81–110"]').click();
+    await card.locator('tr[data-method="at_lesser_demon_82"]:not([hidden])').waitFor();
+    assert.deepEqual([await search.inputValue(), (await shown()).length, await heads(), await found()], ['', 30, ['Level 81–110'], '']);
+    assert.equal(flat(await card.locator('.group-pick .chip.on').innerText()), 'Level 81–110');
+    await card.locator('[data-tgroup="all"]').click();
+    await card.locator('tr[data-method="at_chicken_1"]:not([hidden])').waitFor();
+    assert.deepEqual([(await shown()).length, (await heads()).length], [314, 7]);
+    // sorted by XP each, the most hitpoints come first
+    await card.locator('[data-tsort-plan="xp"]').click();
+    await page.waitForFunction(() => document.querySelector('.goal tr[data-method]')?.dataset.method === 'at_kalphite_queen_333');
+    assert.deepEqual((await shown()).slice(0, 3), ['Kalphite Queen 333', 'King black dragon 276', 'Black dragon 227']);
+    await card.locator('[data-tsort-plan="level"]').click();
+    await page.waitForFunction(() => document.querySelector('.goal tr[data-method]')?.dataset.method === 'at_chicken_1');
+    // picked from the list under Train with, too
+    await card.locator('select[data-gopt="fill"]').selectOption('at_ice_giant_49');
+    await plan.locator('.step', { hasText: 'Ice giant' }).waitFor();
+    assert.equal(flat(await plan.locator('.step').innerText()), '578 × Ice giant (level 49) +161,840 XP');
+    // what those kills give besides, and the bones they leave
+    assert.equal(flat(await plan.locator('.tip.kills').innerText()), 'Also from these kills: +53,811.8 Hitpoints XP (level 54 → 57). They leave 578 Big bones: +8,670 Prayer XP if you bury them.');
+    // a mix of monsters, typed under Plan to kill: 200 fire giants first, the rest on ice giants
+    assert.match(flat(await card.locator('.plan-sec', { has: page.locator('h4', { hasText: /^Your mix/ }) }).innerText()), /^Your mix Plan a mix of monsters: type how many of each you'll kill in the table's Plan to kill column below\. Their XP counts toward your goal, and the rest is planned after them\.$/);
+    await search.fill('fire giant');
+    const box = card.locator('[data-mix="at_fire_giant_86"]');
+    assert.deepEqual([await box.getAttribute('aria-label'), await box.getAttribute('title')], ['How many Fire giant (level 86) you plan to kill', 'How many you plan to kill']);
+    await box.fill('200');
+    await box.press('Enter');
+    const mix = card.locator('.plan-sec', { hasText: 'Your mix +88,800 XP' });
+    await mix.waitFor();
+    assert.equal(flat(await mix.locator('.step').innerText()), '200 × Fire giant (level 86) +88,800 XP');
+    assert.equal(flat(await mix.locator('.tip.kills').innerText()), 'Also from these kills: +29,520 Hitpoints XP (level 54 → 55). They leave 200 Big bones: +3,000 Prayer XP if you bury them.');
+    assert.match(flat(await plan.locator('h4').innerText()), /^Then, to reach your goal: 72,897 XP$/);
+    assert.equal(flat(await plan.locator('.step').innerText()), '261 × Ice giant (level 49) +73,080 XP');
+    assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Monster', 'HP', 'XP', 'To goal', 'Plan to kill', 'Still needed to goal']);
+    assert.deepEqual([await search.inputValue(), await shown()], ['fire giant', ['Fire giant 86']], 'still searching after the redraw');
+    await card.locator('[data-act="mix-clear"]').click();
+    await card.locator('.plan-sec', { hasText: 'Plan a mix of monsters' }).waitFor();
+  } finally {
+    await removeGoal(card);
+    await noGoalFor('Attack');
+    await page.evaluate(() => { const ui = JSON.parse(localStorage.getItem('lchs.planUi') || '{}'); if (ui.tgroup) { delete ui.tgroup.attack; localStorage.setItem('lchs.planUi', JSON.stringify(ui)); } });
+  }
+});
+
+await check('combat: Strength, Defence, Hitpoints and Ranged, each with its own styles; Hitpoints counts 1.33 XP a point whatever you fight with', async () => {
+  await planAs('old badger', 'Old Badger');
+  try {
+    // Strength: Aggressive, or Controlled
+    await addGoal('strength', 54);
+    let card = goalCard('Strength');
+    await card.locator('.plan').waitFor();
+    assert.deepEqual((await card.locator('select[data-opt="style"] option').allInnerTexts()).map(flat), ['Aggressive', 'Controlled']);
+    assert.equal(await card.locator('select[data-gopt="fill"]').inputValue(), 'st_rock_crab_13');
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /^A kill counts as the monster's hitpoints in damage, however many hits that takes\. Food, gear and drops aren't counted, so this plan doesn't use your bank or any prices\. Style Aggressive Controlled$/);
+    assert.equal(await card.locator('tr[data-method]').count(), 314);
+    await removeGoal(card);
+    await noGoalFor('Strength');
+    // Defence: Defensive, Controlled, or Ranged's Longrange (2 XP a point each to Ranged and Defence)
+    await addGoal('defence', 60);
+    card = goalCard('Defence');
+    await card.locator('.plan').waitFor();
+    const style = card.locator('select[data-opt="style"]');
+    assert.deepEqual((await style.locator('option').allInnerTexts()).map(flat), ['Defensive', 'Controlled', 'Longrange (Ranged)']);
+    const then = card.locator('.plan-sec', { hasText: 'To reach your goal' });
+    assert.match(flat(await then.locator('h4').innerText()), /^To reach your goal: 149,982 XP$/);
+    assert.equal(flat(await then.locator('.step').innerText()), '750 × Rock Crab (level 13) +150,000 XP');
+    await style.selectOption('longrange');
+    await then.locator('.step', { hasText: '1,500' }).waitFor();
+    assert.equal(flat(await then.locator('.step').innerText()), '1,500 × Rock Crab (level 13) +150,000 XP');
+    assert.equal(flat(await then.locator('.tip.kills').innerText()), 'Also from these kills: +150,000 Ranged XP (level 55 → 61) and +99,750 Hitpoints XP (level 54 → 59).');
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /Food, gear, ammunition and drops aren't counted/);
+    assert.equal(await card.locator('tr[data-method="df_rock_crab_13"]').getAttribute('title'), 'Rock Crab (level 13): 50 hitpoints, 100 Defence XP a kill\nA kill also gives 100 Ranged XP and 66.5 Hitpoints XP\nLeaves nothing to bury\n34 in the world.');
+    await removeGoal(card);
+    await noGoalFor('Defence');
+    // Ranged: Accurate or Rapid (4 XP a point), or Longrange
+    await addGoal('ranged', 60);
+    card = goalCard('Ranged');
+    await card.locator('.plan').waitFor();
+    assert.deepEqual((await card.locator('select[data-opt="style"] option').allInnerTexts()).map(flat), ['Accurate or Rapid', 'Longrange']);
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /Ammunition, food, gear and drops aren't counted/);
+    assert.equal(flat(await card.locator('select[data-gopt="fill"] option:checked').innerText()), 'Rock Crab (level 13, 50 HP, 200 XP)');
+    await removeGoal(card);
+    await noGoalFor('Ranged');
+    // Hitpoints: no style to pick. 1.33 XP a point of damage: a rock crab's 50 hitpoints are 66.5 XP, a moss giant's 60 are 79.8.
+    // The battle mages of the Mage Arena are here and nowhere else: only Magic can hit them
+    await addGoal('hitpoints', 60);
+    card = goalCard('Hitpoints');
+    await card.locator('.plan').waitFor();
+    assert.equal(await card.locator('select[data-opt="style"]').count(), 0);
+    assert.match(flat(await card.locator('.plan-opts').innerText()), /Food, gear, ammunition, runes and drops aren't counted, so this plan doesn't use your bank or any prices\.$/);
+    assert.equal(flat(await card.locator('select[data-gopt="fill"] option:checked').innerText()), 'Rock Crab (level 13, 50 HP, 66.5 XP)');
+    assert.equal(await card.locator('tr[data-method]').count(), 315);
+    const hp = card.locator('.plan-sec', { hasText: 'To reach your goal' });
+    assert.match(flat(await hp.locator('h4').innerText()), /^To reach your goal: 122,770 XP$/);
+    assert.equal(flat(await hp.locator('.step').innerText()), '1,847 × Rock Crab (level 13) +122,825.5 XP');
+    assert.equal(await hp.locator('.tip.kills').count(), 0, 'no other skill is said to gain (that depends on how you fight), and a rock crab leaves nothing');
+    await card.locator('select[data-gopt="fill"]').selectOption('hp_moss_giant_42');
+    await hp.locator('.step', { hasText: 'Moss giant' }).waitFor();
+    assert.equal(flat(await hp.locator('.step').innerText()), '1,539 × Moss giant (level 42) +122,812.2 XP');
+    assert.equal(flat(await hp.locator('.tip.kills').innerText()), 'These kills leave 1,539 Big bones: +23,085 Prayer XP if you bury them.');
+    await card.locator('[data-search]').fill('battle');
+    assert.deepEqual(await card.locator('tr[data-method]:not([hidden])').evaluateAll(trs => trs.map(tr => [...tr.cells].slice(0, 4).map(td => td.innerText.replace(/\s+/g, ' ').trim()))), [['54', 'Battle mage *', '120', '159.6']]);
+    assert.match(await card.locator('tr[data-method="hp_battle_mage_54"]').getAttribute('title'), /\nIn the Mage Arena, once you've beaten Kolodion there\. He allows only magical combat within it: no melee, no Ranged\.$/);
+  } finally {
+    for (const name of ['Strength', 'Defence', 'Ranged', 'Hitpoints']) { await removeGoal(goalCard(name)); await noGoalFor(name); }
+  }
+});
+
+await check("goals: the combat level card, the same one Lookup has: your level now, with your goals reached, and its calculator", async () => {
+  const live = () => page.locator('#gc-live');
+  const shut = async () => flat(await page.locator('#goals-combat').innerText());
+  await planAs('old badger', 'Old Badger');
+  const saved = await page.evaluate(() => localStorage.getItem('lchs.goals.old_badger'));
+  try {
+    // no goal in a combat skill: your combat level, and a button for the calculator
+    assert.deepEqual(JSON.parse(saved || '[]').filter(g => ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic'].includes(g.skill)), [], 'no goal of an earlier check is left in a combat skill');
+    await page.waitForSelector('#goals-combat .combat-card');
+    assert.equal(await shut(), 'Combat level 67 Combat calculator');
+    assert.equal(await page.locator('#goals-combat .ico-combat').count(), 1, 'the crossed swords');
+    assert.equal(await page.locator('#gc-live, #goals-combat [data-gcalc]').count(), 0, 'one line until you open it');
+    // a goal in a combat skill: what your combat level is once it's reached. Attack 51 to 60 is three combat levels
+    await addGoal('attack', 60);
+    await page.waitForFunction(() => /once your goals are reached/.test(document.querySelector('#goals-combat').innerText));
+    assert.equal(await shut(), 'Combat level 67 → 70 once your goals are reached Combat calculator');
+    // a goal that changes nothing says so: Ranged 55 to 56 leaves melee the best of the three
+    await addGoal('ranged', 56);
+    await goalCard('Ranged').waitFor();
+    assert.equal(await shut(), 'Combat level 67 → 70 once your goals are reached Combat calculator');
+    await removeGoal(goalCard('Attack'));
+    await noGoalFor('Attack');
+    assert.equal(await shut(), 'Combat level 67 and the same once your goals are reached Combat calculator');
+    await removeGoal(goalCard('Ranged'));
+    await noGoalFor('Ranged');
+    assert.equal(await shut(), 'Combat level 67 Combat calculator');
+    // open: how the level is made up and what gets the next one, as on Lookup
+    await page.click('[data-act="combat-toggle"]');
+    await live().waitFor();
+    assert.equal(flat(await live().locator('.cc-head').innerText()), 'Combat level 67 Hide calculator');
+    const lines = async () => (await live().locator('.cc-line').allInnerTexts()).map(flat);
+    assert.deepEqual(await lines(), ['Base: ¼ × (Defence 52 + Hitpoints 54 + half of Prayer 56 = 28) = 33.50',
+      'Plus the best of: Melee 0.325 × (Attack 51 + Strength 53) = 33.80 · Ranged 0.325 × (55 + half 27) = 26.65 · Magic 0.325 × (50 + half 25) = 24.375',
+      '= 67.30, rounded down to 67. Any one of these gets 68:']);
+    assert.deepEqual((await live().locator('.cc-next .need').allInnerTexts()).map(flat), ['Attack +3', 'Strength +3', 'Defence +3', 'Hitpoints +3', 'Prayer +6', 'Ranged +17', 'Magic +22']);
+    assert.deepEqual(await page.locator('#goals-combat [data-gcalc]').evaluateAll(els => els.map(el => [el.dataset.gcalc, el.value])),
+      [['attack', '51'], ['strength', '53'], ['defence', '52'], ['hitpoints', '54'], ['ranged', '55'], ['prayer', '56'], ['magic', '50']]);
+    assert.equal(flat(await page.locator('#goals-combat .calc .small-note').innerText()), "Combat calculator: it starts from Old Badger's levels. Type a level to see what it does.");
+    assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), true);
+    assert.equal(flat(await page.locator('[data-act="combat-reset"]').innerText()), 'Reset to Old Badger');
+    // it is Lookup's card: the same lines for the same levels
+    await page.click('.tab[data-tab="lookup"]');
+    await page.fill('#lookup-name', 'old badger');
+    await page.click('#lookup-form button');
+    await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.includes('Old Badger'), null, { timeout: 15000 });
+    await page.click('#filter-seg [data-filter="combat"]');
+    await page.waitForFunction(() => /67\.30/.test(document.querySelector('#cc-live')?.innerText || ''));
+    const lookup = (await page.locator('#cc-live .cc-line').allInnerTexts()).map(flat);
+    const hints = (await page.locator('#cc-live .cc-next .need').allInnerTexts()).map(flat);
+    await page.click('#filter-seg [data-filter="all"]');
+    await page.click('.tab[data-tab="goals"]');
+    await live().waitFor();
+    assert.deepEqual([await lines(), (await live().locator('.cc-next .need').allInnerTexts()).map(flat)], [lookup, hints]);
+    // with goals, its boxes start from your levels with those reached
+    await addGoal('attack', 60);
+    await page.waitForFunction(() => /once your goals are reached/.test(document.querySelector('#gc-live')?.innerText || ''));
+    assert.equal(flat(await live().locator('.cc-head').innerText()), "Combat level once your goals are reached 70 +3 from Old Badger's 67 Hide calculator");
+    assert.equal(await page.inputValue('[data-gcalc="attack"]'), '60');
+    assert.equal((await lines())[1], 'Plus the best of: Melee 0.325 × (Attack 60 + Strength 53) = 36.725 · Ranged 0.325 × (55 + half 27) = 26.65 · Magic 0.325 × (50 + half 25) = 24.375');
+    assert.equal(flat(await page.locator('#goals-combat .calc .small-note').innerText()), "Combat calculator: it starts from Old Badger's levels, with your goals reached (Attack). Type a level to see what it does.");
+    assert.equal(flat(await page.locator('[data-act="combat-reset"]').innerText()), 'Reset to your goals');
+    // type a level to try it: the card follows as you type, and the box keeps the cursor
+    await page.fill('[data-gcalc="defence"]', '70');
+    await page.waitForFunction(() => /What-if/.test(document.querySelector('#gc-live').innerText));
+    assert.equal(flat(await live().locator('.cc-head').innerText()), "What-if combat level 74 +7 from Old Badger's 67 Hide calculator");
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset.gcalc), 'defence');
+    assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), false);
+    // typed back to what it started from, there's nothing to reset
+    await page.fill('[data-gcalc="defence"]', '52');
+    await page.waitForFunction(() => !/What-if/.test(document.querySelector('#gc-live').innerText));
+    assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), true);
+    await page.fill('[data-gcalc="defence"]', '70');
+    await page.waitForFunction(() => /What-if/.test(document.querySelector('#gc-live').innerText));
+    assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), false);
+    // a level out of range is brought back into it when you leave the box
+    await page.fill('[data-gcalc="prayer"]', '150');
+    await page.press('[data-gcalc="prayer"]', 'Tab');
+    assert.equal(await page.inputValue('[data-gcalc="prayer"]'), '99');
+    // what's typed stays through a redraw, and through the goals changing under it
+    await page.evaluate(() => { document.querySelector('#goals-combat').firstElementChild.mark = true; });
+    await page.click('[data-act="refresh-xp"]');
+    await page.waitForFunction(() => !document.querySelector('#goals-combat').firstElementChild.mark, null, { timeout: 10000 });
+    assert.deepEqual([await page.inputValue('[data-gcalc="defence"]'), await page.inputValue('[data-gcalc="prayer"]'), await page.inputValue('[data-gcalc="attack"]')], ['70', '99', '60']);
+    await page.click('[data-act="combat-reset"]');
+    await page.waitForFunction(() => !/What-if/.test(document.querySelector('#gc-live').innerText));
+    assert.deepEqual([await page.inputValue('[data-gcalc="defence"]'), await page.inputValue('[data-gcalc="prayer"]')], ['52', '56']);
+    assert.equal(flat(await live().locator('.cc-head').innerText()), "Combat level once your goals are reached 70 +3 from Old Badger's 67 Hide calculator");
+    await page.screenshot({ path: `${SHOTS}/10u-combat-card.png`, fullPage: false });
+    // open or shut is remembered
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).combatOpen), true);
+    await page.click('[data-act="combat-toggle"]');
+    await page.waitForFunction(() => !document.querySelector('#gc-live'));
+    assert.equal(await shut(), 'Combat level 67 → 70 once your goals are reached Combat calculator');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).combatOpen), false);
+    await removeGoal(goalCard('Attack'));
+    await noGoalFor('Attack');
+    // an account with combat skills off the hiscores: a range, and the card says why
+    await planAs('lowbie', 'Lowbie');
+    await page.waitForFunction(() => /Combat level\s+\d+–\d+/.test(document.querySelector('#goals-combat').innerText));
+    assert.match(await shut(), /^Combat level \d+–\d+ Combat calculator$/);
+    await page.click('[data-act="combat-toggle"]');
+    await live().waitFor();
+    assert.match(flat(await live().innerText()), /Some combat skills are below 15, so they're not on the hiscores\. Their lowest possible levels are used below, and you can change them in the calculator\./);
+    await page.click('[data-act="combat-toggle"]');
+  } finally {
+    await planAs('old badger', 'Old Badger');
+    await page.evaluate(v => (v == null ? localStorage.removeItem('lchs.goals.old_badger') : localStorage.setItem('lchs.goals.old_badger', v)), saved);
+    await page.evaluate(() => { const ui = JSON.parse(localStorage.getItem('lchs.planUi') || '{}'); delete ui.combatOpen; localStorage.setItem('lchs.planUi', JSON.stringify(ui)); });
+    await planAs('demo main', 'Demo Main');
+  }
+});
+
+await check('goals: every skill has its planner: no dot on the skill picker, and nothing said about skills to come', async () => {
+  await page.click('.tab[data-tab="goals"]');
+  assert.equal(await page.locator('.calc-dot').count(), 0);
+  // every skill's button is its name, and its goal gets a plan
+  const picker = await page.locator('#goal-new [data-nskill]').evaluateAll(els => els.map(el => [el.dataset.nskill, el.title, el.getAttribute('aria-label'), el.children.length]));
+  assert.equal(picker.length, 19);
+  for (const [key, title, label, kids] of picker) assert.deepEqual([title, kids, /\(planner\)/.test(title)], [label, 1, false], key);
+  assert.deepEqual(picker.map(p => p[1]), ['Attack', 'Defence', 'Strength', 'Hitpoints', 'Ranged', 'Prayer', 'Magic', 'Cooking', 'Woodcutting', 'Fletching', 'Fishing', 'Firemaking', 'Crafting', 'Smithing', 'Mining',
+    'Herblore', 'Agility', 'Thieving', 'Runecraft']);
+  const mod = await page.evaluate(async () => { const m = await import('./planner-ui.js'); const s = await import('./skills.js'); return s.SKILLS.filter(x => x.id).map(x => [x.key, m.hasCalculator(x.key)]); });
+  assert.ok(mod.length === 19 && mod.every(([, has]) => has), JSON.stringify(mod.filter(([, has]) => !has)));
+  // an account with no goals: how to start, and no list of skills that have a planner or of those still to come
+  await planAs('pure ranger', 'Pure Ranger');
+  try {
+    assert.equal(flat(await text('#goals-list')), 'No goals yet. Pick a skill above and set a level, XP, rank or top % to reach.');
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('[data-bskill="herblore"]');
+    const note = flat(await page.locator('#bank-head .note').innerText());
+    assert.match(note, /Only the items the planner uses are listed\. /);
+    for (const where of ['#view-goals', '#view-bank', '#view-prices', '#settings']) {
+      assert.doesNotMatch(await page.locator(where).evaluate(el => el.textContent), /later update|more skills|skills follow|marked with a dot|comes in a later/i, where);
+    }
+  } finally {
+    await planAs('demo main', 'Demo Main');
+  }
+});
 
 await check('mining: no bank, rocks to mine and what they are worth; limestone, a gem rock by its chances, and ore by the bar (steel: 2 coal to 1 iron)', async () => {
   const flat = t => t.replace(/\s+/g, ' ').trim();

@@ -459,7 +459,6 @@ table.cmp tfoot td { background: #241e10; font-size: 13px; }
 
 .goal-new .skill-picker { margin-bottom: 4px; }
 .skill-btn { position: relative; }
-.calc-dot { position: absolute; top: 2px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: var(--gold-hi); box-shadow: 0 0 0 1px #000; }
 .goal-skill { display: inline-flex; align-items: center; gap: 5px; color: #fff; }
 .goal-new form .input.num { width: 110px; }
 
@@ -534,6 +533,14 @@ table.plan-t input[type=checkbox] { accent-color: var(--gold); cursor: pointer; 
 table.plan-t .per { font-family: var(--small); font-size: 12px; color: var(--faint); white-space: nowrap; }
 .group-pick { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
 .group-pick .chip.on { border-style: inset; color: #fff; box-shadow: inset 0 -3px 0 var(--gold-hi), inset 0 0 0 40px rgba(0, 0, 0, 0.25); }
+/* The monster search above a combat skill's table, and the mark on a monster with a catch (its tooltip says what) */
+.find-bar { margin: 0 0 6px; }
+.find-bar .find-in { width: 290px; max-width: 100%; }
+table.plan-t .catch { color: var(--gold-hi); cursor: help; }
+/* The combat card on the Goals tab: shut, it's one line */
+.combat-card.shut .cc-head .big { font-size: 19px; }
+.cc-style b { color: #fff; font-weight: normal; font-size: 15px; }
+.calc > .small-note { margin-bottom: 2px; }
 
 .skill-switch { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
 .skill-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; }

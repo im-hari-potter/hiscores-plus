@@ -13,7 +13,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.9.0';
+const VERSION = '2.10.0';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -181,6 +181,8 @@ function topFor(id, rank) {
 // ── Planner (Goals, Bank, Prices) ────────────────────────────────────────
 const planner = createPlanner({
   api, totals, prices, esc, fmt, ago, iconImg, showMsg, errorText,
+  // (the combat card's pieces, for the one on the Goals tab)
+  combatCard: { icon: COMBAT, text: combatText, live: (...a) => combatLiveHtml(...a), grid: (...a) => calcGridHtml(...a) },
   fullMarket: LOCAL || isElectron(),
   inLostKit: isElectron(),
   defaultAccount: () => prefs.lastLookup || players.saved()[0] || null,
@@ -431,6 +433,40 @@ function calcLevelsFrom(profile) {
 
 const FRESH = { attack: 1, strength: 1, defence: 1, hitpoints: 10, ranged: 1, prayer: 1, magic: 1 };
 
+// The card's two pieces, which the Goals tab uses as well for the account you
+// plan for (planner-ui.js): the calculator's boxes, and what follows the levels.
+// attr: the data attribute the boxes carry (Lookup's: calc).
+const CALC_ORDER = ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic'];
+const calcGridHtml = (L, attr = 'calc') => `<div class="calc-grid">
+          ${CALC_ORDER.map(k => {
+            const s = SKILLS.find(x => x.key === k);
+            return `<label>${iconImg(s)}<span>${s.name}</span><input class="input small" type="number" min="${k === 'hitpoints' ? 10 : 1}" max="99" value="${L[k]}" data-${attr}="${k}" aria-label="${s.name} level"></label>`;
+          }).join('')}
+        </div>`;
+// head: the line that says the level (HTML). note: a line under the bar, if any.
+function combatLiveHtml(L, head, note = '') {
+  const b = combatBreakdown(L);
+  const next = levelsToNextCombat(L);
+  const f2 = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+  const needs = COMBAT_KEYS
+    .filter(k => next[k] != null)
+    .sort((a, c) => next[a] - next[c])
+    .map(k => {
+      const s = SKILLS.find(x => x.key === k);
+      return `<span class="need" title="${s.name} ${L[k]} → ${L[k] + next[k]}">${iconImg(s)} ${s.name} +${next[k]}</span>`;
+    }).join('');
+  return `
+    <div class="cc-head">${iconImg(COMBAT)} ${head}</div>
+    <div class="cc-bar" title="${Math.round(b.progress * 100)}% of the way to ${b.level + 1}"><div style="width:${(b.progress * 100).toFixed(1)}%"></div></div>
+    ${note}
+    <div class="cc-line">Base: ¼ × (Defence <b>${L.defence}</b> + Hitpoints <b>${L.hitpoints}</b> + half of Prayer <b>${L.prayer}</b> = <b>${Math.floor(L.prayer / 2)}</b>) = <b>${f2(b.base)}</b></div>
+    <div class="cc-line">Plus the best of: Melee 0.325 × (Attack <b>${L.attack}</b> + Strength <b>${L.strength}</b>) = <b>${f2(b.melee)}</b> ·
+      Ranged 0.325 × (<b>${L.ranged}</b> + half <b>${Math.floor(L.ranged / 2)}</b>) = <b>${f2(b.range)}</b> ·
+      Magic 0.325 × (<b>${L.magic}</b> + half <b>${Math.floor(L.magic / 2)}</b>) = <b>${f2(b.magic)}</b></div>
+    <div class="cc-line">= ${f2(b.exact)}, rounded down to <b>${b.level}</b>${b.level < 126 ? `. Any one of these gets ${b.level + 1}:` : '. Maxed.'}</div>
+    ${b.level < 126 ? `<div class="cc-next">${needs || '<span class="c-faint">Nothing single-handedly; train a few skills.</span>'}</div>` : ''}`;
+}
+
 function renderCombatCard() {
   const el = $('lk-combat');
   if (!el) return;
@@ -440,18 +476,12 @@ function renderCombatCard() {
     state.calc = p ? { levels: calcLevelsFrom(p), source: p.name } : { levels: { ...FRESH }, source: null };
   }
   const L = state.calc.levels;
-  const order = ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic'];
   el.innerHTML = `
     <div class="card combat-card">
       <div id="cc-live"></div>
       <details class="calc" ${p ? '' : 'open'}>
         <summary>Combat calculator${p ? ` (starts from ${esc(p.name)}'s levels)` : ''}</summary>
-        <div class="calc-grid">
-          ${order.map(k => {
-            const s = SKILLS.find(x => x.key === k);
-            return `<label>${iconImg(s)}<span>${s.name}</span><input class="input small" type="number" min="${k === 'hitpoints' ? 10 : 1}" max="99" value="${L[k]}" data-calc="${k}" aria-label="${s.name} level"></label>`;
-          }).join('')}
-        </div>
+        ${calcGridHtml(L)}
         <div class="bar"><button type="button" class="btn small" data-action="calc-reset">${p ? `Reset to ${esc(p.name)}` : 'Reset'}</button></div>
       </details>
     </div>`;
@@ -464,33 +494,15 @@ function renderCombatLive() {
   const L = state.calc.levels;
   const p = state.lookup.profile;
   const b = combatBreakdown(L);
-  const next = levelsToNextCombat(L);
   const real = p ? combatFromProfile(levelsOf(p), p.stats[0]?.level) : null;
   const differs = p && real && (COMBAT_KEYS.some(k => L[k] !== real.low[k]));
-  const f2 = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 });
-  const needs = COMBAT_KEYS
-    .filter(k => next[k] != null)
-    .sort((a, c) => next[a] - next[c])
-    .map(k => {
-      const s = SKILLS.find(x => x.key === k);
-      return `<span class="need" title="${s.name} ${L[k]} → ${L[k] + next[k]}">${iconImg(s)} ${s.name} +${next[k]}</span>`;
-    }).join('');
   let head;
   if (!p) head = `Combat level <span class="big">${b.level}</span>`;
   else if (differs) head = `What-if combat level <span class="big">${b.level}</span> <span class="cc-style">${b.level - real.min >= 0 ? '+' : ''}${b.level - real.min} from ${esc(p.name)}'s ${combatText(real)}</span>`;
   else head = `Combat level <span class="big">${combatText(real)}</span>`;
   const unknown = p && !differs && real.min !== real.max
     ? `<div class="cc-line">Some combat skills are below 15, so they're not on the hiscores. Their lowest possible levels are used below, and you can change them in the calculator.</div>` : '';
-  el.innerHTML = `
-    <div class="cc-head">${iconImg(COMBAT)} ${head}</div>
-    <div class="cc-bar" title="${Math.round(b.progress * 100)}% of the way to ${b.level + 1}"><div style="width:${(b.progress * 100).toFixed(1)}%"></div></div>
-    ${unknown}
-    <div class="cc-line">Base: ¼ × (Defence <b>${L.defence}</b> + Hitpoints <b>${L.hitpoints}</b> + half of Prayer <b>${L.prayer}</b> = <b>${Math.floor(L.prayer / 2)}</b>) = <b>${f2(b.base)}</b></div>
-    <div class="cc-line">Plus the best of: Melee 0.325 × (Attack <b>${L.attack}</b> + Strength <b>${L.strength}</b>) = <b>${f2(b.melee)}</b> ·
-      Ranged 0.325 × (<b>${L.ranged}</b> + half <b>${Math.floor(L.ranged / 2)}</b>) = <b>${f2(b.range)}</b> ·
-      Magic 0.325 × (<b>${L.magic}</b> + half <b>${Math.floor(L.magic / 2)}</b>) = <b>${f2(b.magic)}</b></div>
-    <div class="cc-line">= ${f2(b.exact)}, rounded down to <b>${b.level}</b>${b.level < 126 ? `. Any one of these gets ${b.level + 1}:` : '. Maxed.'}</div>
-    ${b.level < 126 ? `<div class="cc-next">${needs || '<span class="c-faint">Nothing single-handedly; train a few skills.</span>'}</div>` : ''}`;
+  el.innerHTML = combatLiveHtml(L, head, unknown);
 }
 
 // ── Compare ──────────────────────────────────────────────────────────────

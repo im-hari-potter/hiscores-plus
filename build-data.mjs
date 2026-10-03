@@ -2410,16 +2410,28 @@ async function agility() {
   // (pinned to a batch by a goal's choice: every ticket at its rate, and no pooling)
   const pinned = base => Object.fromEntries(batches.map(b => [`x${b[0]}`, { xp: base + each(b), parts: base ? [['on the way', base], ['exchanged', each(b)]] : undefined, exchange: null }]));
   const least = each(batches[batches.length - 1]);
+  // The arena's three rows, named for what their XP is. Total XP: a pillar's
+  // ticket earned and exchanged. XP per ticket: the exchange alone, for tickets
+  // you hold. XP per pillar: getting to the pillar alone, for when its ticket
+  // goes on herbs or another reward instead. (as: how a plan's lines say them.)
+  const wayNote = `On average ${open.count.toFixed(1)} obstacles lie between one ticket pillar and the next: ${own / 10} XP on the way. Below level ${levels[levels.length - 1]} some are shut and the way round is longer, so it's a little more. `
+    + `A pillar ${ticksText(moves) === '1 minute' ? 'a minute' : `every ${ticksText(moves)}`} at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss. Going in costs ${fmt(fee)} coins.`;
   mine.push({
-    id: 'ag_ticket', skill: 'agility', group: 'Agility Arena', kind: 'xp', name: 'Agility Arena ticket', level: 1, xp: own + least, in: {}, out: {}, icon: ticket,
+    id: 'ag_ticket', skill: 'agility', group: 'Agility Arena', kind: 'xp', name: 'Total XP', level: 1, xp: own + least, in: {}, out: {}, icon: ticket,
+    as: ['Agility Arena ticket earned and exchanged', 'Agility Arena tickets earned and exchanged'],
     parts: [['on the way', own], ['exchanged', least]], exchange: { own, ...exchange }, opt: pinned(own),
-    note: `On average ${open.count.toFixed(1)} obstacles lie between one ticket pillar and the next: ${own / 10} XP on the way. Below level ${levels[levels.length - 1]} some are shut and the way round is longer, so it's a little more. `
-      + `A pillar ${ticksText(moves) === '1 minute' ? 'a minute' : `every ${ticksText(moves)}`} at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss. Going in costs ${fmt(fee)} coins.`,
+    note: `A pillar's ticket, earned and exchanged for XP. ${wayNote}`,
   });
   mine.push({
-    id: 'ag_ticket_held', skill: 'agility', group: 'Agility Arena', kind: 'xp', name: 'Arena ticket you already have', level: 1, xp: least, in: {}, out: {}, icon: ticket, aside: 1,
+    id: 'ag_ticket_held', skill: 'agility', group: 'Agility Arena', kind: 'xp', name: 'XP per ticket', level: 1, xp: least, in: {}, out: {}, icon: ticket, aside: 1,
+    as: ['Agility Arena ticket exchanged', 'Agility Arena tickets exchanged'],
     exchange: { own: 0, ...exchange }, opt: pinned(0),
     note: "For tickets you've saved up: only what they're exchanged for counts. Type how many you have under Plan to make.",
+  });
+  mine.push({
+    id: 'ag_pillar', skill: 'agility', group: 'Agility Arena', kind: 'xp', name: 'XP per pillar', level: 1, xp: own, in: {}, out: {}, icon: ticket, aside: 1,
+    as: ['Agility Arena pillar, its ticket kept', 'Agility Arena pillars, their tickets kept'],
+    note: `Getting to a pillar alone: for when its ticket goes on herbs or another reward instead of XP. ${wayNote}`,
   });
   for (const m of mine) for (const v of Object.values(m.opt || {})) if (v.parts === undefined) delete v.parts;
   choices.agility = [
@@ -2548,12 +2560,27 @@ await prayer();
 //                 the Charge Orb spells.
 //   Teleports
 // Rows here stand on their own: nothing is shared with the Crafting and Smithing
-// rows that cast the same spells on the way.
+// rows that cast the same spells on the way. Magic stays a goal of its own.
 //
-// asked: a spell that takes nothing but runes. A bank can't say which of them
-// its runes are for, so a bank plan casts one only when it's the spell you train
-// with (or it has a place in your order). What goes into a spell besides runes
-// (a ring, ore, an orb) is planned from a bank by itself, like any other skill's.
+// What a spell is cast on can be made on the way, though: a bank holds gold bars
+// and gems, or molten glass, more often than the rings and orbs themselves. The
+// Crafting rows that lead to something a spell is cast on are Magic's too, as
+// sources (kind source: made from what's in the bank, never put on a shopping
+// list), so a bank's cosmic runes are counted for the jewellery and the orbs it
+// can still make. They give no Magic XP. craft: the Crafting level one takes
+// (the page leaves out what the account can't make yet); gives: the Crafting XP
+// it gives, which a plan says and doesn't count.
+//
+// asked: a spell that takes nothing but runes, where a bank can't say which of
+// them its runes are for: a curse, alchemy and the odd ones, and whatever needs
+// a quest or a staff of its own. A bank plan casts one only when it's the spell
+// you train with (or it has a place in your order). Not the teleports and combat
+// spells anyone can cast: a bank's law runes go to the best teleport its runes
+// and your level allow, and its mind, chaos, death and blood runes to the best
+// combat spell, by themselves. What goes into a spell besides runes (a ring,
+// ore, an orb) is planned from a bank by itself as well, like any other skill's,
+// and gets the runes first (after: the spells a teleport or a combat spell
+// shares a rune with, and waits for while they can be cast).
 // sprite: the spell's own icon, from the client's spell sheets.
 // opt: a staff's runes left out (less; CHOICES' staff), and the XP with damage
 // counted (CHOICES' damage).
@@ -2758,8 +2785,10 @@ async function magic() {
     const { key, id, name, sp, takes, out = {}, notes = [], aside, tools, icon } = r;
     for (const k of [...Object.keys(takes), ...Object.keys(out), ...(tools || [])]) need(k);
     const note = notes.filter(Boolean).join(' ');
+    // (asked: runes alone, and not a combat spell or a teleport anyone can cast)
+    const waits = Object.keys(takes).every(isRune) && (aside || !['Combat', 'Teleports'].includes(group));
     mine.push({ id: id || `mg_${key}`, skill: 'magic', group, kind: 'xp', name, level: sp.level, xp: sp.xp, in: takes, out, sprite: spriteOf(key),
-      ...(Object.keys(takes).every(isRune) ? { asked: 1 } : {}), ...(aside ? { aside: 1 } : {}), ...(tools ? { tools } : {}), ...(icon ? { icon } : {}),
+      ...(waits ? { asked: 1 } : {}), ...(aside ? { aside: 1 } : {}), ...(tools ? { tools } : {}), ...(icon ? { icon } : {}),
       ...optOf(sp, takes, tools), ...(note ? { note } : {}) });
   };
   const byLevel = keys => keys.map((k, i) => [k, i]).sort(([a, i], [b, j]) => spells.get(a).level - spells.get(b).level || i - j).map(([k]) => k);
@@ -2847,7 +2876,38 @@ async function magic() {
   const ironRow = mine.find(m => m.id === 'mg_superheat_iron_bar'), steelRow = mine.find(m => m.id === 'mg_superheat_steel_bar');
   if (!ironRow || !steelRow || !Object.keys(ironRow.in).some(k => !isRune(k) && steelRow.in[k]) || steelRow.in.coal !== steelCoal) throw new Error('magic: iron and steel bars no longer share their ore');
   ironRow.after = [steelRow.id];
+  // What a spell is cast on is the scarce thing, so those spells get a bank's
+  // runes first: a teleport or a combat spell a bank casts by itself waits while
+  // a spell cast on something, sharing a rune with it, can still be cast (after).
+  const castOn = mine.filter(m => !Object.keys(m.in).every(isRune));
+  for (const m of mine) {
+    if (m.asked || castOn.includes(m)) continue;
+    const first = castOn.filter(o => Object.keys(o.in).some(k => isRune(k) && m.in[k])).map(o => o.id);
+    if (first.length) m.after = first;
+  }
   methods.push(...mine);
+
+  // ── What a spell is cast on, made on the way: Crafting's rows that lead to it ──
+  const wanted = new Set(mine.flatMap(m => Object.keys(m.in)).filter(k => !isRune(k)));
+  const crafted = [];
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const m of methods) {
+      if (m.skill !== 'crafting' || crafted.includes(m) || !Object.keys(m.out).some(k => wanted.has(k))) continue;
+      // (a plain step: what it takes and makes, and nothing a goal's choices change)
+      const odd = ['opt', 'at', 'pays', 'unit', 'multiple', 'chance', 'magic', 'through', 'exchange'].filter(k => m[k] != null);
+      if (odd.length || Object.keys(m.out).length !== 1) throw new Error(`magic: ${m.id}, on the way to something a spell is cast on, isn't a plain step (${odd.join(', ') || 'it makes several things'}): look at it`);
+      crafted.push(m);
+      for (const k of Object.keys(m.in)) wanted.add(k);
+      grew = true;
+    }
+  }
+  const made = crafted.map(m => ({
+    id: `mg_made_${m.id.replace(/^cr_/, '')}`, skill: 'magic', group: 'Made on the way', kind: 'source', name: m.name, level: 1, xp: 0, in: { ...m.in }, out: { ...m.out },
+    ...(m.tools ? { tools: [...m.tools] } : {}), craft: m.level, ...(m.xp > 0 ? { gives: { crafting: m.xp } } : {}), ...(m.note ? { note: m.note } : {}),
+  }));
+  for (const k of ['sapphire_ring', 'strung_dragonstone_amulet', 'stafforb'].map(need)) if (!made.some(m => m.out[k])) throw new Error(`magic: nothing makes ${k} on the way any more`);
+  methods.push(...made);
 
   // ── A goal's choices ──
   const staffNames = o => orList(o.all.map(k => `${/^[aeiou]/i.test(lower(k)) ? 'an' : 'a'} ${lower(k)}`));
@@ -2876,8 +2936,14 @@ async function magic() {
     { name: 'Made: bars', items: madeBy(heats) },
     { name: 'Made: orbs', items: madeBy(orbs) },
   ];
+  // (what the jewellery and the orbs are made of, in the order Crafting's tab has it)
+  const shown = new Set(bankGroups.magic.flatMap(g => g.items));
+  const stuff = new Set(made.flatMap(m => [...Object.keys(m.in), ...Object.keys(m.out)]).filter(k => !shown.has(k)));
+  const craftOrder = bankGroups.crafting.flatMap(g => g.items);
+  for (const k of stuff) if (!craftOrder.includes(k)) throw new Error(`magic: ${k}, made on the way, isn't in Crafting's bank groups`);
+  bankGroups.magic.splice(4, 0, { name: 'What jewellery and orbs are made of', items: craftOrder.filter(k => stuff.has(k)) });
   const listed = new Set(bankGroups.magic.flatMap(g => g.items));
-  for (const k of mine.flatMap(m => [...Object.keys(m.in), ...Object.keys(m.out)])) if (!listed.has(k)) throw new Error(`magic: ${k} isn't in a bank group`);
+  for (const k of [...mine, ...made].flatMap(m => [...Object.keys(m.in), ...Object.keys(m.out)])) if (!listed.has(k)) throw new Error(`magic: ${k} isn't in a bank group`);
   for (const k of RUNES) if (!mine.some(m => m.in[k])) throw new Error(`magic: no spell takes ${k}`);
 
   // Every script that gives Magic XP is a spell's (it calls give_spell_xp), the
@@ -2901,13 +2967,356 @@ async function magic() {
   for (const file of [...CASTS, ...USED, ...Object.keys(LEFT_OUT)]) if (!gives(await read(file))) throw new Error(`magic: ${file} no longer gives Magic XP: take it off the list`);
 
   const count = g => mine.filter(m => m.group === g).length;
-  magicNotes.push(`${mine.length} rows: ${['Combat', 'Curses', 'Utility', 'Enchantment', 'Teleports'].map(g => `${count(g)} ${g.toLowerCase()}`).join(', ')}; ${mine.filter(m => m.asked).length} take only runes; ${spellSprites.length} spell icons`);
+  const runesOnly = mine.filter(m => Object.keys(m.in).every(isRune));
+  magicNotes.push(`${mine.length} rows: ${['Combat', 'Curses', 'Utility', 'Enchantment', 'Teleports'].map(g => `${count(g)} ${g.toLowerCase()}`).join(', ')}; ${runesOnly.length} take only runes: ${runesOnly.filter(m => !m.asked).length} of them a bank plan casts by itself (${runesOnly.filter(m => !m.asked && m.group === 'Teleports').map(m => m.name.replace(/ Teleport$/, '')).join(', ')} teleports and the combat spells with no staff of their own), ${mine.filter(m => m.asked).length} wait to be asked; ${spellSprites.length} spell icons`);
+  magicNotes.push(`made on the way, from Crafting's rows: ${made.map(m => `${m.name} (Crafting ${m.craft})`).join(', ')}`);
   magicNotes.push(`staves: ${STAFF.map(o => `${o.name} = ${o.all.map(k => item(k)).join(' / ')}`).join('; ')}`);
   magicNotes.push(`a point of damage is ${perDamage / 10} XP; ${lower(gaunt[1])}: +${gaunt[4]} max hit on ${[...spells.keys()].filter(boosted).length} bolt spells; god spells hit up to ${charged} for ${ticksText(chargeTicks)} after Charge; alchemy pays ${share('low')}% and ${share('high')}%`);
   magicNotes.push(`left out: ${[...new Set(Object.values(LEFT_OUT))].filter(v => !/quest reward|cheat/.test(v)).join(', ')}, and quest rewards`);
 }
 
 await magic();
+
+// ── Combat ─────────────────────────────────────────────────────────────────
+// Attack, Strength, Defence, Hitpoints and Ranged are trained on monsters: a
+// row is a monster, and what a plan counts is kills. It's the sum LostHQ's
+// Combat XP calculator does (js/calculators/combat_xp.js): a kill is the
+// monster's hitpoints in damage, and every point of damage gives the skill your
+// style trains 4 XP and Hitpoints 1.33. The rates here are read from the
+// server's own give_combat_experience, style by style. (The calculator counts
+// Hitpoints, and each skill of Controlled, as a third of the 4: 1.333. The
+// server gives 1.33, and rounds each hit's XP down to a tenth.)
+//
+// The monsters are the server's: every NPC with an Attack option and hitpoints
+// that's in the world. That's one the map spawns, one a map-spawned NPC turns
+// into (a rock into a rock crab, a citizen of Canifis into a werewolf, an
+// unseen ghast into one you can hit), or one of the few a script keeps standing
+// in its place (KEPT). The calculator lists the NPCs with a drop table in
+// LostHQ's npc_data.json, which leaves out whatever only drops bones (ghosts,
+// giant spiders) and takes in random events and NPCs no map has. Where LostHQ's
+// data and the server's configs say different things about a monster, the
+// server's are used and the build says so.
+//
+// Left out: random events, Tutorial Island's, what has no combat level to show,
+// and what only a quest's script brings in (its boss, there for one fight). A
+// shadow in Mort'ton is its shade (the first hit turns it), so only the shade
+// has a row.
+//
+// MONSTERS, in gamedata.js, has each once, and the five skills' rows are made
+// from it there. A monster with a catch says so in its note: a citizen of
+// Canifis, a ghast, a foe the server only lets you attack at some point of its
+// quest (npc_is_attackable), the Mage Arena's battle mages (only Magic works
+// there, so they're a row of Hitpoints alone). aside: not what a plan picks by
+// itself: those, and anything there are fewer than five of.
+const combatNotes = [];
+let monsters = [], combatStyles = {};
+async function combat() {
+  const { readdir } = await import('node:fs/promises');
+  const files = (await readdir(scripts(''), { recursive: true })).map(f => f.replace(/\\/g, '/'));
+  // Every NPC the server has: its config, and the file it's in.
+  const npcs = new Map();
+  for (const f of files.filter(f => f.endsWith('.npc'))) {
+    for (const b of (await readConfig(scripts(f))).values()) {
+      if (npcs.has(b.name)) throw new Error(`combat: two NPCs called ${b.name} (${f} and ${npcs.get(b.name).file})`);
+      npcs.set(b.name, { ...b, file: f });
+    }
+  }
+  // Where the map puts them: maps/m<square>.jm2, the NPC part, "level x z: id".
+  const npcIds = new Map((await readFile(join(CONTENT, 'pack/npc.pack'), 'utf8')).split(/\r?\n/).filter(Boolean).map(l => [Number(l.slice(0, l.indexOf('='))), l.slice(l.indexOf('=') + 1)]));
+  const spawns = new Map();
+  for (const f of (await readdir(join(CONTENT, 'maps'))).filter(f => /^m\d+_\d+\.jm2$/.test(f))) {
+    const text = await readFile(join(CONTENT, 'maps', f), 'utf8');
+    const from = text.indexOf('==== NPC ====');
+    if (from < 0) continue;
+    const to = text.indexOf('\n====', from + 5);
+    for (const line of text.slice(from, to < 0 ? undefined : to).split(/\r?\n/).slice(1)) {
+      if (!/^\d/.test(line)) continue;
+      for (const id of line.slice(line.indexOf(':') + 1).trim().split(/\s+/).map(Number)) {
+        const name = npcIds.get(id);
+        if (!name || !npcs.has(name)) throw new Error(`combat: map ${f} spawns NPC ${id}, which has no config`);
+        spawns.set(name, (spawns.get(name) || 0) + 1);
+      }
+    }
+  }
+  if (spawns.size < 500) throw new Error(`combat: only ${spawns.size} kinds of NPC on the map: the maps didn't read`);
+  // What turns into what, and what a script puts in the world. Every script is
+  // read block by block: an NPC's own triggers (its name or its category), and
+  // the procs, labels and queues those call. npc_changetype there turns the NPC
+  // the trigger is about, or, once the block has added one with npc_add, that
+  // one (the dagannoth a quest's cutscene brings in and grows).
+  const blocks = new Map();         // "kind,name" -> its body
+  for (const f of files.filter(f => f.endsWith('.rs2') && !f.startsWith('_test/'))) {
+    for (const [k, body] of scriptBlocks(await readFile(scripts(f), 'utf8'))) blocks.set(k, `${blocks.get(k) || ''}\n${body}`);
+  }
+  // (the arguments of a call that starts at `from`, split at its own commas)
+  const argsAt = (text, from) => {
+    const out = [''];
+    for (let i = from, depth = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c === '(') depth++;
+      if (c === ')' && depth-- === 0) break;
+      if (c === ',' && depth === 0) { out.push(''); continue; }
+      out[out.length - 1] += c;
+    }
+    return out.map(x => x.trim());
+  };
+  const stepsOf = new Map();        // block -> in order: ['add', npc] and ['turn', what]
+  const callsOf = new Map();        // block -> the blocks it calls
+  const added = new Map();          // npc -> how many npc_add calls name it
+  for (const [key, body] of blocks) {
+    const steps = [];
+    for (const m of body.matchAll(/(\.?)\bnpc_add\(|\bnpc_changetype(?:_keepall)?\(/g)) {
+      const args = argsAt(body, m.index + m[0].length);
+      if (!m[0].endsWith('npc_add(')) { steps.push(['turn', args[0]]); continue; }
+      if (npcs.has(args[1])) added.set(args[1], (added.get(args[1]) || 0) + 1);
+      if (!m[1]) steps.push(['add', args[1]]);       // (.npc_add: a second NPC, beside the one the block is about)
+    }
+    stepsOf.set(key, steps);
+    callsOf.set(key, [
+      ...[...body.matchAll(/~(\w+)/g)].map(m => `proc,${m[1]}`),
+      ...[...body.matchAll(/@(\w+)/g)].map(m => `label,${m[1]}`),
+      ...[...body.matchAll(/\b(?:long|strong|weak)?queue\*?\(\s*(\w+)/g)].map(m => `queue,${m[1]}`),
+    ].filter(k => blocks.has(k)));
+  }
+  const turns = new Map();          // npc -> the ones it turns into
+  const link = (a, b) => { if (a !== b && npcs.has(a) && npcs.has(b)) (turns.get(a) || turns.set(a, new Set()).get(a)).add(b); };
+  // (what a turn names: an NPC, or a param of the NPC it turns: next_npc_type)
+  const named = (arg, of) => (/^nc?p?c?_param\(/.test(arg) ? npcs.get(of)?.params[arg.match(/(\w+)\)$/)?.[1]] : arg);
+  const walk = (key, about) => {
+    let active = about;
+    for (const [what, arg] of stepsOf.get(key)) {
+      if (what === 'add') active = npcs.has(arg) ? [arg] : [];
+      else for (const a of active) link(a, named(arg, a));
+    }
+  };
+  const byCategory = new Map();
+  for (const [name, b] of npcs) if (b.props.category) (byCategory.get(b.props.category) || byCategory.set(b.props.category, []).get(b.props.category)).push(name);
+  for (const key of blocks.keys()) {
+    const [kind, name] = [key.slice(0, key.indexOf(',')), key.slice(key.indexOf(',') + 1)];
+    const about = !/^(ai_|opnpc|apnpc)/.test(kind) ? [] : npcs.has(name) ? [name] : name.startsWith('_') ? byCategory.get(name.slice(1)) || [] : [];
+    const seen = new Set([key]), todo = [key];
+    while (todo.length) {
+      const k = todo.pop();
+      walk(k, about);
+      for (const c of callsOf.get(k)) if (!seen.has(c)) { seen.add(c); todo.push(c); }
+    }
+  }
+  for (const [name, b] of npcs) if (b.params.next_npc_type) link(name, b.params.next_npc_type);
+  // Kept standing by a script instead of the map: [why]
+  const KEPT = {
+    guild_towerarcher1: "On the Ranging Guild's towers.", guild_towerarcher2: "On the Ranging Guild's towers.",
+    guild_towerarcher3: "On the Ranging Guild's towers.", guild_towerarcher4: "On the Ranging Guild's towers.",
+    suit_of_armour: 'They come alive as you pass, in Taverley Dungeon.',
+  };
+  for (const k of Object.keys(KEPT)) if (!added.get(k) || spawns.get(k)) throw new Error(`combat: ${k} isn't put in the world by a script any more: look at it, then fix KEPT`);
+  // In the world: on the map, kept there, or turned into by one that is.
+  // from: the ones on the map (or kept) it comes from, itself among them: they say how many there are.
+  const placed = new Map([...spawns, ...Object.keys(KEPT).map(k => [k, added.get(k)])]);
+  const reached = starts => {
+    const from = new Map(starts.map(k => [k, new Set([k])]));
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const [a, to] of turns) {
+        if (!from.has(a)) continue;
+        for (const t of to) {
+          const mine = from.get(t) || from.set(t, new Set()).get(t);
+          for (const o of from.get(a)) if (!mine.has(o)) { mine.add(o); grew = true; }
+        }
+      }
+    }
+    return from;
+  };
+  const world = reached([...placed.keys()]);
+  // (what only a script brings in, for a quest: named in what's left out)
+  const scripted = reached([...added.keys()].filter(k => !world.has(k)));
+
+  // ── What a point of damage gives, style by style: the server's own sums ──
+  const proc = scriptBlocks(await readFile(scripts('skill_combat/scripts/combat.rs2'), 'utf8')).get('proc,give_combat_experience');
+  if (!proc) throw new Error("combat: can't find give_combat_experience");
+  const usual = proc.slice(proc.lastIndexOf('} else {'));
+  if (!/^\(int \$damagestyle, int \$damage, int \$multiplier\)\s*def_int \$base = multiply\(\$damage, 10\);/.test(proc.trim()) || usual.length < 200) throw new Error('combat: give_combat_experience reads differently now');
+  const rates = {};                 // style -> { skill: XP in hundredths a point of damage }
+  for (const part of usual.split(/\bcase\b/).slice(1)) {
+    const head = part.slice(0, part.indexOf(':'));
+    const styles = head.includes('default') ? [] : head.split(',').map(x => x.trim().replace(/^\^style_/, ''));
+    const gives = Object.fromEntries([...part.matchAll(/stat_advance\((\w+), scale\(\$multiplier, 1000, scale\((\d+), 100, \$base\)\)\);/g)]
+      .filter(m => m[1] !== 'hitpoints').map(m => [m[1], Number(m[2])]));
+    for (const st of styles) rates[st] = gives;
+  }
+  const hpRate = Number(usual.match(/\}\s*stat_advance\(hitpoints, scale\(\$multiplier, 1000, scale\((\d+), 100, \$base\)\)\);\s*\}\s*$/)?.[1]);
+  const expectRates = {
+    melee_accurate: { attack: 400 }, melee_aggressive: { strength: 400 }, melee_defensive: { defence: 400 }, melee_controlled: { attack: 133, strength: 133, defence: 133 },
+    ranged_accurate: { ranged: 400 }, ranged_rapid: { ranged: 400 }, ranged_longrange: { ranged: 200, defence: 200 }, magic_normal: { magic: 200 }, magic_defensive: { magic: 133, defence: 100 },
+  };
+  if (JSON.stringify(rates) !== JSON.stringify(expectRates) || hpRate !== 133) throw new Error(`combat: the server's XP for a point of damage has changed: ${JSON.stringify(rates)}, Hitpoints ${hpRate}: look at it`);
+  // (a hit can't do more damage than the monster has left, so a kill is its hitpoints in damage)
+  const melee = await readFile(scripts('skill_combat/scripts/player/player_melee.rs2'), 'utf8');
+  const ranged = await readFile(scripts('skill_combat/scripts/player/player_ranged.rs2'), 'utf8');
+  for (const [what, text] of [['melee', melee], ['ranged', ranged]]) {
+    if (!/def_int \$damage_capped = min\(\$damage, npc_stat\(hitpoints\)\);/.test(text) || !/~give_combat_experience\(%damagestyle, \$damage_capped, %npc_combat_xp_multiplier\);/.test(text)) throw new Error(`combat: a ${what} hit's XP isn't for its capped damage any more`);
+  }
+  if (!/%npc_combat_xp_multiplier = npc_param\(combat_xp_multiplier\);/.test(await readFile(scripts('npc/scripts/ai_spawn.rs2'), 'utf8'))) throw new Error("combat: can't read where an NPC's XP multiplier comes from");
+  const multDefault = Number((await readConfig(scripts('skill_combat/configs/combat.param'))).get('combat_xp_multiplier')?.props.default);
+  if (multDefault !== 1000) throw new Error(`combat: the usual XP multiplier is ${multDefault} now`);
+  // One NPC gives a flat 1 XP a point of damage to each skill of the style (and Hitpoints as usual).
+  const flat = proc.match(/^[^{]*?if\s*\(npc_type = (\w+)\)\s*\{/)?.[1];
+  if (flat !== 'black_knight_titan' || !/stat_advance\(attack, \$base\);/.test(proc.slice(0, proc.indexOf('} else if')))) throw new Error('combat: the Black Knight Titan\'s own XP rule reads differently now');
+  // The styles each skill's goals offer, with everything they give: the first is how a goal starts.
+  const style = (id, name, key) => ({ id, name, gives: { ...rates[key], hitpoints: hpRate } });
+  combatStyles = {
+    attack: [style('accurate', 'Accurate', 'melee_accurate'), style('controlled', 'Controlled', 'melee_controlled')],
+    strength: [style('aggressive', 'Aggressive', 'melee_aggressive'), style('controlled', 'Controlled', 'melee_controlled')],
+    defence: [style('defensive', 'Defensive', 'melee_defensive'), style('controlled', 'Controlled', 'melee_controlled'), style('longrange', 'Longrange (Ranged)', 'ranged_longrange')],
+    hitpoints: [{ id: 'any', name: 'Any', gives: { hitpoints: hpRate } }],
+    ranged: [style('rapid', 'Accurate or Rapid', 'ranged_rapid'), style('longrange', 'Longrange', 'ranged_longrange')],
+  };
+  if (JSON.stringify(rates.ranged_accurate) !== JSON.stringify(rates.ranged_rapid)) throw new Error('combat: Accurate and Rapid give different XP now');
+
+  // ── The monsters ──
+  // What they leave to bury: LostHQ's drop data where it has the NPC (its "always"
+  // drops), else the server's death_drop (bones, unless the config says otherwise).
+  const lhq = JSON.parse(await readFile(join(LOSTHQ, 'js/npcdb/npc_data.json'), 'utf8'));
+  const buried = new Set(methods.filter(m => m.skill === 'prayer').map(m => Object.keys(m.in)[0]));
+  const deathDrop = (await readConfig(scripts('skill_combat/configs/npc_combat.param'))).get('death_drop')?.props.default;
+  if (deathDrop !== 'bones') throw new Error(`combat: what an NPC drops by default is ${deathDrop} now`);
+  const bonesOf = key => {
+    const always = lhq[key]?.drops?.always;
+    const fromLhq = Array.isArray(always) ? always.map(d => (Array.isArray(d.item) ? d.item[0] : d.item)).find(i => buried.has(i)) : null;
+    const b = npcs.get(key);
+    const own = b.params.death_drop ?? deathDrop;
+    // (an NPC with a drop table of its own drops what the table says; one without, its death_drop)
+    return lhq[key]?.drops ? fromLhq || null : buried.has(own) ? own : null;
+  };
+  const attackable = [...npcs.values()].filter(b => b.props.op2 === 'Attack' && Number(b.props.hitpoints) > 0);
+  // What the server asks besides an Attack option: its own rule, npc_is_attackable.
+  const canAttack = scriptBlocks(await readFile(scripts('skill_combat/scripts/npc/npc_combat.rs2'), 'utf8')).get('proc,npc_is_attackable');
+  if (!canAttack || !/~player_autocast_enabled = false & ~inzone_coord_pair_table\(mage_arena, coord\) = true/.test(canAttack)) throw new Error("combat: the server's npc_is_attackable reads differently now");
+  const conditional = new Set([...canAttack.matchAll(/\bnpc_type = (\w+)/g)].map(m => m[1]));
+  for (const [, c] of canAttack.matchAll(/\bnpc_category = (\w+)/g)) for (const k of byCategory.get(c) || []) conditional.add(k);
+  if (!/inv_total\(worn, dagger_wolfbane\) = 0/.test(blocks.get('ai_queue2,_canafis_citizen') || '')) throw new Error("combat: a citizen of Canifis doesn't turn into a werewolf the way it did");
+  if (!turns.get('ghast_invis')?.has('ghast_vis') || npcs.get('ghast_invis').props.op2 || !/npc_changetype\(ghast_vis/.test(blocks.get('label,druid_pouch_activate') || '')) throw new Error("combat: a ghast isn't made visible by a druid pouch the way it was");
+  // What a row says besides, for the ones with a catch. aside: not what a plan picks by itself.
+  // magic: only Magic works on it, so it's left out of the four skills you hit or shoot for.
+  const special = key => {
+    const b = npcs.get(key), to = npcs.get(b.params.next_npc_type);
+    if (b.props.category === 'canafis_citizen' && to) return { note: `A citizen of Canifis: your first hit turns it into a ${to.props.name} (level ${to.props.vislevel}, ${to.props.hitpoints} hitpoints), unless you wield a Wolfbane dagger.` };
+    if (key === 'ghast_vis') return { note: 'In Mort Myre: one has to be made visible with a druid pouch before you can attack it.' };
+    if (b.props.category === 'battle_mage') return { note: "In the Mage Arena, once you've beaten Kolodion there. He allows only magical combat within it: no melee, no Ranged.", magic: true };
+    if (conditional.has(key)) return { note: 'Its quest decides when you can attack it.' };
+    return null;
+  };
+  // A shadow in Mort'ton is its shade: the first hit turns it into one (and so
+  // does its own attack), so the shade is what you fight. It's left out, and
+  // the shade's row says so.
+  const disguise = key => {
+    const b = npcs.get(key), to = npcs.get(b.params.next_npc_type);
+    return b.props.category === 'shade' && to && to.props.op2 === 'Attack' && to.props.vislevel === b.props.vislevel && to.props.hitpoints === b.props.hitpoints ? to : null;
+  };
+  const count = key => [...world.get(key)].reduce((a, o) => a + placed.get(o), 0);
+  const leftOut = { tutorial: [], hidden: [], events: [], nowhere: [], scripted: [], forms: [] };
+  const rows = new Map();           // "name|level|hp" -> row
+  const rowKey = b => `${b.props.name}|${Number(b.props.vislevel)}|${Number(b.props.hitpoints)}`;
+  const shapes = [];                // [the row it's counted in, its own name]
+  for (const b of attackable) {
+    const name = b.props.name, hp = Number(b.props.hitpoints);
+    if (/^macro events\//.test(b.file)) { leftOut.events.push(name); continue; }
+    if (/^tutorial\//.test(b.file) || /^newbie/.test(b.name)) { leftOut.tutorial.push(name); continue; }
+    if (!world.has(b.name)) { (scripted.has(b.name) ? leftOut.scripted : leftOut.nowhere).push(name); continue; }
+    if (!/^\d+$/.test(b.props.vislevel || '')) { leftOut.hidden.push(name); continue; }
+    if (disguise(b.name)) { leftOut.forms.push(name); shapes.push([rowKey(disguise(b.name)), name]); continue; }
+    const level = Number(b.props.vislevel);
+    const row = rows.get(rowKey(b)) || rows.set(rowKey(b), { name, level, hp, keys: [], from: new Set(), bones: new Map(), mult: new Set(), notes: new Set(), specials: [] }).get(rowKey(b));
+    row.keys.push(b.name);
+    for (const o of world.get(b.name)) row.from.add(o);
+    const bones = bonesOf(b.name);
+    row.bones.set(bones, (row.bones.get(bones) || 0) + count(b.name));
+    row.mult.add(Number(b.params.combat_xp_multiplier ?? multDefault));
+    if (KEPT[b.name]) row.notes.add(KEPT[b.name]);
+    row.specials.push(special(b.name));
+    if (b.name === flat) row.flat = true;
+  }
+  if (shapes.length !== 5) throw new Error(`combat: ${shapes.length} shadows of Mort'ton turn into their shades, not 5: look at them`);
+  for (const [key, name] of shapes) {
+    if (!rows.has(key)) throw new Error(`combat: ${name} turns into something that isn't a monster`);
+    rows.get(key).notes.add(`${/^[aeiou]/i.test(name) ? 'An' : 'A'} ${name} until you attack it, or it attacks you.`);
+  }
+  for (const r of rows.values()) {
+    r.n = [...r.from].reduce((a, o) => a + placed.get(o), 0);      // (each one once, whatever shapes of it the row has)
+    const sp = r.specials.filter(Boolean);
+    if (sp.length && (sp.length !== r.specials.length || new Set(sp.map(x => x.note)).size > 1)) throw new Error(`combat: ${r.name} (level ${r.level}) is several NPCs, and only some have a catch: ${r.keys.join(', ')}`);
+    if (sp.length) { r.notes.add(sp[0].note); r.special = true; r.magic = !!sp[0].magic; }
+  }
+  // Checked against LostHQ's data, NPC by NPC.
+  let same = 0;
+  for (const b of attackable) {
+    const l = lhq[b.name];
+    if (!l || !world.has(b.name)) continue;
+    if (l.name === b.props.name && String(l.hitpoints) === b.props.hitpoints && String(l.vislevel) === b.props.vislevel) { same++; continue; }
+    combatNotes.push(`${b.props.name} (${b.name}): level ${b.props.vislevel}, ${b.props.hitpoints} hitpoints on the server; LostHQ's data says ${l.name}, level ${l.vislevel}, ${l.hitpoints} (the server's are used)`);
+  }
+  const KNOWN_DIFFERENCES = 2;      // two skeletons' levels and hitpoints, swapped in LostHQ's data
+  if (combatNotes.length !== KNOWN_DIFFERENCES) throw new Error(`combat: ${combatNotes.length} monsters differ from LostHQ's data, not ${KNOWN_DIFFERENCES}: look at them\n  ${combatNotes.join('\n  ')}`);
+  // The same name and level with different hitpoints: the name says which.
+  const twins = new Map();
+  for (const r of rows.values()) twins.set(`${r.name}|${r.level}`, (twins.get(`${r.name}|${r.level}`) || 0) + 1);
+  const slug = text => text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  const BANDS = [[1, 10], [11, 20], [21, 30], [31, 50], [51, 80], [81, 110], [111, Infinity]];
+  // aside: not what a plan picks by itself. Fewer than this many in the world (a
+  // quest's foe, a boss, a guard or two), one with a catch, or an XP rule of its own.
+  const FEW = 5;
+  monsters = [...rows.values()].sort((a, b) => a.level - b.level || a.name.localeCompare(b.name) || a.hp - b.hp).map(r => {
+    const twin = twins.get(`${r.name}|${r.level}`) > 1;
+    const bones = [...r.bones].sort((a, b) => b[1] - a[1])[0][0];
+    if (r.bones.size > 1) combatNotes.push(`${r.name} (level ${r.level}): some leave ${[...r.bones.keys()].map(k => k || 'nothing').join(', some ')}; ${bones || 'nothing'} is what most do`);
+    if (r.mult.size > 1) throw new Error(`combat: ${r.name} (level ${r.level}) has two XP multipliers`);
+    const mult = [...r.mult][0];
+    const band = BANDS.find(([lo, hi]) => r.level >= lo && r.level <= hi);
+    const notes = [...r.notes,
+      ...(mult !== multDefault ? [`The server gives ${mult / 10}% of the usual XP for it.`] : []),
+      ...(r.flat ? ['The server gives 1 XP a point of damage for it, whatever your style (and Hitpoints XP as usual).'] : [])];
+    return {
+      id: `${slug(r.name)}_${r.level}${twin ? `_${r.hp}` : ''}`,
+      name: r.name, level: r.level, hp: r.hp, n: r.n, ...(twin ? { twin: 1 } : {}),
+      group: band[1] === Infinity ? `Level ${band[0]} and up` : `Level ${band[0]}–${band[1]}`,
+      ...(bones ? { bones } : {}), ...(mult !== multDefault ? { mult } : {}), ...(r.flat ? { flat: 1 } : {}),
+      ...(r.magic ? { magic: 1 } : {}),
+      ...(r.n < FEW || r.special || mult !== multDefault || r.flat ? { aside: 1 } : {}),
+      ...(notes.length ? { note: notes.join(' ') } : {}),
+    };
+  });
+  const ids = new Set(monsters.map(m => m.id));
+  if (ids.size !== monsters.length) throw new Error('combat: two monsters got the same id');
+  if (monsters.length < 280 || monsters.length > 360) throw new Error(`combat: ${monsters.length} monsters: far from what was there when this was written (315)`);
+  for (const [name, lvl, hp] of [['Chicken', 1, 3], ['Cow', 2, 8], ['Giant', 28, 35], ['Moss giant', 42, 60], ['Lesser demon', 82, 79], ['Fire giant', 86, 111], ['Rock Crab', 13, 50], ['Loar Shade', 40, 38]]) {
+    if (!monsters.some(m => m.name === name && m.level === lvl && m.hp === hp)) throw new Error(`combat: no ${name} (level ${lvl}, ${hp} hitpoints) any more`);
+  }
+
+  // The choices on a goal: the style, which says where the XP goes.
+  const cap = k => k[0].toUpperCase() + k.slice(1);
+  const say = st => {
+    const own = Object.entries(st.gives).filter(([k]) => k !== 'hitpoints');
+    const same = own.length > 1 && own.every(([, v]) => v === own[0][1]);
+    return `${st.name}: ${same ? `${own[0][1] / 100} XP each to ${andList(own.map(([k]) => cap(k)))}` : own.map(([k, v]) => `${v / 100} ${cap(k)} XP`).join(' and ')}`;
+  };
+  for (const [skill, styles] of Object.entries(combatStyles)) {
+    if (styles.length < 2) continue;
+    choices[skill] = [{
+      id: 'style', label: 'Style', options: styles.map(st => ({ id: st.id, name: st.name })),
+      tip: `Every point of damage gives XP by the style you fight in. ${styles.map(say).join('. ')}. Whatever the style, a point of damage is ${hpRate / 100} Hitpoints XP as well. `
+        + `The server rounds each hit's XP down to a tenth, so at ${hpRate / 100} a point many small hits come to a little less than a kill's row says.`,
+    }];
+  }
+  const uniq = list => [...new Set(list)];
+  const calc = Object.keys(lhq).filter(k => lhq[k].drops && Number(lhq[k].hitpoints) > 0);
+  combatNotes.push(`${monsters.length} monsters from ${attackable.filter(b => world.has(b.name)).length} NPCs you can attack that are in the world (${same} of them the same in LostHQ's data); LostHQ's calculator lists ${calc.length} NPCs, ${calc.filter(k => !world.has(k) || !npcs.has(k) || npcs.get(k).props.op2 !== 'Attack').length} of them not in the world or not to be attacked`);
+  combatNotes.push(`Hitpoints, and each skill of Controlled: ${hpRate / 100} XP a point of damage on the server, each hit's rounded down to a tenth; LostHQ's calculator counts a third of 4 (the server's is used)`);
+  combatNotes.push(`a point of damage: ${Object.entries(expectRates).filter(([k]) => !/magic/.test(k)).map(([k, v]) => `${k.replace('_', ' ')} ${Object.entries(v).map(([s, x]) => `${x / 100} ${s}`).join(' + ')}`).join('; ')}; Hitpoints ${hpRate / 100} always`);
+  combatNotes.push(`left out: random events (${uniq(leftOut.events).length} kinds), Tutorial Island's, ${uniq(leftOut.hidden).join(', ')} (no combat level shown), ${uniq(leftOut.forms).join(', ')} (counted as the shades they turn into), what only a quest or a script brings in (${uniq(leftOut.scripted).length}: ${uniq(leftOut.scripted).slice(0, 12).join(', ')}…), and what no map has (${uniq(leftOut.nowhere).join(', ')})`);
+  combatNotes.push(`not picked by itself: ${monsters.filter(m => m.aside).length} (${monsters.filter(m => m.n < FEW).length} with fewer than ${FEW} in the world, ${monsters.filter(m => m.n === 1).length} of them one of a kind); with a catch: ${monsters.filter(m => m.note).map(m => `${m.name} (level ${m.level})`).join(', ')}`);
+  combatNotes.push(`with an XP rule of their own: ${monsters.filter(m => m.mult || m.flat).map(m => `${m.name} (${m.flat ? '1 XP a point of damage' : `${m.mult / 10}% of the usual`})`).join(', ') || 'none'}; only Magic works on: ${monsters.filter(m => m.magic).map(m => m.name).join(', ') || 'none'}`);
+}
+
+await combat();
 
 // ── Catalog of every item the data mentions ───────────────────────────────
 const used = new Set();
@@ -3021,7 +3430,8 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // LostHQ's item database (GPL-3.0). From Crafting on (Mining, Smithing, Fishing, Cooking,
 // Thieving, Agility, Prayer, Magic) the rows are those of LostHQ's calculators (GPL-3.0),
 // checked against the server. Spell icons are the client's own (sprites/magicon.png, from
-// the same Content checkout). RuneScape is (c) Jagex Ltd.
+// the same Content checkout). Monsters are the server's NPCs; what they leave to bury is
+// from LostHQ's NPC database. RuneScape is (c) Jagex Ltd.
 //
 // A method turns "in" items into "out" items (no "in" at all: gathering, like
 // Woodcutting). unit/units, when set, is what one action uses (one essence, one
@@ -3053,8 +3463,12 @@ const out = `// Generated by build-data.mjs. Do not edit by hand; change the scr
 // sprite: a method shown as a picture that isn't an item's (a spell's icon): its
 // cell on the icon sheet, counted like an item's icon.
 // asked: a method a bank plan only makes when it's the one you train with, or
-// in your own order (a spell that takes nothing but runes: the same runes cast
-// dozens of them, so a bank can't say which).
+// in your own order (a curse, alchemy: spells that take nothing but runes, where
+// a bank can't say which its runes are for. Teleports and combat spells anyone
+// can cast don't wait: a bank's runes go to the best of them).
+// craft: a Magic row made on the way that takes this Crafting level; gives: the
+// XP an action gives other skills, said and never counted (the Crafting XP of a
+// ring made on the way to an enchant; a kill's Hitpoints XP).
 // lead and as: a row counted in what its output is for, with the words to say so
 // (lead "Ore for", as ["steel bar", "steel bars"]: "Ore for 400 steel bars: …").
 // as on its own: a row counted in its unit, said in full ("450 laps of the Gnome
@@ -3113,9 +3527,60 @@ export const PLACES = ${JSON.stringify(places, null, 2)};
 // it starts and changes nothing. One without is a tick box, off to start.
 // unless: a choice that makes this one pointless, so it's left out then.
 export const CHOICES = ${JSON.stringify(choices, null, 2)};
+
+// The monsters Attack, Strength, Defence, Hitpoints and Ranged are trained on:
+// the server's NPCs with an Attack option and hitpoints that are in the world,
+// one line for those with the same name, combat level and hitpoints. n: how many
+// of them the world has. twin: another line has its name and level (the
+// hitpoints say which). bones: what it leaves to bury. mult: the XP it gives, in
+// thousandths of the usual. flat: 1 XP a point of damage, whatever the style.
+// magic: only Magic works on it (the Mage Arena's battle mages), so it's a row
+// of Hitpoints alone. aside: not what a plan picks by itself: fewer than five in
+// the world, one with a catch (note says what), or an XP rule of its own.
+export const MONSTERS = [
+${monsters.map(m => '  ' + JSON.stringify(m)).join(',\n')},
+];
+
+// What a point of damage gives in each style, in hundredths of an XP: the
+// server's own sums (give_combat_experience). A skill's first style is how a goal
+// starts; CHOICES has them to pick from.
+export const COMBAT_STYLES = ${JSON.stringify(combatStyles)};
+
+// Those five skills' rows, made here from the two: a row a monster, counted in
+// kills. A kill is the monster's hitpoints in damage (a hit can't do more than
+// it has left), so its XP is the server's sum for that much: scale(rate, 100,
+// damage * 10), then the monster's multiplier. The server rounds each hit's XP
+// down to a tenth, so at 1.33 a point many small hits come to a little less.
+// cb: its combat level (level, what the skill asks for, is 1: anyone can fight
+// anything). hp: its hitpoints. short: its name alone. gives: the XP a kill gives
+// the other skills of the style, Hitpoints among them. opt: the other styles.
+{
+  const PREFIX = { attack: 'at', strength: 'st', defence: 'df', hitpoints: 'hp', ranged: 'rg' };
+  const kill = (mon, skill, rate) => Math.floor((Math.floor((mon.hp * (mon.flat && skill !== 'hitpoints' ? 100 : rate)) / 10) * (mon.mult ?? 1000)) / 1000);
+  for (const [skill, styles] of Object.entries(COMBAT_STYLES)) {
+    const of = (mon, st) => ({
+      xp: kill(mon, skill, st.gives[skill]),
+      gives: Object.fromEntries(Object.entries(st.gives).filter(([k]) => k !== skill).map(([k, rate]) => [k, kill(mon, k, rate)])),
+    });
+    for (const mon of MONSTERS) {
+      if (mon.magic && skill !== 'hitpoints') continue;      // (only Magic works on it: not a row of the skills you hit or shoot for)
+      METHODS.push({
+        id: \`\${PREFIX[skill]}_\${mon.id}\`, skill, group: mon.group, kind: 'xp',
+        name: \`\${mon.name} (level \${mon.level}\${mon.twin ? \`, \${mon.hp} hitpoints\` : ''})\`, short: mon.name,
+        level: 1, ...of(mon, styles[0]), in: {}, out: {}, cb: mon.level, hp: mon.hp, n: mon.n,
+        ...(styles.length > 1 ? { opt: Object.fromEntries(styles.slice(1).map(st => [st.id, of(mon, st)])) } : {}),
+        ...(mon.bones ? { bones: mon.bones } : {}),
+        ...(mon.aside ? { aside: 1 } : {}),
+        ...(mon.note ? { note: mon.note } : {}),
+      });
+    }
+  }
+}
 `;
 await writeFile('gamedata.js', out);
-console.log(`gamedata.js: ${methods.length} methods, ${names.length} items; items.png ${PER_ROW * SIZE}x${rows * SIZE}`);
+// (a monster only Magic works on is a row of Hitpoints alone)
+const combatRows = Object.keys(combatStyles).reduce((a, skill) => a + monsters.filter(mon => !(mon.magic && skill !== 'hitpoints')).length, 0);
+console.log(`gamedata.js: ${methods.length} methods, ${monsters.length} monsters (${combatRows} rows more), ${names.length} items; items.png ${PER_ROW * SIZE}x${rows * SIZE}`);
 for (const note of craftingNotes) console.log(`  crafting: ${note}`);
 for (const note of miningNotes) console.log(`  mining: ${note}`);
 for (const note of smithingNotes) console.log(`  smithing: ${note}`);
@@ -3125,6 +3590,7 @@ for (const note of thievingNotes) console.log(`  thieving: ${note}`);
 for (const note of agilityNotes) console.log(`  agility: ${note}`);
 for (const note of prayerNotes) console.log(`  prayer: ${note}`);
 for (const note of magicNotes) console.log(`  magic: ${note}`);
+for (const note of combatNotes) console.log(`  combat: ${note}`);
 
 // ── Bank screenshots ───────────────────────────────────────────────────────
 // What bankread.js needs to read a bank from a screenshot, loaded only when one

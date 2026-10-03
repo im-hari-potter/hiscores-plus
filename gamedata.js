@@ -4,7 +4,8 @@
 // LostHQ's item database (GPL-3.0). From Crafting on (Mining, Smithing, Fishing, Cooking,
 // Thieving, Agility, Prayer, Magic) the rows are those of LostHQ's calculators (GPL-3.0),
 // checked against the server. Spell icons are the client's own (sprites/magicon.png, from
-// the same Content checkout). RuneScape is (c) Jagex Ltd.
+// the same Content checkout). Monsters are the server's NPCs; what they leave to bury is
+// from LostHQ's NPC database. RuneScape is (c) Jagex Ltd.
 //
 // A method turns "in" items into "out" items (no "in" at all: gathering, like
 // Woodcutting). unit/units, when set, is what one action uses (one essence, one
@@ -36,8 +37,12 @@
 // sprite: a method shown as a picture that isn't an item's (a spell's icon): its
 // cell on the icon sheet, counted like an item's icon.
 // asked: a method a bank plan only makes when it's the one you train with, or
-// in your own order (a spell that takes nothing but runes: the same runes cast
-// dozens of them, so a bank can't say which).
+// in your own order (a curse, alchemy: spells that take nothing but runes, where
+// a bank can't say which its runes are for. Teleports and combat spells anyone
+// can cast don't wait: a bank's runes go to the best of them).
+// craft: a Magic row made on the way that takes this Crafting level; gives: the
+// XP an action gives other skills, said and never counted (the Crafting XP of a
+// ring made on the way to an enchant; a kill's Hitpoints XP).
 // lead and as: a row counted in what its output is for, with the words to say so
 // (lead "Ore for", as ["steel bar", "steel bars"]: "Ore for 400 steel bars: …").
 // as on its own: a row counted in its unit, said in full ("450 laps of the Gnome
@@ -1222,8 +1227,9 @@ export const METHODS = [
   {"id":"ag_pipe_yanille","skill":"agility","group":"Shortcuts","kind":"xp","name":"Obstacle pipe (Yanille Dungeon)","level":49,"xp":75,"in":{},"out":{},"note":"Not on LostHQ's calculator: the server's own level and XP."},
   {"id":"ag_bars_yanille","skill":"agility","group":"Shortcuts","kind":"xp","name":"Monkeybars (Yanille Dungeon)","level":57,"xp":200,"in":{},"out":{},"odds":[[36,330]]},
   {"id":"ag_rubble_yanille","skill":"agility","group":"Shortcuts","kind":"xp","name":"Pile of rubble (Yanille Dungeon)","level":67,"xp":55,"in":{},"out":{},"note":"Not on LostHQ's calculator: the server's own level and XP."},
-  {"id":"ag_ticket","skill":"agility","group":"Agility Arena","kind":"xp","name":"Agility Arena ticket","level":1,"xp":2978,"in":{},"out":{},"icon":"agilityarena_ticket","parts":[["on the way",578],["exchanged",2400]],"exchange":{"own":578,"batches":[[1000,3200000],[100,280000],[25,65000],[10,24800],[1,2400]]},"opt":{"x1000":{"xp":3778,"parts":[["on the way",578],["exchanged",3200]],"exchange":null},"x100":{"xp":3378,"parts":[["on the way",578],["exchanged",2800]],"exchange":null},"x25":{"xp":3178,"parts":[["on the way",578],["exchanged",2600]],"exchange":null},"x10":{"xp":3058,"parts":[["on the way",578],["exchanged",2480]],"exchange":null},"x1":{"xp":2978,"parts":[["on the way",578],["exchanged",2400]],"exchange":null}},"note":"On average 3.3 obstacles lie between one ticket pillar and the next: 57.8 XP on the way. Below level 40 some are shut and the way round is longer, so it's a little more. A pillar a minute at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss. Going in costs 200 coins."},
-  {"id":"ag_ticket_held","skill":"agility","group":"Agility Arena","kind":"xp","name":"Arena ticket you already have","level":1,"xp":2400,"in":{},"out":{},"icon":"agilityarena_ticket","aside":1,"exchange":{"own":0,"batches":[[1000,3200000],[100,280000],[25,65000],[10,24800],[1,2400]]},"opt":{"x1000":{"xp":3200,"exchange":null},"x100":{"xp":2800,"exchange":null},"x25":{"xp":2600,"exchange":null},"x10":{"xp":2480,"exchange":null},"x1":{"xp":2400,"exchange":null}},"note":"For tickets you've saved up: only what they're exchanged for counts. Type how many you have under Plan to make."},
+  {"id":"ag_ticket","skill":"agility","group":"Agility Arena","kind":"xp","name":"Total XP","level":1,"xp":2978,"in":{},"out":{},"icon":"agilityarena_ticket","as":["Agility Arena ticket earned and exchanged","Agility Arena tickets earned and exchanged"],"parts":[["on the way",578],["exchanged",2400]],"exchange":{"own":578,"batches":[[1000,3200000],[100,280000],[25,65000],[10,24800],[1,2400]]},"opt":{"x1000":{"xp":3778,"parts":[["on the way",578],["exchanged",3200]],"exchange":null},"x100":{"xp":3378,"parts":[["on the way",578],["exchanged",2800]],"exchange":null},"x25":{"xp":3178,"parts":[["on the way",578],["exchanged",2600]],"exchange":null},"x10":{"xp":3058,"parts":[["on the way",578],["exchanged",2480]],"exchange":null},"x1":{"xp":2978,"parts":[["on the way",578],["exchanged",2400]],"exchange":null}},"note":"A pillar's ticket, earned and exchanged for XP. On average 3.3 obstacles lie between one ticket pillar and the next: 57.8 XP on the way. Below level 40 some are shut and the way round is longer, so it's a little more. A pillar a minute at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss. Going in costs 200 coins."},
+  {"id":"ag_ticket_held","skill":"agility","group":"Agility Arena","kind":"xp","name":"XP per ticket","level":1,"xp":2400,"in":{},"out":{},"icon":"agilityarena_ticket","aside":1,"as":["Agility Arena ticket exchanged","Agility Arena tickets exchanged"],"exchange":{"own":0,"batches":[[1000,3200000],[100,280000],[25,65000],[10,24800],[1,2400]]},"opt":{"x1000":{"xp":3200,"exchange":null},"x100":{"xp":2800,"exchange":null},"x25":{"xp":2600,"exchange":null},"x10":{"xp":2480,"exchange":null},"x1":{"xp":2400,"exchange":null}},"note":"For tickets you've saved up: only what they're exchanged for counts. Type how many you have under Plan to make."},
+  {"id":"ag_pillar","skill":"agility","group":"Agility Arena","kind":"xp","name":"XP per pillar","level":1,"xp":578,"in":{},"out":{},"icon":"agilityarena_ticket","aside":1,"as":["Agility Arena pillar, its ticket kept","Agility Arena pillars, their tickets kept"],"note":"Getting to a pillar alone: for when its ticket goes on herbs or another reward instead of XP. On average 3.3 obstacles lie between one ticket pillar and the next: 57.8 XP on the way. Below level 40 some are shut and the way round is longer, so it's a little more. A pillar a minute at best: the first one you tag gives no ticket, and neither does the one after a pillar you miss. Going in costs 200 coins."},
   {"id":"pr_bones","skill":"prayer","group":"Bones","kind":"xp","name":"Bones","level":1,"xp":45,"in":{"bones":1},"out":{}},
   {"id":"pr_bones_burnt","skill":"prayer","group":"Bones","kind":"xp","name":"Burnt bones","level":1,"xp":45,"in":{"bones_burnt":1},"out":{}},
   {"id":"pr_bat_bones","skill":"prayer","group":"Bones","kind":"xp","name":"Bat bones","level":1,"xp":45,"in":{"bat_bones":1},"out":{}},
@@ -1234,27 +1240,27 @@ export const METHODS = [
   {"id":"pr_tbwt_beast_bones","skill":"prayer","group":"Bones","kind":"xp","name":"Shaikahan bones","level":1,"xp":250,"in":{"tbwt_beast_bones":1},"out":{},"note":"Dropped by the Shaikahan, east of Tai Bwo Wannai. Not on LostHQ's calculator: the server's own XP."},
   {"id":"pr_babydragon_bones","skill":"prayer","group":"Bones","kind":"xp","name":"Babydragon bones","level":1,"xp":300,"in":{"babydragon_bones":1},"out":{}},
   {"id":"pr_dragon_bones","skill":"prayer","group":"Bones","kind":"xp","name":"Dragon bones","level":1,"xp":720,"in":{"dragon_bones":1},"out":{}},
-  {"id":"mg_wind_strike","skill":"magic","group":"Combat","kind":"xp","name":"Wind Strike","level":1,"xp":55,"in":{"mindrune":1,"airrune":1},"out":{},"sprite":612,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"halfdmg":{"xp":65,"parts":[["the cast",55],["damage",10]]},"alldmg":{"xp":75,"parts":[["the cast",55],["damage",20]]}},"note":"Max hit 2: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_water_strike","skill":"magic","group":"Combat","kind":"xp","name":"Water Strike","level":5,"xp":75,"in":{"mindrune":1,"waterrune":1,"airrune":1},"out":{},"sprite":613,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]},"halfdmg":{"xp":95,"parts":[["the cast",75],["damage",20]]},"alldmg":{"xp":115,"parts":[["the cast",75],["damage",40]]}},"note":"Max hit 4: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_earth_strike","skill":"magic","group":"Combat","kind":"xp","name":"Earth Strike","level":9,"xp":95,"in":{"mindrune":1,"earthrune":2,"airrune":1},"out":{},"sprite":614,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":125,"parts":[["the cast",95],["damage",30]]},"alldmg":{"xp":155,"parts":[["the cast",95],["damage",60]]}},"note":"Max hit 6: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_fire_strike","skill":"magic","group":"Combat","kind":"xp","name":"Fire Strike","level":13,"xp":115,"in":{"mindrune":1,"firerune":3,"airrune":2},"out":{},"sprite":615,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":155,"parts":[["the cast",115],["damage",40]]},"alldmg":{"xp":195,"parts":[["the cast",115],["damage",80]]}},"note":"Max hit 8: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_wind_bolt","skill":"magic","group":"Combat","kind":"xp","name":"Wind Bolt","level":17,"xp":135,"in":{"chaosrune":1,"airrune":2},"out":{},"sprite":616,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"halfdmg":{"xp":180,"parts":[["the cast",135],["damage",45]]},"alldmg":{"xp":225,"parts":[["the cast",135],["damage",90]]}},"note":"Max hit 9 (12 with chaos gauntlets): every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_water_bolt","skill":"magic","group":"Combat","kind":"xp","name":"Water Bolt","level":23,"xp":165,"in":{"chaosrune":1,"waterrune":2,"airrune":2},"out":{},"sprite":617,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]},"halfdmg":{"xp":215,"parts":[["the cast",165],["damage",50]]},"alldmg":{"xp":265,"parts":[["the cast",165],["damage",100]]}},"note":"Max hit 10 (13 with chaos gauntlets): every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_earth_bolt","skill":"magic","group":"Combat","kind":"xp","name":"Earth Bolt","level":29,"xp":195,"in":{"chaosrune":1,"earthrune":3,"airrune":2},"out":{},"sprite":618,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":250,"parts":[["the cast",195],["damage",55]]},"alldmg":{"xp":305,"parts":[["the cast",195],["damage",110]]}},"note":"Max hit 11 (14 with chaos gauntlets): every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_fire_bolt","skill":"magic","group":"Combat","kind":"xp","name":"Fire Bolt","level":35,"xp":225,"in":{"chaosrune":1,"firerune":4,"airrune":3},"out":{},"sprite":619,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":285,"parts":[["the cast",225],["damage",60]]},"alldmg":{"xp":345,"parts":[["the cast",225],["damage",120]]}},"note":"Max hit 12 (15 with chaos gauntlets): every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
+  {"id":"mg_wind_strike","skill":"magic","group":"Combat","kind":"xp","name":"Wind Strike","level":1,"xp":55,"in":{"mindrune":1,"airrune":1},"out":{},"sprite":612,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"halfdmg":{"xp":65,"parts":[["the cast",55],["damage",10]]},"alldmg":{"xp":75,"parts":[["the cast",55],["damage",20]]}},"note":"Max hit 2: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_air_orb"]},
+  {"id":"mg_water_strike","skill":"magic","group":"Combat","kind":"xp","name":"Water Strike","level":5,"xp":75,"in":{"mindrune":1,"waterrune":1,"airrune":1},"out":{},"sprite":613,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]},"halfdmg":{"xp":95,"parts":[["the cast",75],["damage",20]]},"alldmg":{"xp":115,"parts":[["the cast",75],["damage",40]]}},"note":"Max hit 4: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_recoil","mg_enchant_amulet_of_magic","mg_enchant_necklace_of_minigames_8","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_water_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_earth_strike","skill":"magic","group":"Combat","kind":"xp","name":"Earth Strike","level":9,"xp":95,"in":{"mindrune":1,"earthrune":2,"airrune":1},"out":{},"sprite":614,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":125,"parts":[["the cast",95],["damage",30]]},"alldmg":{"xp":155,"parts":[["the cast",95],["damage",60]]}},"note":"Max hit 6: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_life","mg_enchant_amulet_of_power","mg_earth_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_fire_strike","skill":"magic","group":"Combat","kind":"xp","name":"Fire Strike","level":13,"xp":115,"in":{"mindrune":1,"firerune":3,"airrune":2},"out":{},"sprite":615,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":155,"parts":[["the cast",115],["damage",40]]},"alldmg":{"xp":195,"parts":[["the cast",115],["damage",80]]}},"note":"Max hit 8: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_superheat_bronze_bar","mg_superheat_iron_bar","mg_superheat_silver_bar","mg_superheat_steel_bar","mg_superheat_gold_bar","mg_superheat_mithril_bar","mg_superheat_adamantite_bar","mg_superheat_runite_bar","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_forging","mg_enchant_amulet_of_strength","mg_fire_orb","mg_air_orb"]},
+  {"id":"mg_wind_bolt","skill":"magic","group":"Combat","kind":"xp","name":"Wind Bolt","level":17,"xp":135,"in":{"chaosrune":1,"airrune":2},"out":{},"sprite":616,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"halfdmg":{"xp":180,"parts":[["the cast",135],["damage",45]]},"alldmg":{"xp":225,"parts":[["the cast",135],["damage",90]]}},"note":"Max hit 9 (12 with chaos gauntlets): every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_air_orb"]},
+  {"id":"mg_water_bolt","skill":"magic","group":"Combat","kind":"xp","name":"Water Bolt","level":23,"xp":165,"in":{"chaosrune":1,"waterrune":2,"airrune":2},"out":{},"sprite":617,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]},"halfdmg":{"xp":215,"parts":[["the cast",165],["damage",50]]},"alldmg":{"xp":265,"parts":[["the cast",165],["damage",100]]}},"note":"Max hit 10 (13 with chaos gauntlets): every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_recoil","mg_enchant_amulet_of_magic","mg_enchant_necklace_of_minigames_8","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_water_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_earth_bolt","skill":"magic","group":"Combat","kind":"xp","name":"Earth Bolt","level":29,"xp":195,"in":{"chaosrune":1,"earthrune":3,"airrune":2},"out":{},"sprite":618,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":250,"parts":[["the cast",195],["damage",55]]},"alldmg":{"xp":305,"parts":[["the cast",195],["damage",110]]}},"note":"Max hit 11 (14 with chaos gauntlets): every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_life","mg_enchant_amulet_of_power","mg_earth_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_fire_bolt","skill":"magic","group":"Combat","kind":"xp","name":"Fire Bolt","level":35,"xp":225,"in":{"chaosrune":1,"firerune":4,"airrune":3},"out":{},"sprite":619,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":285,"parts":[["the cast",225],["damage",60]]},"alldmg":{"xp":345,"parts":[["the cast",225],["damage",120]]}},"note":"Max hit 12 (15 with chaos gauntlets): every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_superheat_bronze_bar","mg_superheat_iron_bar","mg_superheat_silver_bar","mg_superheat_steel_bar","mg_superheat_gold_bar","mg_superheat_mithril_bar","mg_superheat_adamantite_bar","mg_superheat_runite_bar","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_forging","mg_enchant_amulet_of_strength","mg_fire_orb","mg_air_orb"]},
   {"id":"mg_crumble_undead","skill":"magic","group":"Combat","kind":"xp","name":"Crumble Undead","level":39,"xp":490,"in":{"chaosrune":1,"airrune":2,"earthrune":2},"out":{},"sprite":620,"asked":1,"aside":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":530,"parts":[["the cast",490],["damage",40]]},"alldmg":{"xp":570,"parts":[["the cast",490],["damage",80]]}},"note":"Only works on skeletons, zombies, ghosts and shades. Max hit 8: every point of damage is 2 XP on top of the cast's. See Damage on the goal. LostHQ's calculator says 24.5 XP; the server gives 49."},
-  {"id":"mg_wind_blast","skill":"magic","group":"Combat","kind":"xp","name":"Wind Blast","level":41,"xp":255,"in":{"deathrune":1,"airrune":3},"out":{},"sprite":621,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"halfdmg":{"xp":320,"parts":[["the cast",255],["damage",65]]},"alldmg":{"xp":385,"parts":[["the cast",255],["damage",130]]}},"note":"Max hit 13: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_water_blast","skill":"magic","group":"Combat","kind":"xp","name":"Water Blast","level":47,"xp":285,"in":{"deathrune":1,"waterrune":3,"airrune":3},"out":{},"sprite":622,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]},"halfdmg":{"xp":355,"parts":[["the cast",285],["damage",70]]},"alldmg":{"xp":425,"parts":[["the cast",285],["damage",140]]}},"note":"Max hit 14: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
+  {"id":"mg_wind_blast","skill":"magic","group":"Combat","kind":"xp","name":"Wind Blast","level":41,"xp":255,"in":{"deathrune":1,"airrune":3},"out":{},"sprite":621,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"halfdmg":{"xp":320,"parts":[["the cast",255],["damage",65]]},"alldmg":{"xp":385,"parts":[["the cast",255],["damage",130]]}},"note":"Max hit 13: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_air_orb"]},
+  {"id":"mg_water_blast","skill":"magic","group":"Combat","kind":"xp","name":"Water Blast","level":47,"xp":285,"in":{"deathrune":1,"waterrune":3,"airrune":3},"out":{},"sprite":622,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]},"halfdmg":{"xp":355,"parts":[["the cast",285],["damage",70]]},"alldmg":{"xp":425,"parts":[["the cast",285],["damage",140]]}},"note":"Max hit 14: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_recoil","mg_enchant_amulet_of_magic","mg_enchant_necklace_of_minigames_8","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_water_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
   {"id":"mg_iban_blast","skill":"magic","group":"Combat","kind":"xp","name":"Iban Blast","level":50,"xp":300,"in":{"firerune":5,"deathrune":1},"out":{},"sprite":623,"asked":1,"aside":1,"tools":["ibanstaff"],"opt":{"halfdmg":{"xp":425,"parts":[["the cast",300],["damage",125]]},"alldmg":{"xp":550,"parts":[["the cast",300],["damage",250]]}},"note":"Cast with Iban's staff in hand (from the Underground Pass): every cast takes one of the staff's charges. Max hit 25: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_earth_blast","skill":"magic","group":"Combat","kind":"xp","name":"Earth Blast","level":53,"xp":315,"in":{"deathrune":1,"earthrune":4,"airrune":3},"out":{},"sprite":624,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":390,"parts":[["the cast",315],["damage",75]]},"alldmg":{"xp":465,"parts":[["the cast",315],["damage",150]]}},"note":"Max hit 15: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_fire_blast","skill":"magic","group":"Combat","kind":"xp","name":"Fire Blast","level":59,"xp":345,"in":{"deathrune":1,"firerune":5,"airrune":4},"out":{},"sprite":625,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":425,"parts":[["the cast",345],["damage",80]]},"alldmg":{"xp":505,"parts":[["the cast",345],["damage",160]]}},"note":"Max hit 16: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
+  {"id":"mg_earth_blast","skill":"magic","group":"Combat","kind":"xp","name":"Earth Blast","level":53,"xp":315,"in":{"deathrune":1,"earthrune":4,"airrune":3},"out":{},"sprite":624,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":390,"parts":[["the cast",315],["damage",75]]},"alldmg":{"xp":465,"parts":[["the cast",315],["damage",150]]}},"note":"Max hit 15: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_life","mg_enchant_amulet_of_power","mg_earth_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_fire_blast","skill":"magic","group":"Combat","kind":"xp","name":"Fire Blast","level":59,"xp":345,"in":{"deathrune":1,"firerune":5,"airrune":4},"out":{},"sprite":625,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":425,"parts":[["the cast",345],["damage",80]]},"alldmg":{"xp":505,"parts":[["the cast",345],["damage",160]]}},"note":"Max hit 16: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_superheat_bronze_bar","mg_superheat_iron_bar","mg_superheat_silver_bar","mg_superheat_steel_bar","mg_superheat_gold_bar","mg_superheat_mithril_bar","mg_superheat_adamantite_bar","mg_superheat_runite_bar","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_forging","mg_enchant_amulet_of_strength","mg_fire_orb","mg_air_orb"]},
   {"id":"mg_saradomin_strike","skill":"magic","group":"Combat","kind":"xp","name":"Saradomin Strike","level":60,"xp":350,"in":{"firerune":2,"bloodrune":2,"airrune":4},"out":{},"sprite":626,"asked":1,"aside":1,"tools":["saradomin_staff"],"opt":{"halfdmg":{"xp":450,"parts":[["the cast",350],["damage",100]]},"alldmg":{"xp":550,"parts":[["the cast",350],["damage",200]]}},"note":"Learnt in the Mage Arena, and cast with the staff of Saradomin in hand. Hits up to 30 for a while after a Charge, with the god's cape worn too. Max hit 20: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
   {"id":"mg_claws_of_guthix","skill":"magic","group":"Combat","kind":"xp","name":"Claws of Guthix","level":60,"xp":350,"in":{"firerune":1,"bloodrune":2,"airrune":4},"out":{},"sprite":627,"asked":1,"aside":1,"tools":["guthix_staff"],"opt":{"halfdmg":{"xp":450,"parts":[["the cast",350],["damage",100]]},"alldmg":{"xp":550,"parts":[["the cast",350],["damage",200]]}},"note":"Learnt in the Mage Arena, and cast with the staff of Guthix in hand. Hits up to 30 for a while after a Charge, with the god's cape worn too. Max hit 20: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
   {"id":"mg_flames_of_zamorak","skill":"magic","group":"Combat","kind":"xp","name":"Flames of Zamorak","level":60,"xp":350,"in":{"firerune":4,"bloodrune":2,"airrune":1},"out":{},"sprite":628,"asked":1,"aside":1,"tools":["zamorak_staff"],"opt":{"halfdmg":{"xp":450,"parts":[["the cast",350],["damage",100]]},"alldmg":{"xp":550,"parts":[["the cast",350],["damage",200]]}},"note":"Learnt in the Mage Arena, and cast with the staff of Zamorak in hand. Hits up to 30 for a while after a Charge, with the god's cape worn too. Max hit 20: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_wind_wave","skill":"magic","group":"Combat","kind":"xp","name":"Wind Wave","level":62,"xp":360,"in":{"bloodrune":1,"airrune":5},"out":{},"sprite":629,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"halfdmg":{"xp":445,"parts":[["the cast",360],["damage",85]]},"alldmg":{"xp":530,"parts":[["the cast",360],["damage",170]]}},"note":"Max hit 17: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_water_wave","skill":"magic","group":"Combat","kind":"xp","name":"Water Wave","level":65,"xp":375,"in":{"bloodrune":1,"waterrune":7,"airrune":5},"out":{},"sprite":630,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]},"halfdmg":{"xp":465,"parts":[["the cast",375],["damage",90]]},"alldmg":{"xp":555,"parts":[["the cast",375],["damage",180]]}},"note":"Max hit 18: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_earth_wave","skill":"magic","group":"Combat","kind":"xp","name":"Earth Wave","level":70,"xp":400,"in":{"bloodrune":1,"earthrune":7,"airrune":5},"out":{},"sprite":631,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":495,"parts":[["the cast",400],["damage",95]]},"alldmg":{"xp":590,"parts":[["the cast",400],["damage",190]]}},"note":"Max hit 19: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
-  {"id":"mg_fire_wave","skill":"magic","group":"Combat","kind":"xp","name":"Fire Wave","level":75,"xp":425,"in":{"bloodrune":1,"firerune":7,"airrune":5},"out":{},"sprite":632,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":525,"parts":[["the cast",425],["damage",100]]},"alldmg":{"xp":625,"parts":[["the cast",425],["damage",200]]}},"note":"Max hit 20: every point of damage is 2 XP on top of the cast's. See Damage on the goal."},
+  {"id":"mg_wind_wave","skill":"magic","group":"Combat","kind":"xp","name":"Wind Wave","level":62,"xp":360,"in":{"bloodrune":1,"airrune":5},"out":{},"sprite":629,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"halfdmg":{"xp":445,"parts":[["the cast",360],["damage",85]]},"alldmg":{"xp":530,"parts":[["the cast",360],["damage",170]]}},"note":"Max hit 17: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_air_orb"]},
+  {"id":"mg_water_wave","skill":"magic","group":"Combat","kind":"xp","name":"Water Wave","level":65,"xp":375,"in":{"bloodrune":1,"waterrune":7,"airrune":5},"out":{},"sprite":630,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]},"halfdmg":{"xp":465,"parts":[["the cast",375],["damage",90]]},"alldmg":{"xp":555,"parts":[["the cast",375],["damage",180]]}},"note":"Max hit 18: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_recoil","mg_enchant_amulet_of_magic","mg_enchant_necklace_of_minigames_8","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_water_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_earth_wave","skill":"magic","group":"Combat","kind":"xp","name":"Earth Wave","level":70,"xp":400,"in":{"bloodrune":1,"earthrune":7,"airrune":5},"out":{},"sprite":631,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":495,"parts":[["the cast",400],["damage",95]]},"alldmg":{"xp":590,"parts":[["the cast",400],["damage",190]]}},"note":"Max hit 19: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_life","mg_enchant_amulet_of_power","mg_earth_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_fire_wave","skill":"magic","group":"Combat","kind":"xp","name":"Fire Wave","level":75,"xp":425,"in":{"bloodrune":1,"firerune":7,"airrune":5},"out":{},"sprite":632,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]},"halfdmg":{"xp":525,"parts":[["the cast",425],["damage",100]]},"alldmg":{"xp":625,"parts":[["the cast",425],["damage",200]]}},"note":"Max hit 20: every point of damage is 2 XP on top of the cast's. See Damage on the goal.","after":["mg_superheat_bronze_bar","mg_superheat_iron_bar","mg_superheat_silver_bar","mg_superheat_steel_bar","mg_superheat_gold_bar","mg_superheat_mithril_bar","mg_superheat_adamantite_bar","mg_superheat_runite_bar","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_forging","mg_enchant_amulet_of_strength","mg_fire_orb","mg_air_orb"]},
   {"id":"mg_confuse","skill":"magic","group":"Curses","kind":"xp","name":"Confuse","level":3,"xp":130,"in":{"bodyrune":1,"waterrune":3,"earthrune":2},"out":{},"sprite":633,"asked":1,"opt":{"water":{"less":["waterrune"],"tools":["staff_of_water"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]}},"note":"Lowers your target's Attack. It can't be cast on one whose Attack is already lowered. The XP is for the cast, whether it takes hold or not."},
   {"id":"mg_weaken","skill":"magic","group":"Curses","kind":"xp","name":"Weaken","level":11,"xp":210,"in":{"bodyrune":1,"waterrune":3,"earthrune":2},"out":{},"sprite":634,"asked":1,"opt":{"water":{"less":["waterrune"],"tools":["staff_of_water"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]}},"note":"Lowers your target's Strength. It can't be cast on one whose Strength is already lowered. The XP is for the cast, whether it takes hold or not."},
   {"id":"mg_curse","skill":"magic","group":"Curses","kind":"xp","name":"Curse","level":19,"xp":290,"in":{"bodyrune":1,"waterrune":2,"earthrune":3},"out":{},"sprite":635,"asked":1,"opt":{"water":{"less":["waterrune"],"tools":["staff_of_water"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]}},"note":"Lowers your target's Defence. It can't be cast on one whose Defence is already lowered. The XP is for the cast, whether it takes hold or not."},
@@ -1292,13 +1298,34 @@ export const METHODS = [
   {"id":"mg_air_orb","skill":"magic","group":"Enchantment","kind":"xp","name":"Charge Air Orb","level":66,"xp":760,"in":{"stafforb":1,"airrune":30,"cosmicrune":3},"out":{"air_orb":1},"sprite":655,"aside":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]}},"note":"Cast at the Obelisk of Air, with an unpowered orb on you."},
   {"id":"mg_enchant_ring_of_wealth","skill":"magic","group":"Enchantment","kind":"xp","name":"Lvl-5 Enchant: Ring of wealth","level":68,"xp":780,"in":{"dragonstone_ring":1,"earthrune":15,"waterrune":15,"cosmicrune":1},"out":{"ring_of_wealth":1},"sprite":656,"opt":{"water":{"less":["waterrune"],"tools":["staff_of_water"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]}},"note":"Cast on a dragonstone ring."},
   {"id":"mg_enchant_amulet_of_glory_4","skill":"magic","group":"Enchantment","kind":"xp","name":"Lvl-5 Enchant: Amulet of glory(4)","level":68,"xp":780,"in":{"strung_dragonstone_amulet":1,"earthrune":15,"waterrune":15,"cosmicrune":1},"out":{"amulet_of_glory_4":1},"sprite":656,"opt":{"water":{"less":["waterrune"],"tools":["staff_of_water"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]}},"note":"Cast on a dragonstone amulet. It comes out uncharged: the Fountain of Heroes charges it for nothing."},
-  {"id":"mg_varrock_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Varrock Teleport","level":25,"xp":350,"in":{"firerune":1,"airrune":3,"lawrune":1},"out":{},"sprite":657,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]}}},
-  {"id":"mg_lumbridge_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Lumbridge Teleport","level":31,"xp":410,"in":{"earthrune":1,"airrune":3,"lawrune":1},"out":{},"sprite":658,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]}}},
-  {"id":"mg_falador_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Falador Teleport","level":37,"xp":480,"in":{"waterrune":1,"airrune":3,"lawrune":1},"out":{},"sprite":659,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]}},"note":"LostHQ's calculator says 47 XP; the server gives 48."},
-  {"id":"mg_camelot_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Camelot Teleport","level":45,"xp":555,"in":{"airrune":5,"lawrune":1},"out":{},"sprite":660,"asked":1,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]}}},
+  {"id":"mg_varrock_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Varrock Teleport","level":25,"xp":350,"in":{"firerune":1,"airrune":3,"lawrune":1},"out":{},"sprite":657,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]}},"after":["mg_superheat_bronze_bar","mg_superheat_iron_bar","mg_superheat_silver_bar","mg_superheat_steel_bar","mg_superheat_gold_bar","mg_superheat_mithril_bar","mg_superheat_adamantite_bar","mg_superheat_runite_bar","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_forging","mg_enchant_amulet_of_strength","mg_fire_orb","mg_air_orb"]},
+  {"id":"mg_lumbridge_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Lumbridge Teleport","level":31,"xp":410,"in":{"earthrune":1,"airrune":3,"lawrune":1},"out":{},"sprite":658,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]}},"after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_enchant_ring_of_life","mg_enchant_amulet_of_power","mg_earth_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_falador_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Falador Teleport","level":37,"xp":480,"in":{"waterrune":1,"airrune":3,"lawrune":1},"out":{},"sprite":659,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]},"water":{"less":["waterrune"],"tools":["staff_of_water"]}},"note":"LostHQ's calculator says 47 XP; the server gives 48.","after":["mg_enchant_ring_of_recoil","mg_enchant_amulet_of_magic","mg_enchant_necklace_of_minigames_8","mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_water_orb","mg_air_orb","mg_enchant_ring_of_wealth","mg_enchant_amulet_of_glory_4"]},
+  {"id":"mg_camelot_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Camelot Teleport","level":45,"xp":555,"in":{"airrune":5,"lawrune":1},"out":{},"sprite":660,"opt":{"air":{"less":["airrune"],"tools":["staff_of_air"]}},"after":["mg_enchant_ring_of_dueling_8","mg_enchant_amulet_of_defence","mg_air_orb"]},
   {"id":"mg_ardougne_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Ardougne Teleport","level":51,"xp":610,"in":{"waterrune":2,"lawrune":2},"out":{},"sprite":661,"asked":1,"aside":1,"opt":{"water":{"less":["waterrune"],"tools":["staff_of_water"]}},"note":"Once Plague City is done."},
   {"id":"mg_watchtower_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Watchtower Teleport","level":58,"xp":680,"in":{"earthrune":2,"lawrune":2},"out":{},"sprite":662,"asked":1,"aside":1,"opt":{"earth":{"less":["earthrune"],"tools":["staff_of_earth"]},"lava":{"less":["earthrune"],"tools":["lava_battlestaff"]}},"note":"Once Watchtower is done."},
   {"id":"mg_trollheim_teleport","skill":"magic","group":"Teleports","kind":"xp","name":"Trollheim Teleport","level":61,"xp":680,"in":{"firerune":2,"lawrune":2},"out":{},"sprite":663,"asked":1,"aside":1,"opt":{"fire":{"less":["firerune"],"tools":["staff_of_fire"]},"lava":{"less":["firerune"],"tools":["lava_battlestaff"]}},"note":"Once Eadgar's Ruse is done. Not on LostHQ's calculator: the server's own level and XP."},
+  {"id":"mg_made_sapphire_ring","skill":"magic","group":"Made on the way","kind":"source","name":"Sapphire ring","level":1,"xp":0,"in":{"gold_bar":1,"sapphire":1},"out":{"sapphire_ring":1},"tools":["ring_mould"],"craft":20,"gives":{"crafting":400}},
+  {"id":"mg_made_sapphire_necklace","skill":"magic","group":"Made on the way","kind":"source","name":"Sapphire necklace","level":1,"xp":0,"in":{"gold_bar":1,"sapphire":1},"out":{"sapphire_necklace":1},"tools":["necklace_mould"],"craft":20,"gives":{"crafting":550}},
+  {"id":"mg_made_strung_sapphire_amulet","skill":"magic","group":"Made on the way","kind":"source","name":"Sapphire amulet (make & string)","level":1,"xp":0,"in":{"gold_bar":1,"sapphire":1,"ball_of_wool":1},"out":{"strung_sapphire_amulet":1},"tools":["amulet_mould"],"craft":24,"gives":{"crafting":690}},
+  {"id":"mg_made_emerald_ring","skill":"magic","group":"Made on the way","kind":"source","name":"Emerald ring","level":1,"xp":0,"in":{"gold_bar":1,"emerald":1},"out":{"emerald_ring":1},"tools":["ring_mould"],"craft":27,"gives":{"crafting":550}},
+  {"id":"mg_made_strung_emerald_amulet","skill":"magic","group":"Made on the way","kind":"source","name":"Emerald amulet (make & string)","level":1,"xp":0,"in":{"gold_bar":1,"emerald":1,"ball_of_wool":1},"out":{"strung_emerald_amulet":1},"tools":["amulet_mould"],"craft":31,"gives":{"crafting":740}},
+  {"id":"mg_made_ruby_ring","skill":"magic","group":"Made on the way","kind":"source","name":"Ruby ring","level":1,"xp":0,"in":{"gold_bar":1,"ruby":1},"out":{"ruby_ring":1},"tools":["ring_mould"],"craft":34,"gives":{"crafting":700}},
+  {"id":"mg_made_diamond_ring","skill":"magic","group":"Made on the way","kind":"source","name":"Diamond ring","level":1,"xp":0,"in":{"gold_bar":1,"diamond":1},"out":{"diamond_ring":1},"tools":["ring_mould"],"craft":43,"gives":{"crafting":850}},
+  {"id":"mg_made_strung_ruby_amulet","skill":"magic","group":"Made on the way","kind":"source","name":"Ruby amulet (make & string)","level":1,"xp":0,"in":{"gold_bar":1,"ruby":1,"ball_of_wool":1},"out":{"strung_ruby_amulet":1},"tools":["amulet_mould"],"craft":50,"gives":{"crafting":890}},
+  {"id":"mg_made_dragonstone_ring","skill":"magic","group":"Made on the way","kind":"source","name":"Dragonstone ring","level":1,"xp":0,"in":{"gold_bar":1,"dragonstone":1},"out":{"dragonstone_ring":1},"tools":["ring_mould"],"craft":55,"gives":{"crafting":1000}},
+  {"id":"mg_made_strung_diamond_amulet","skill":"magic","group":"Made on the way","kind":"source","name":"Diamond amulet (make & string)","level":1,"xp":0,"in":{"gold_bar":1,"diamond":1,"ball_of_wool":1},"out":{"strung_diamond_amulet":1},"tools":["amulet_mould"],"craft":70,"gives":{"crafting":1040}},
+  {"id":"mg_made_strung_dragonstone_amulet","skill":"magic","group":"Made on the way","kind":"source","name":"Dragonstoneamulet (make & string)","level":1,"xp":0,"in":{"gold_bar":1,"dragonstone":1,"ball_of_wool":1},"out":{"strung_dragonstone_amulet":1},"tools":["amulet_mould"],"craft":80,"gives":{"crafting":1540}},
+  {"id":"mg_made_stafforb","skill":"magic","group":"Made on the way","kind":"source","name":"Unpowered orb","level":1,"xp":0,"in":{"molten_glass":1},"out":{"stafforb":1},"tools":["glassblowingpipe"],"craft":46,"gives":{"crafting":525}},
+  {"id":"mg_made_ball_of_wool","skill":"magic","group":"Made on the way","kind":"source","name":"Ball of wool","level":1,"xp":0,"in":{"wool":1},"out":{"ball_of_wool":1},"craft":1,"gives":{"crafting":25}},
+  {"id":"mg_made_sapphire","skill":"magic","group":"Made on the way","kind":"source","name":"Sapphire (cut)","level":1,"xp":0,"in":{"uncut_sapphire":1},"out":{"sapphire":1},"tools":["chisel"],"craft":20,"gives":{"crafting":500}},
+  {"id":"mg_made_emerald","skill":"magic","group":"Made on the way","kind":"source","name":"Emerald (cut)","level":1,"xp":0,"in":{"uncut_emerald":1},"out":{"emerald":1},"tools":["chisel"],"craft":27,"gives":{"crafting":675}},
+  {"id":"mg_made_ruby","skill":"magic","group":"Made on the way","kind":"source","name":"Ruby (cut)","level":1,"xp":0,"in":{"uncut_ruby":1},"out":{"ruby":1},"tools":["chisel"],"craft":34,"gives":{"crafting":850}},
+  {"id":"mg_made_diamond","skill":"magic","group":"Made on the way","kind":"source","name":"Diamond (cut)","level":1,"xp":0,"in":{"uncut_diamond":1},"out":{"diamond":1},"tools":["chisel"],"craft":43,"gives":{"crafting":1075}},
+  {"id":"mg_made_dragonstone","skill":"magic","group":"Made on the way","kind":"source","name":"Dragonstone (cut)","level":1,"xp":0,"in":{"uncut_dragonstone":1},"out":{"dragonstone":1},"tools":["chisel"],"craft":55,"gives":{"crafting":1375}},
+  {"id":"mg_made_molten_glass","skill":"magic","group":"Made on the way","kind":"source","name":"Molten glass","level":1,"xp":0,"in":{"bucket_sand":1,"soda_ash":1},"out":{"molten_glass":1},"craft":1,"gives":{"crafting":200}},
+  {"id":"mg_made_crystal_chest","skill":"magic","group":"Made on the way","kind":"source","name":"Open the crystal chest","level":1,"xp":0,"in":{"crystal_key":1},"out":{"uncut_dragonstone":1},"craft":1,"note":"The chest's other loot is luck, and isn't counted."},
+  {"id":"mg_made_join_keys","skill":"magic","group":"Made on the way","kind":"source","name":"Join key halves","level":1,"xp":0,"in":{"keyhalf1":1,"keyhalf2":1},"out":{"crystal_key":1},"craft":1},
 ];
 
 // Unidentified herbs: one bank entry (the market's unid listing), and the XP
@@ -2175,6 +2202,29 @@ export const BANK_GROUPS = {
       ]
     },
     {
+      "name": "What jewellery and orbs are made of",
+      "items": [
+        "uncut_sapphire",
+        "uncut_emerald",
+        "uncut_ruby",
+        "uncut_diamond",
+        "uncut_dragonstone",
+        "sapphire",
+        "emerald",
+        "ruby",
+        "diamond",
+        "dragonstone",
+        "keyhalf1",
+        "keyhalf2",
+        "crystal_key",
+        "wool",
+        "ball_of_wool",
+        "bucket_sand",
+        "soda_ash",
+        "molten_glass"
+      ]
+    },
+    {
       "name": "Made: enchanted jewellery",
       "items": [
         "ring_of_recoil",
@@ -2417,5 +2467,440 @@ export const CHOICES = {
       ],
       "tip": "A combat spell gives its XP for the cast, hit or miss, and 2 XP more for every point of damage. Leave it out: only the cast counts, which is the most casts a goal can take (and what LostHQ's calculator shows). Every cast hits: each is counted for half its max hit as well, the average of a hit (a Fire Strike: 11.5 + 8). Half the casts hit: half of that. How often you really hit depends on your target and what you wear, and a hit can't do more damage than your target has left."
     }
+  ],
+  "attack": [
+    {
+      "id": "style",
+      "label": "Style",
+      "options": [
+        {
+          "id": "accurate",
+          "name": "Accurate"
+        },
+        {
+          "id": "controlled",
+          "name": "Controlled"
+        }
+      ],
+      "tip": "Every point of damage gives XP by the style you fight in. Accurate: 4 Attack XP. Controlled: 1.33 XP each to Attack, Strength and Defence. Whatever the style, a point of damage is 1.33 Hitpoints XP as well. The server rounds each hit's XP down to a tenth, so at 1.33 a point many small hits come to a little less than a kill's row says."
+    }
+  ],
+  "strength": [
+    {
+      "id": "style",
+      "label": "Style",
+      "options": [
+        {
+          "id": "aggressive",
+          "name": "Aggressive"
+        },
+        {
+          "id": "controlled",
+          "name": "Controlled"
+        }
+      ],
+      "tip": "Every point of damage gives XP by the style you fight in. Aggressive: 4 Strength XP. Controlled: 1.33 XP each to Attack, Strength and Defence. Whatever the style, a point of damage is 1.33 Hitpoints XP as well. The server rounds each hit's XP down to a tenth, so at 1.33 a point many small hits come to a little less than a kill's row says."
+    }
+  ],
+  "defence": [
+    {
+      "id": "style",
+      "label": "Style",
+      "options": [
+        {
+          "id": "defensive",
+          "name": "Defensive"
+        },
+        {
+          "id": "controlled",
+          "name": "Controlled"
+        },
+        {
+          "id": "longrange",
+          "name": "Longrange (Ranged)"
+        }
+      ],
+      "tip": "Every point of damage gives XP by the style you fight in. Defensive: 4 Defence XP. Controlled: 1.33 XP each to Attack, Strength and Defence. Longrange (Ranged): 2 XP each to Ranged and Defence. Whatever the style, a point of damage is 1.33 Hitpoints XP as well. The server rounds each hit's XP down to a tenth, so at 1.33 a point many small hits come to a little less than a kill's row says."
+    }
+  ],
+  "ranged": [
+    {
+      "id": "style",
+      "label": "Style",
+      "options": [
+        {
+          "id": "rapid",
+          "name": "Accurate or Rapid"
+        },
+        {
+          "id": "longrange",
+          "name": "Longrange"
+        }
+      ],
+      "tip": "Every point of damage gives XP by the style you fight in. Accurate or Rapid: 4 Ranged XP. Longrange: 2 XP each to Ranged and Defence. Whatever the style, a point of damage is 1.33 Hitpoints XP as well. The server rounds each hit's XP down to a tenth, so at 1.33 a point many small hits come to a little less than a kill's row says."
+    }
   ]
 };
+
+// The monsters Attack, Strength, Defence, Hitpoints and Ranged are trained on:
+// the server's NPCs with an Attack option and hitpoints that are in the world,
+// one line for those with the same name, combat level and hitpoints. n: how many
+// of them the world has. twin: another line has its name and level (the
+// hitpoints say which). bones: what it leaves to bury. mult: the XP it gives, in
+// thousandths of the usual. flat: 1 XP a point of damage, whatever the style.
+// magic: only Magic works on it (the Mage Arena's battle mages), so it's a row
+// of Hitpoints alone. aside: not what a plan picks by itself: fewer than five in
+// the world, one with a catch (note says what), or an XP rule of its own.
+export const MONSTERS = [
+  {"id":"chicken_1","name":"Chicken","level":1,"hp":3,"n":65,"group":"Level 1–10","bones":"bones"},
+  {"id":"duck_1","name":"Duck","level":1,"hp":3,"n":156,"group":"Level 1–10"},
+  {"id":"gnome_1","name":"Gnome","level":1,"hp":3,"n":143,"group":"Level 1–10","bones":"bones"},
+  {"id":"gnome_child_1","name":"Gnome child","level":1,"hp":2,"n":14,"group":"Level 1–10","bones":"bones"},
+  {"id":"gnome_troop_1","name":"Gnome troop","level":1,"hp":3,"n":29,"group":"Level 1–10","bones":"bones"},
+  {"id":"gnome_woman_1","name":"Gnome woman","level":1,"hp":2,"n":67,"group":"Level 1–10","bones":"bones"},
+  {"id":"rat_1","name":"Rat","level":1,"hp":2,"n":381,"group":"Level 1–10"},
+  {"id":"spider_1","name":"Spider","level":1,"hp":2,"n":126,"group":"Level 1–10"},
+  {"id":"cow_2","name":"Cow","level":2,"hp":8,"n":52,"group":"Level 1–10","bones":"bones"},
+  {"id":"entrana_fire_bird_2","name":"Entrana Fire Bird","level":2,"hp":5,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"giant_spider_2","name":"Giant spider","level":2,"hp":5,"n":50,"group":"Level 1–10"},
+  {"id":"goblin_2","name":"Goblin","level":2,"hp":5,"n":107,"group":"Level 1–10","bones":"bones"},
+  {"id":"imp_2","name":"Imp","level":2,"hp":8,"n":47,"group":"Level 1–10"},
+  {"id":"jonny_the_beard_2","name":"Jonny the beard","level":2,"hp":8,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"man_2","name":"Man","level":2,"hp":7,"n":58,"group":"Level 1–10","bones":"bones"},
+  {"id":"penguin_2","name":"Penguin","level":2,"hp":4,"n":3,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"rabbit_2","name":"Rabbit","level":2,"hp":5,"n":63,"group":"Level 1–10","bones":"bones"},
+  {"id":"rooster_2","name":"Rooster","level":2,"hp":7,"n":2,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"tramp_2","name":"Tramp","level":2,"hp":7,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"woman_2","name":"Woman","level":2,"hp":7,"n":22,"group":"Level 1–10","bones":"bones"},
+  {"id":"wormbrain_2","name":"Wormbrain","level":2,"hp":5,"n":1,"group":"Level 1–10","bones":"bones","aside":1,"note":"Its quest decides when you can attack it."},
+  {"id":"gardener_3","name":"Gardener","level":3,"hp":7,"n":2,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"giant_rat_3","name":"Giant rat","level":3,"hp":5,"n":33,"group":"Level 1–10","bones":"bones"},
+  {"id":"monk_3","name":"Monk","level":3,"hp":5,"n":4,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"monkey_3","name":"Monkey","level":3,"hp":6,"n":67,"group":"Level 1–10","bones":"mm_normal_monkey_bones"},
+  {"id":"woman_3","name":"Woman","level":3,"hp":10,"n":18,"group":"Level 1–10","bones":"bones"},
+  {"id":"ceolburg_4","name":"Ceolburg","level":4,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"eadburg_4","name":"Eadburg","level":4,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"hild_4","name":"Hild","level":4,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"hygd_4","name":"Hygd","level":4,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"man_4","name":"Man","level":4,"hp":13,"n":5,"group":"Level 1–10","bones":"bones"},
+  {"id":"woman_4","name":"Woman","level":4,"hp":13,"n":12,"group":"Level 1–10","bones":"bones"},
+  {"id":"breoca_5","name":"Breoca","level":5,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"goblin_5","name":"Goblin","level":5,"hp":12,"n":101,"group":"Level 1–10","bones":"bones"},
+  {"id":"highwayman_5","name":"Highwayman","level":5,"hp":13,"n":5,"group":"Level 1–10","bones":"bones"},
+  {"id":"monk_5","name":"Monk","level":5,"hp":15,"n":11,"group":"Level 1–10","bones":"bones"},
+  {"id":"ocga_5","name":"Ocga","level":5,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"penda_5","name":"Penda","level":5,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"servant_5","name":"Servant","level":5,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"snake_5","name":"Snake","level":5,"hp":6,"n":51,"group":"Level 1–10","bones":"bones"},
+  {"id":"bat_6","name":"Bat","level":6,"hp":8,"n":26,"group":"Level 1–10","bones":"bat_bones"},
+  {"id":"giant_rat_6","name":"Giant rat","level":6,"hp":10,"n":40,"group":"Level 1–10","bones":"bones"},
+  {"id":"mugger_6","name":"Mugger","level":6,"hp":8,"n":7,"group":"Level 1–10","bones":"bones"},
+  {"id":"unferth_6","name":"Unferth","level":6,"hp":10,"n":1,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"barbarian_7","name":"Barbarian","level":7,"hp":14,"n":19,"group":"Level 1–10","bones":"bones"},
+  {"id":"dark_wizard_7","name":"Dark wizard","level":7,"hp":12,"n":22,"group":"Level 1–10","bones":"bones"},
+  {"id":"farmer_7","name":"Farmer","level":7,"hp":12,"n":10,"group":"Level 1–10","bones":"bones"},
+  {"id":"barbarian_woman_8","name":"Barbarian woman","level":8,"hp":14,"n":8,"group":"Level 1–10","bones":"bones"},
+  {"id":"dark_warrior_8","name":"Dark warrior","level":8,"hp":17,"n":15,"group":"Level 1–10","bones":"bones"},
+  {"id":"al_kharid_warrior_9","name":"Al-Kharid warrior","level":9,"hp":19,"n":9,"group":"Level 1–10","bones":"bones"},
+  {"id":"blessed_giant_rat_9","name":"Blessed Giant rat","level":9,"hp":30,"n":4,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"myre_blamish_snail_9","name":"Myre Blamish Snail","level":9,"hp":8,"n":48,"group":"Level 1–10"},
+  {"id":"wizard_9","name":"Wizard","level":9,"hp":14,"n":17,"group":"Level 1–10","bones":"bones"},
+  {"id":"dwarf_10","name":"Dwarf","level":10,"hp":16,"n":63,"group":"Level 1–10","bones":"bones"},
+  {"id":"myre_blamish_snail_10","name":"Myre Blamish Snail","level":10,"hp":13,"n":24,"group":"Level 1–10"},
+  {"id":"ochre_blamish_snail_10","name":"Ochre Blamish Snail","level":10,"hp":10,"n":24,"group":"Level 1–10"},
+  {"id":"rowdy_slave_10","name":"Rowdy slave","level":10,"hp":16,"n":2,"group":"Level 1–10","bones":"bones","aside":1},
+  {"id":"thug_10","name":"Thug","level":10,"hp":18,"n":18,"group":"Level 1–10","bones":"bones"},
+  {"id":"mourner_11","name":"Mourner","level":11,"hp":19,"n":4,"group":"Level 11–20","bones":"bones","aside":1},
+  {"id":"shipyard_worker_11","name":"Shipyard worker","level":11,"hp":10,"n":14,"group":"Level 11–20","bones":"bones"},
+  {"id":"dungeon_rat_12","name":"Dungeon rat","level":12,"hp":12,"n":18,"group":"Level 11–20","bones":"bones"},
+  {"id":"grave_scorpion_12","name":"Grave Scorpion","level":12,"hp":7,"n":5,"group":"Level 11–20"},
+  {"id":"mourner_12","name":"Mourner","level":12,"hp":13,"n":4,"group":"Level 11–20","bones":"bones","aside":1},
+  {"id":"unicorn_foal_12","name":"Unicorn Foal","level":12,"hp":15,"n":2,"group":"Level 11–20","bones":"bones","aside":1},
+  {"id":"woman_12","name":"Woman","level":12,"hp":13,"n":7,"group":"Level 11–20","bones":"bones"},
+  {"id":"alomone_13","name":"Alomone","level":13,"hp":25,"n":1,"group":"Level 11–20","aside":1},
+  {"id":"chaos_druid_13","name":"Chaos druid","level":13,"hp":20,"n":32,"group":"Level 11–20","bones":"bones"},
+  {"id":"clivet_13","name":"Clivet","level":13,"hp":25,"n":1,"group":"Level 11–20","bones":"bones","aside":1},
+  {"id":"goblin_13","name":"Goblin","level":13,"hp":16,"n":10,"group":"Level 11–20","bones":"bones"},
+  {"id":"hazeel_cultist_13","name":"Hazeel Cultist","level":13,"hp":25,"n":5,"group":"Level 11–20","bones":"bones"},
+  {"id":"iban_disciple_13","name":"Iban disciple","level":13,"hp":20,"n":26,"group":"Level 11–20","bones":"bones"},
+  {"id":"mourner_13","name":"Mourner","level":13,"hp":19,"n":2,"group":"Level 11–20","bones":"bones","aside":1},
+  {"id":"rock_crab_13","name":"Rock Crab","level":13,"hp":50,"n":34,"group":"Level 11–20"},
+  {"id":"zombie_13","name":"Zombie","level":13,"hp":22,"n":18,"group":"Level 11–20","bones":"bones"},
+  {"id":"lucien_14","name":"Lucien","level":14,"hp":17,"n":1,"group":"Level 11–20","bones":"bones","aside":1,"note":"Its quest decides when you can attack it."},
+  {"id":"scorpion_14","name":"Scorpion","level":14,"hp":17,"n":62,"group":"Level 11–20"},
+  {"id":"thief_14","name":"Thief","level":14,"hp":17,"n":2,"group":"Level 11–20","bones":"bones","aside":1},
+  {"id":"woman_14","name":"Woman","level":14,"hp":23,"n":5,"group":"Level 11–20","bones":"bones"},
+  {"id":"bark_blamish_snail_15","name":"Bark Blamish Snail","level":15,"hp":22,"n":10,"group":"Level 11–20"},
+  {"id":"bear_cub_15","name":"Bear Cub","level":15,"hp":20,"n":8,"group":"Level 11–20","bones":"bones"},
+  {"id":"ochre_blamish_snail_15","name":"Ochre Blamish Snail","level":15,"hp":20,"n":14,"group":"Level 11–20"},
+  {"id":"rogue_15","name":"Rogue","level":15,"hp":17,"n":22,"group":"Level 11–20","bones":"bones"},
+  {"id":"unicorn_15","name":"Unicorn","level":15,"hp":19,"n":18,"group":"Level 11–20","bones":"bones"},
+  {"id":"skeleton_mage_16","name":"Skeleton Mage","level":16,"hp":17,"n":4,"group":"Level 11–20","bones":"bones","aside":1},
+  {"id":"thief_16","name":"Thief","level":16,"hp":17,"n":18,"group":"Level 11–20","bones":"bones"},
+  {"id":"monk_of_zamorak_17","name":"Monk of Zamorak","level":17,"hp":10,"n":17,"group":"Level 11–20","bones":"bones"},
+  {"id":"mourner_18","name":"Mourner","level":18,"hp":13,"n":5,"group":"Level 11–20","bones":"bones"},
+  {"id":"souless_18","name":"Souless","level":18,"hp":24,"n":58,"group":"Level 11–20","bones":"bones"},
+  {"id":"zombie_18","name":"Zombie","level":18,"hp":24,"n":25,"group":"Level 11–20","bones":"bones"},
+  {"id":"bear_19","name":"Bear","level":19,"hp":25,"n":12,"group":"Level 11–20","bones":"bones"},
+  {"id":"ghost_19","name":"Ghost","level":19,"hp":25,"n":63,"group":"Level 11–20"},
+  {"id":"grizzly_bear_cub_19","name":"Grizzly bear cub","level":19,"hp":35,"n":6,"group":"Level 11–20","bones":"bones"},
+  {"id":"khazard_trooper_19","name":"Khazard trooper","level":19,"hp":22,"n":41,"group":"Level 11–20","bones":"bones"},
+  {"id":"pirate_guard_19","name":"Pirate Guard","level":19,"hp":25,"n":7,"group":"Level 11–20","bones":"bones"},
+  {"id":"suit_of_armour_19","name":"Suit of armour","level":19,"hp":29,"n":2,"group":"Level 11–20","aside":1,"note":"They come alive as you pass, in Taverley Dungeon."},
+  {"id":"tower_archer_19","name":"Tower Archer","level":19,"hp":30,"n":6,"group":"Level 11–20","bones":"bones","note":"On the Ranging Guild's towers."},
+  {"id":"blood_blamish_snail_20_10","name":"Blood Blamish Snail","level":20,"hp":10,"n":3,"twin":1,"group":"Level 11–20","aside":1},
+  {"id":"blood_blamish_snail_20_13","name":"Blood Blamish Snail","level":20,"hp":13,"n":1,"twin":1,"group":"Level 11–20","aside":1},
+  {"id":"bruise_blamish_snail_20_12","name":"Bruise Blamish Snail","level":20,"hp":12,"n":3,"twin":1,"group":"Level 11–20","aside":1},
+  {"id":"bruise_blamish_snail_20_15","name":"Bruise Blamish Snail","level":20,"hp":15,"n":2,"twin":1,"group":"Level 11–20","aside":1},
+  {"id":"dark_wizard_20","name":"Dark wizard","level":20,"hp":24,"n":14,"group":"Level 11–20","bones":"bones"},
+  {"id":"dwarf_20","name":"Dwarf","level":20,"hp":26,"n":8,"group":"Level 11–20","bones":"bones"},
+  {"id":"fortress_guard_20","name":"Fortress Guard","level":20,"hp":22,"n":6,"group":"Level 11–20","bones":"bones"},
+  {"id":"guard_20","name":"Guard","level":20,"hp":22,"n":10,"group":"Level 11–20","bones":"bones"},
+  {"id":"invrigar_the_necromancer_20","name":"Invrigar the Necromancer","level":20,"hp":24,"n":1,"group":"Level 11–20","bones":"bones","aside":1},
+  {"id":"poison_scorpion_20","name":"Poison Scorpion","level":20,"hp":23,"n":12,"group":"Level 11–20"},
+  {"id":"bear_21","name":"Bear","level":21,"hp":27,"n":33,"group":"Level 21–30","bones":"bones"},
+  {"id":"guard_21","name":"Guard","level":21,"hp":22,"n":43,"group":"Level 21–30","bones":"bones"},
+  {"id":"skeleton_21","name":"Skeleton","level":21,"hp":24,"n":13,"group":"Level 21–30","bones":"bones"},
+  {"id":"bandit_22","name":"Bandit","level":22,"hp":27,"n":6,"group":"Level 21–30","bones":"bones"},
+  {"id":"black_unicorn_foal_22","name":"Black unicorn Foal","level":22,"hp":25,"n":4,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"grip_22","name":"Grip","level":22,"hp":25,"n":1,"group":"Level 21–30","aside":1,"note":"Its quest decides when you can attack it."},
+  {"id":"guard_bandit_22","name":"Guard Bandit","level":22,"hp":27,"n":4,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"monk_of_zamorak_22","name":"Monk of Zamorak","level":22,"hp":20,"n":6,"group":"Level 21–30","bones":"bones"},
+  {"id":"shantay_guard_22","name":"Shantay Guard","level":22,"hp":32,"n":3,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"skeleton_22","name":"Skeleton","level":22,"hp":29,"n":81,"group":"Level 21–30","bones":"bones"},
+  {"id":"foreman_23","name":"Foreman","level":23,"hp":20,"n":1,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"gnome_guard_23","name":"Gnome guard","level":23,"hp":31,"n":69,"group":"Level 21–30","bones":"bones"},
+  {"id":"khazard_guard_23","name":"Khazard Guard","level":23,"hp":25,"n":33,"group":"Level 21–30","bones":"bones"},
+  {"id":"pirate_23","name":"Pirate","level":23,"hp":20,"n":19,"group":"Level 21–30","bones":"bones"},
+  {"id":"straven_23","name":"Straven","level":23,"hp":20,"n":1,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"weaponsmaster_23","name":"Weaponsmaster","level":23,"hp":20,"n":1,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"ghost_24","name":"Ghost","level":24,"hp":20,"n":6,"group":"Level 21–30"},
+  {"id":"grizzly_bear_24","name":"Grizzly bear","level":24,"hp":35,"n":5,"group":"Level 21–30","bones":"bones"},
+  {"id":"man_24","name":"Man","level":24,"hp":60,"n":13,"group":"Level 21–30","bones":"wolf_bones","aside":1,"note":"A citizen of Canifis: your first hit turns it into a Wolfman (level 88, 100 hitpoints), unless you wield a Wolfbane dagger."},
+  {"id":"mourner_24","name":"Mourner","level":24,"hp":25,"n":15,"group":"Level 21–30","bones":"bones"},
+  {"id":"warrior_woman_24","name":"Warrior woman","level":24,"hp":20,"n":11,"group":"Level 21–30","bones":"bones"},
+  {"id":"woman_24","name":"Woman","level":24,"hp":60,"n":7,"group":"Level 21–30","bones":"wolf_bones","aside":1,"note":"A citizen of Canifis: your first hit turns it into a Wolfwoman (level 88, 100 hitpoints), unless you wield a Wolfbane dagger."},
+  {"id":"zombie_24","name":"Zombie","level":24,"hp":30,"n":41,"group":"Level 21–30","bones":"bones"},
+  {"id":"skeleton_25","name":"Skeleton","level":25,"hp":17,"n":67,"group":"Level 21–30","bones":"bones"},
+  {"id":"white_wolf_25","name":"White wolf","level":25,"hp":34,"n":8,"group":"Level 21–30","bones":"wolf_bones"},
+  {"id":"witch_25","name":"Witch","level":25,"hp":10,"n":2,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"wolf_25","name":"Wolf","level":25,"hp":34,"n":6,"group":"Level 21–30","bones":"wolf_bones"},
+  {"id":"zombie_25","name":"Zombie","level":25,"hp":30,"n":7,"group":"Level 21–30","bones":"bones"},
+  {"id":"head_thief_26","name":"Head Thief","level":26,"hp":37,"n":1,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"jail_guard_26","name":"Jail guard","level":26,"hp":32,"n":4,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"necromancer_26","name":"Necromancer","level":26,"hp":40,"n":1,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"pirate_26","name":"Pirate","level":26,"hp":23,"n":21,"group":"Level 21–30","bones":"bones"},
+  {"id":"black_unicorn_27","name":"Black unicorn","level":27,"hp":29,"n":14,"group":"Level 21–30","bones":"bones"},
+  {"id":"delrith_27","name":"Delrith","level":27,"hp":7,"n":1,"group":"Level 21–30","aside":1,"note":"Its quest decides when you can attack it."},
+  {"id":"desert_wolf_27","name":"Desert Wolf","level":27,"hp":34,"n":54,"group":"Level 21–30","bones":"wolf_bones"},
+  {"id":"giant_bat_27","name":"Giant bat","level":27,"hp":32,"n":84,"group":"Level 21–30","bones":"bat_bones"},
+  {"id":"giant_spider_27","name":"Giant spider","level":27,"hp":32,"n":17,"group":"Level 21–30"},
+  {"id":"giant_28","name":"Giant","level":28,"hp":35,"n":27,"group":"Level 21–30","bones":"big_bones"},
+  {"id":"hobgoblin_28","name":"Hobgoblin","level":28,"hp":29,"n":63,"group":"Level 21–30","bones":"bones"},
+  {"id":"kalphite_worker_28","name":"Kalphite Worker","level":28,"hp":40,"n":13,"group":"Level 21–30"},
+  {"id":"pit_scorpion_28","name":"Pit Scorpion","level":28,"hp":32,"n":24,"group":"Level 21–30"},
+  {"id":"soldier_28","name":"Soldier","level":28,"hp":22,"n":26,"group":"Level 21–30","bones":"bones"},
+  {"id":"terrorbird_28","name":"Terrorbird","level":28,"hp":34,"n":12,"group":"Level 21–30","bones":"bones"},
+  {"id":"tower_guard_28","name":"Tower guard","level":28,"hp":22,"n":5,"group":"Level 21–30","bones":"bones"},
+  {"id":"gunthor_the_brave_29","name":"Gunthor the brave","level":29,"hp":35,"n":1,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"afflicted_30","name":"Afflicted","level":30,"hp":24,"n":8,"group":"Level 21–30","bones":"bones"},
+  {"id":"ghast_30","name":"Ghast","level":30,"hp":45,"n":181,"group":"Level 21–30","aside":1,"note":"In Mort Myre: one has to be made visible with a druid pouch before you can attack it."},
+  {"id":"monk_of_zamorak_30","name":"Monk of Zamorak","level":30,"hp":25,"n":3,"group":"Level 21–30","bones":"bones","aside":1},
+  {"id":"temple_guardian_30","name":"Temple guardian","level":30,"hp":45,"n":1,"group":"Level 21–30","aside":1,"note":"Its quest decides when you can attack it."},
+  {"id":"mounted_terrorbird_gnome_31","name":"Mounted terrorbird gnome","level":31,"hp":36,"n":15,"group":"Level 31–50","bones":"bones"},
+  {"id":"afflicted_32","name":"Afflicted","level":32,"hp":26,"n":5,"group":"Level 31–50","bones":"bones"},
+  {"id":"king_scorpion_32","name":"King Scorpion","level":32,"hp":30,"n":12,"group":"Level 31–50"},
+  {"id":"tribesman_32","name":"Tribesman","level":32,"hp":39,"n":21,"group":"Level 31–50","bones":"bones"},
+  {"id":"black_knight_33","name":"Black Knight","level":33,"hp":42,"n":50,"group":"Level 31–50","bones":"bones"},
+  {"id":"druid_33","name":"Druid","level":33,"hp":30,"n":24,"group":"Level 31–50","bones":"bones"},
+  {"id":"watchman_33","name":"Watchman","level":33,"hp":22,"n":4,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"afflicted_34","name":"Afflicted","level":34,"hp":28,"n":9,"group":"Level 31–50","bones":"bones"},
+  {"id":"air_elemental_34","name":"Air elemental","level":34,"hp":30,"n":7,"group":"Level 31–50"},
+  {"id":"black_heather_34","name":"Black Heather","level":34,"hp":37,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"deadly_red_spider_34","name":"Deadly red spider","level":34,"hp":35,"n":58,"group":"Level 31–50"},
+  {"id":"donny_the_lad_34","name":"Donny the lad","level":34,"hp":37,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"speedy_keith_34","name":"Speedy Keith","level":34,"hp":37,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"tower_archer_34","name":"Tower Archer","level":34,"hp":50,"n":6,"group":"Level 31–50","bones":"bones","note":"On the Ranging Guild's towers."},
+  {"id":"water_elemental_34","name":"Water elemental","level":34,"hp":30,"n":7,"group":"Level 31–50"},
+  {"id":"earth_elemental_35","name":"Earth elemental","level":35,"hp":35,"n":5,"group":"Level 31–50"},
+  {"id":"fire_elemental_35","name":"Fire elemental","level":35,"hp":30,"n":8,"group":"Level 31–50"},
+  {"id":"white_knight_36","name":"White Knight","level":36,"hp":52,"n":35,"group":"Level 31–50","bones":"bones"},
+  {"id":"afflicted_37","name":"Afflicted","level":37,"hp":30,"n":7,"group":"Level 31–50","bones":"bones"},
+  {"id":"archer_37","name":"Archer","level":37,"hp":50,"n":6,"group":"Level 31–50","bones":"bones"},
+  {"id":"chaos_druid_warrior_37","name":"Chaos druid warrior","level":37,"hp":40,"n":9,"group":"Level 31–50","bones":"bones"},
+  {"id":"guard_37_40","name":"Guard","level":37,"hp":40,"n":3,"twin":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"guard_37_50","name":"Guard","level":37,"hp":50,"n":11,"twin":1,"group":"Level 31–50","bones":"bones"},
+  {"id":"renegade_knight_37","name":"Renegade Knight","level":37,"hp":48,"n":8,"group":"Level 31–50","bones":"bones"},
+  {"id":"colonel_radick_38","name":"Colonel Radick","level":38,"hp":65,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"white_wolf_38","name":"White wolf","level":38,"hp":44,"n":14,"group":"Level 31–50","bones":"wolf_bones"},
+  {"id":"blessed_spider_39","name":"Blessed spider","level":39,"hp":32,"n":52,"group":"Level 31–50"},
+  {"id":"sir_mordred_39","name":"Sir Mordred","level":39,"hp":38,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"loar_shade_40","name":"Loar Shade","level":40,"hp":38,"n":25,"group":"Level 31–50","note":"A Loar Shadow until you attack it, or it attacks you."},
+  {"id":"wizard_grayzag_41","name":"Wizard Grayzag","level":41,"hp":34,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"archer_42","name":"Archer","level":42,"hp":50,"n":9,"group":"Level 31–50","bones":"bones"},
+  {"id":"ghoul_42","name":"Ghoul","level":42,"hp":50,"n":21,"group":"Level 31–50","bones":"bones"},
+  {"id":"goblin_guard_42","name":"Goblin guard","level":42,"hp":43,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"hobgoblin_42","name":"Hobgoblin","level":42,"hp":49,"n":20,"group":"Level 31–50","bones":"bones"},
+  {"id":"magic_axe_42","name":"Magic axe","level":42,"hp":44,"n":16,"group":"Level 31–50"},
+  {"id":"moss_giant_42","name":"Moss giant","level":42,"hp":60,"n":22,"group":"Level 31–50","bones":"big_bones"},
+  {"id":"ugthanki_42","name":"Ugthanki","level":42,"hp":45,"n":25,"group":"Level 31–50","bones":"bones"},
+  {"id":"guardian_of_armadyl_43","name":"Guardian of Armadyl","level":43,"hp":40,"n":2,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"melzar_the_mad_43","name":"Melzar the mad","level":43,"hp":44,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"rowdy_guard_43","name":"Rowdy Guard","level":43,"hp":60,"n":9,"group":"Level 31–50","bones":"bones"},
+  {"id":"guard_dog_44","name":"Guard dog","level":44,"hp":49,"n":17,"group":"Level 31–50","bones":"bones"},
+  {"id":"jungle_spider_44","name":"Jungle spider","level":44,"hp":50,"n":78,"group":"Level 31–50"},
+  {"id":"khazard_scorpion_44","name":"Khazard Scorpion","level":44,"hp":40,"n":1,"group":"Level 31–50","aside":1},
+  {"id":"guardian_of_armadyl_45","name":"Guardian of Armadyl","level":45,"hp":50,"n":3,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"mercenary_45","name":"Mercenary","level":45,"hp":60,"n":18,"group":"Level 31–50","bones":"bones"},
+  {"id":"monk_of_zamorak_45","name":"Monk of Zamorak","level":45,"hp":40,"n":6,"group":"Level 31–50","bones":"bones"},
+  {"id":"skeleton_45","name":"Skeleton","level":45,"hp":59,"n":37,"group":"Level 31–50","bones":"bones"},
+  {"id":"knight_of_ardougne_46","name":"Knight of Ardougne","level":46,"hp":52,"n":5,"group":"Level 31–50","bones":"bones"},
+  {"id":"oomlie_bird_46","name":"Oomlie Bird","level":46,"hp":40,"n":32,"group":"Level 31–50","bones":"bones"},
+  {"id":"jailer_47","name":"Jailer","level":47,"hp":47,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"mercenary_captain_47","name":"Mercenary Captain","level":47,"hp":80,"n":1,"group":"Level 31–50","bones":"bones","aside":1,"note":"Its quest decides when you can attack it."},
+  {"id":"baby_blue_dragon_48","name":"Baby blue dragon","level":48,"hp":50,"n":9,"group":"Level 31–50","bones":"babydragon_bones"},
+  {"id":"borrokar_48","name":"Borrokar","level":48,"hp":50,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"chaos_dwarf_48","name":"Chaos dwarf","level":48,"hp":61,"n":17,"group":"Level 31–50","bones":"bones"},
+  {"id":"freidir_48","name":"Freidir","level":48,"hp":50,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"freygerd_48","name":"Freygerd","level":48,"hp":50,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"jennella_48","name":"Jennella","level":48,"hp":50,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"khazard_commander_48","name":"Khazard commander","level":48,"hp":22,"n":2,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"lanzig_48","name":"Lanzig","level":48,"hp":50,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"lensa_48","name":"Lensa","level":48,"hp":50,"n":1,"group":"Level 31–50","bones":"bones","aside":1},
+  {"id":"market_guard_48","name":"Market Guard","level":48,"hp":50,"n":5,"group":"Level 31–50","bones":"bones"},
+  {"id":"shadow_warrior_48","name":"Shadow warrior","level":48,"hp":67,"n":11,"group":"Level 31–50","bones":"bones"},
+  {"id":"soldier_48","name":"Soldier","level":48,"hp":50,"n":5,"group":"Level 31–50","bones":"bones"},
+  {"id":"warrior_48","name":"Warrior","level":48,"hp":50,"n":14,"group":"Level 31–50","bones":"bones"},
+  {"id":"ice_giant_49","name":"Ice giant","level":49,"hp":70,"n":23,"group":"Level 31–50","bones":"big_bones"},
+  {"id":"mounted_terrorbird_gnome_49","name":"Mounted terrorbird gnome","level":49,"hp":55,"n":6,"group":"Level 31–50","bones":"bones"},
+  {"id":"tower_archer_49","name":"Tower Archer","level":49,"hp":70,"n":6,"group":"Level 31–50","bones":"bones","note":"On the Ranging Guild's towers."},
+  {"id":"earth_warrior_51","name":"Earth warrior","level":51,"hp":54,"n":11,"group":"Level 51–80"},
+  {"id":"leech_52","name":"Leech","level":52,"hp":45,"n":27,"group":"Level 51–80","bones":"bones"},
+  {"id":"shadow_spider_52","name":"Shadow spider","level":52,"hp":55,"n":17,"group":"Level 51–80"},
+  {"id":"jogre_53","name":"Jogre","level":53,"hp":60,"n":28,"group":"Level 51–80","bones":"tbwt_jogre_bones"},
+  {"id":"ogre_53","name":"Ogre","level":53,"hp":60,"n":69,"group":"Level 51–80","bones":"big_bones"},
+  {"id":"battle_mage_54","name":"Battle mage","level":54,"hp":120,"n":9,"group":"Level 51–80","bones":"bones","magic":1,"aside":1,"note":"In the Mage Arena, once you've beaten Kolodion there. He allows only magical combat within it: no melee, no Ranged."},
+  {"id":"bedabin_nomad_fighter_56","name":"Bedabin Nomad Fighter","level":56,"hp":50,"n":6,"group":"Level 51–80","bones":"bones"},
+  {"id":"cyclops_56","name":"Cyclops","level":56,"hp":55,"n":1,"group":"Level 51–80","bones":"big_bones","aside":1},
+  {"id":"ice_warrior_57","name":"Ice warrior","level":57,"hp":59,"n":53,"group":"Level 51–80","bones":"bones"},
+  {"id":"phrin_shade_60","name":"Phrin Shade","level":60,"hp":56,"n":12,"group":"Level 51–80","note":"A Phrin Shadow until you attack it, or it attacks you."},
+  {"id":"ice_spider_61","name":"Ice spider","level":61,"hp":65,"n":27,"group":"Level 51–80"},
+  {"id":"undead_one_61","name":"Undead One","level":61,"hp":47,"n":9,"group":"Level 51–80","bones":"bones"},
+  {"id":"vampire_61","name":"Vampire","level":61,"hp":40,"n":17,"group":"Level 51–80","bones":"bones"},
+  {"id":"paladin_62","name":"Paladin","level":62,"hp":57,"n":22,"group":"Level 51–80","bones":"bones"},
+  {"id":"sir_carl_62","name":"Sir Carl","level":62,"hp":57,"n":1,"group":"Level 51–80","aside":1},
+  {"id":"sir_harry_62","name":"Sir Harry","level":62,"hp":57,"n":1,"group":"Level 51–80","aside":1},
+  {"id":"sir_jerro_62","name":"Sir Jerro","level":62,"hp":57,"n":1,"group":"Level 51–80","aside":1},
+  {"id":"khazard_ogre_63","name":"Khazard Ogre","level":63,"hp":60,"n":1,"group":"Level 51–80","bones":"bones","aside":1},
+  {"id":"ogre_63","name":"Ogre","level":63,"hp":60,"n":8,"group":"Level 51–80","bones":"big_bones"},
+  {"id":"jungle_wolf_64","name":"Jungle Wolf","level":64,"hp":69,"n":16,"group":"Level 51–80","bones":"wolf_bones"},
+  {"id":"otherworldly_being_64","name":"Otherworldly being","level":64,"hp":66,"n":6,"group":"Level 51–80","bones":"bones"},
+  {"id":"poison_spider_64","name":"Poison spider","level":64,"hp":64,"n":101,"group":"Level 51–80"},
+  {"id":"tower_archer_64","name":"Tower Archer","level":64,"hp":90,"n":6,"group":"Level 51–80","bones":"bones","note":"On the Ranging Guild's towers."},
+  {"id":"wolf_64","name":"Wolf","level":64,"hp":69,"n":45,"group":"Level 51–80","bones":"wolf_bones"},
+  {"id":"thrower_troll_67","name":"Thrower Troll","level":67,"hp":95,"n":6,"group":"Level 51–80","bones":"big_bones"},
+  {"id":"gorad_68","name":"Gorad","level":68,"hp":80,"n":1,"group":"Level 51–80","bones":"big_bones","aside":1,"note":"Its quest decides when you can attack it."},
+  {"id":"lord_daquarius_68","name":"Lord Daquarius","level":68,"hp":38,"n":1,"group":"Level 51–80","bones":"bones","aside":1},
+  {"id":"thrower_troll_68","name":"Thrower Troll","level":68,"hp":95,"n":5,"group":"Level 51–80","bones":"big_bones"},
+  {"id":"undead_one_68","name":"Undead One","level":68,"hp":47,"n":30,"group":"Level 51–80"},
+  {"id":"hero_69","name":"Hero","level":69,"hp":82,"n":3,"group":"Level 51–80","bones":"bones","aside":1},
+  {"id":"mountain_troll_69","name":"Mountain Troll","level":69,"hp":90,"n":43,"group":"Level 51–80","bones":"big_bones"},
+  {"id":"ogre_merchant_70","name":"Ogre merchant","level":70,"hp":60,"n":1,"group":"Level 51–80","bones":"big_bones","aside":1},
+  {"id":"ogre_trader_70","name":"Ogre trader","level":70,"hp":60,"n":3,"group":"Level 51–80","bones":"big_bones","aside":1},
+  {"id":"salarin_the_twisted_70","name":"Salarin the twisted","level":70,"hp":70,"n":1,"group":"Level 51–80","bones":"bones","aside":1},
+  {"id":"ungadulu_70","name":"Ungadulu","level":70,"hp":65,"n":1,"group":"Level 51–80","bones":"bones","aside":1},
+  {"id":"berry_71","name":"Berry","level":71,"hp":90,"n":1,"group":"Level 51–80","bones":"big_bones","aside":1},
+  {"id":"mountain_troll_71","name":"Mountain Troll","level":71,"hp":90,"n":4,"group":"Level 51–80","bones":"big_bones","aside":1},
+  {"id":"troll_spectator_71","name":"Troll Spectator","level":71,"hp":90,"n":7,"group":"Level 51–80","bones":"big_bones"},
+  {"id":"twig_71","name":"Twig","level":71,"hp":90,"n":1,"group":"Level 51–80","bones":"big_bones","aside":1},
+  {"id":"big_wolf_73","name":"Big Wolf","level":73,"hp":74,"n":1,"group":"Level 51–80","bones":"wolf_bones","aside":1},
+  {"id":"undead_one_73","name":"Undead One","level":73,"hp":59,"n":27,"group":"Level 51–80"},
+  {"id":"dagannoth_74","name":"Dagannoth","level":74,"hp":70,"n":15,"group":"Level 51–80","bones":"bones"},
+  {"id":"green_dragon_79","name":"Green dragon","level":79,"hp":75,"n":5,"group":"Level 51–80","bones":"dragon_bones"},
+  {"id":"riyl_shade_80","name":"Riyl Shade","level":80,"hp":76,"n":16,"group":"Level 51–80","note":"A Riyl Shadow until you attack it, or it attacks you."},
+  {"id":"ogre_chieftain_81","name":"Ogre chieftain","level":81,"hp":60,"n":11,"group":"Level 81–110","bones":"big_bones"},
+  {"id":"lesser_demon_82","name":"Lesser demon","level":82,"hp":79,"n":34,"group":"Level 81–110"},
+  {"id":"city_guard_83","name":"City guard","level":83,"hp":80,"n":3,"group":"Level 81–110","bones":"big_bones","aside":1},
+  {"id":"death_wing_83","name":"Death wing","level":83,"hp":80,"n":8,"group":"Level 81–110","bones":"bones"},
+  {"id":"elvarg_83","name":"Elvarg","level":83,"hp":120,"n":1,"group":"Level 81–110","bones":"bones","aside":1},
+  {"id":"enclave_guard_83","name":"Enclave guard","level":83,"hp":80,"n":2,"group":"Level 81–110","bones":"big_bones","aside":1},
+  {"id":"the_shaikahan_83","name":"The Shaikahan","level":83,"hp":100,"n":1,"group":"Level 81–110","bones":"tbwt_beast_bones","aside":1},
+  {"id":"kalphite_soldier_85","name":"Kalphite Soldier","level":85,"hp":90,"n":7,"group":"Level 81–110"},
+  {"id":"fire_giant_86","name":"Fire giant","level":86,"hp":111,"n":15,"group":"Level 81–110","bones":"big_bones"},
+  {"id":"dire_wolf_88","name":"Dire Wolf","level":88,"hp":85,"n":8,"group":"Level 81–110","bones":"bones"},
+  {"id":"wolfman_88","name":"Wolfman","level":88,"hp":100,"n":13,"group":"Level 81–110","bones":"wolf_bones"},
+  {"id":"wolfwoman_88","name":"Wolfwoman","level":88,"hp":100,"n":7,"group":"Level 81–110","bones":"wolf_bones"},
+  {"id":"kalrag_89","name":"Kalrag","level":89,"hp":78,"n":1,"group":"Level 81–110","aside":1},
+  {"id":"elf_warrior_90","name":"Elf warrior","level":90,"hp":105,"n":6,"group":"Level 81–110","bones":"bones"},
+  {"id":"jungle_savage_90","name":"Jungle Savage","level":90,"hp":90,"n":19,"group":"Level 81–110","bones":"bones"},
+  {"id":"doomion_91","name":"Doomion","level":91,"hp":87,"n":1,"group":"Level 81–110","aside":1},
+  {"id":"holthion_91","name":"Holthion","level":91,"hp":87,"n":1,"group":"Level 81–110","aside":1},
+  {"id":"kraka_91","name":"Kraka","level":91,"hp":120,"n":1,"group":"Level 81–110","bones":"big_bones","aside":1},
+  {"id":"othainian_91","name":"Othainian","level":91,"hp":87,"n":1,"group":"Level 81–110","aside":1},
+  {"id":"pee_hat_91","name":"Pee Hat","level":91,"hp":120,"n":1,"group":"Level 81–110","bones":"big_bones","aside":1},
+  {"id":"dagannoth_92","name":"Dagannoth","level":92,"hp":120,"n":7,"group":"Level 81–110","bones":"bones"},
+  {"id":"greater_demon_92","name":"Greater demon","level":92,"hp":87,"n":14,"group":"Level 81–110"},
+  {"id":"ranalph_devere_92","name":"Ranalph Devere","level":92,"hp":130,"n":4,"group":"Level 81–110","aside":1},
+  {"id":"asyn_shade_100","name":"Asyn Shade","level":100,"hp":90,"n":29,"group":"Level 81–110","note":"An Asyn Shadow until you attack it, or it attacks you."},
+  {"id":"irvig_senay_100","name":"Irvig Senay","level":100,"hp":125,"n":4,"group":"Level 81–110","aside":1},
+  {"id":"dad_101","name":"Dad","level":101,"hp":120,"n":1,"group":"Level 81–110","bones":"big_bones","aside":1},
+  {"id":"stick_104","name":"Stick","level":104,"hp":135,"n":1,"group":"Level 81–110","bones":"big_bones","aside":1},
+  {"id":"san_tojalon_106","name":"San Tojalon","level":106,"hp":120,"n":4,"group":"Level 81–110","aside":1},
+  {"id":"elf_warrior_108","name":"Elf warrior","level":108,"hp":105,"n":6,"group":"Level 81–110","bones":"bones"},
+  {"id":"tyras_guard_110","name":"Tyras guard","level":110,"hp":110,"n":8,"group":"Level 81–110","bones":"bones"},
+  {"id":"blue_dragon_111","name":"Blue dragon","level":111,"hp":105,"n":10,"group":"Level 111 and up","bones":"dragon_bones"},
+  {"id":"ice_queen_111","name":"Ice Queen","level":111,"hp":104,"n":1,"group":"Level 111 and up","aside":1},
+  {"id":"rock_111","name":"Rock","level":111,"hp":140,"n":1,"group":"Level 111 and up","bones":"big_bones","aside":1},
+  {"id":"general_khazard_112","name":"General Khazard","level":112,"hp":170,"n":2,"group":"Level 111 and up","bones":"bones","aside":1,"note":"Its quest decides when you can attack it."},
+  {"id":"khazard_warlord_112","name":"Khazard warlord","level":112,"hp":170,"n":1,"group":"Level 111 and up","bones":"bones","aside":1},
+  {"id":"ogre_shaman_113","name":"Ogre shaman","level":113,"hp":99,"n":6,"group":"Level 111 and up","bones":"bones"},
+  {"id":"troll_general_113","name":"Troll General","level":113,"hp":140,"n":3,"group":"Level 111 and up","bones":"big_bones","aside":1},
+  {"id":"black_knight_titan_120","name":"Black Knight Titan","level":120,"hp":142,"n":1,"group":"Level 111 and up","bones":"bones","flat":1,"aside":1,"note":"The server gives 1 XP a point of damage for it, whatever your style (and Hitpoints XP as usual)."},
+  {"id":"fiyr_shade_120","name":"Fiyr Shade","level":120,"hp":110,"n":8,"group":"Level 111 and up","note":"A Fiyr Shadow until you attack it, or it attacks you."},
+  {"id":"hellhound_122","name":"Hellhound","level":122,"hp":116,"n":7,"group":"Level 111 and up","bones":"bones"},
+  {"id":"bouncer_137","name":"Bouncer","level":137,"hp":116,"n":1,"group":"Level 111 and up","bones":"bones","aside":1},
+  {"id":"kalphite_guardian_141","name":"Kalphite Guardian","level":141,"hp":170,"n":4,"group":"Level 111 and up","aside":1},
+  {"id":"red_dragon_152","name":"Red dragon","level":152,"hp":140,"n":4,"group":"Level 111 and up","bones":"dragon_bones","aside":1},
+  {"id":"ungadulu_169","name":"Ungadulu","level":169,"hp":150,"n":1,"group":"Level 111 and up","bones":"bones","aside":1},
+  {"id":"chronozon_170","name":"Chronozon","level":170,"hp":60,"n":1,"group":"Level 111 and up","mult":25,"aside":1,"note":"The server gives 2.5% of the usual XP for it."},
+  {"id":"black_demon_172","name":"Black Demon","level":172,"hp":157,"n":7,"group":"Level 111 and up"},
+  {"id":"black_dragon_227","name":"Black dragon","level":227,"hp":190,"n":4,"group":"Level 111 and up","bones":"dragon_bones","aside":1},
+  {"id":"king_black_dragon_276","name":"King black dragon","level":276,"hp":240,"n":1,"group":"Level 111 and up","bones":"dragon_bones","aside":1},
+  {"id":"kalphite_queen_333","name":"Kalphite Queen","level":333,"hp":255,"n":1,"group":"Level 111 and up","bones":"bones","aside":1},
+];
+
+// What a point of damage gives in each style, in hundredths of an XP: the
+// server's own sums (give_combat_experience). A skill's first style is how a goal
+// starts; CHOICES has them to pick from.
+export const COMBAT_STYLES = {"attack":[{"id":"accurate","name":"Accurate","gives":{"attack":400,"hitpoints":133}},{"id":"controlled","name":"Controlled","gives":{"attack":133,"strength":133,"defence":133,"hitpoints":133}}],"strength":[{"id":"aggressive","name":"Aggressive","gives":{"strength":400,"hitpoints":133}},{"id":"controlled","name":"Controlled","gives":{"attack":133,"strength":133,"defence":133,"hitpoints":133}}],"defence":[{"id":"defensive","name":"Defensive","gives":{"defence":400,"hitpoints":133}},{"id":"controlled","name":"Controlled","gives":{"attack":133,"strength":133,"defence":133,"hitpoints":133}},{"id":"longrange","name":"Longrange (Ranged)","gives":{"ranged":200,"defence":200,"hitpoints":133}}],"hitpoints":[{"id":"any","name":"Any","gives":{"hitpoints":133}}],"ranged":[{"id":"rapid","name":"Accurate or Rapid","gives":{"ranged":400,"hitpoints":133}},{"id":"longrange","name":"Longrange","gives":{"ranged":200,"defence":200,"hitpoints":133}}]};
+
+// Those five skills' rows, made here from the two: a row a monster, counted in
+// kills. A kill is the monster's hitpoints in damage (a hit can't do more than
+// it has left), so its XP is the server's sum for that much: scale(rate, 100,
+// damage * 10), then the monster's multiplier. The server rounds each hit's XP
+// down to a tenth, so at 1.33 a point many small hits come to a little less.
+// cb: its combat level (level, what the skill asks for, is 1: anyone can fight
+// anything). hp: its hitpoints. short: its name alone. gives: the XP a kill gives
+// the other skills of the style, Hitpoints among them. opt: the other styles.
+{
+  const PREFIX = { attack: 'at', strength: 'st', defence: 'df', hitpoints: 'hp', ranged: 'rg' };
+  const kill = (mon, skill, rate) => Math.floor((Math.floor((mon.hp * (mon.flat && skill !== 'hitpoints' ? 100 : rate)) / 10) * (mon.mult ?? 1000)) / 1000);
+  for (const [skill, styles] of Object.entries(COMBAT_STYLES)) {
+    const of = (mon, st) => ({
+      xp: kill(mon, skill, st.gives[skill]),
+      gives: Object.fromEntries(Object.entries(st.gives).filter(([k]) => k !== skill).map(([k, rate]) => [k, kill(mon, k, rate)])),
+    });
+    for (const mon of MONSTERS) {
+      if (mon.magic && skill !== 'hitpoints') continue;      // (only Magic works on it: not a row of the skills you hit or shoot for)
+      METHODS.push({
+        id: `${PREFIX[skill]}_${mon.id}`, skill, group: mon.group, kind: 'xp',
+        name: `${mon.name} (level ${mon.level}${mon.twin ? `, ${mon.hp} hitpoints` : ''})`, short: mon.name,
+        level: 1, ...of(mon, styles[0]), in: {}, out: {}, cb: mon.level, hp: mon.hp, n: mon.n,
+        ...(styles.length > 1 ? { opt: Object.fromEntries(styles.slice(1).map(st => [st.id, of(mon, st)])) } : {}),
+        ...(mon.bones ? { bones: mon.bones } : {}),
+        ...(mon.aside ? { aside: 1 } : {}),
+        ...(mon.note ? { note: mon.note } : {}),
+      });
+    }
+  }
+}
