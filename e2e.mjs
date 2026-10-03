@@ -384,6 +384,18 @@ await check('lookup: a recent name can be taken off the list, or the list cleare
 
 // ── Planner: Goals, Bank, Prices ────────────────────────────────────────
 const goalText = () => page.locator('.goal').first().innerText();
+// A plan table's row by the names of its columns ("From bank", "Gross from banked
+// supplies"): which columns a table has depends on the skill and on what's
+// switched on, so the checks ask for them by name. td(name) is the cell itself.
+const rowBy = async (scope, id) => {
+  const names = (await scope.locator('.plan-t thead th').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim());
+  const tr = scope.locator(`tr[data-method="${id}"]`);
+  const cells = (await tr.innerText()).split('\t').map(c => c.trim());
+  const row = Object.fromEntries(names.map((n, i) => [n, cells[i]]));
+  Object.defineProperty(row, 'td', { value: name => { assert.ok(names.includes(name), `no column ${name} in ${names.join(' | ')}`); return tr.locator('td').nth(names.indexOf(name)); } });
+  return row;
+};
+const firstGoal = () => page.locator('.goal').first();
 
 await check('goals: a Herblore level goal shows the XP left from the hiscores', async () => {
   await page.click('.tab[data-tab="goals"]');
@@ -438,6 +450,9 @@ await check('bank: All shows everything you have; a skill tab shows only its ite
   await page.waitForSelector('#bank-head [data-bskill="all"].active');
   assert.match(await text('#bank-head'), /3 kinds of item/);
   assert.deepEqual((await page.$$eval('#bank-body [data-bank]', els => els.map(e => e.dataset.bank))).sort(), ['naturerune', 'ranarr_weed', 'snape_grass']);
+  // the skill buttons go in the hiscores' order, like the ones a new goal is picked with (v2.10.1)
+  assert.deepEqual(await page.$$eval('#bank-head [data-bskill]', els => els.map(e => e.dataset.bskill)),
+    ['all', 'prayer', 'magic', 'cooking', 'fletching', 'firemaking', 'crafting', 'smithing', 'herblore', 'runecraft']);
   // each tab shows what its items are worth, once prices are in
   await page.click('[data-act="bank-prices"]');
   await page.waitForFunction(() => document.querySelectorAll('#bank-head .skill-tab .sw-v').length >= 3, null, { timeout: 30000 });
@@ -465,7 +480,8 @@ await check("goals: Ostap's example, 700 potions from the bank, 4,251 more and 3
   assert.match(t, /collect\s*300\s*Snape grass[\s\S]*makes\s*1,000\s*Prayer potion instead of 700/);
   // with your bank: no To goal; what it makes, evens out, and what's still needed after it
   const head = await page.locator('.goal >> nth=0 >> .plan-t thead').innerText();
-  assert.match(head.trim(), /^Use\s*Lvl\s*Potion\s*XP\s*Net\/item\s*gp\/XP\s*From bank\s*Gross from\s*banked supplies\s*Round up\s*my supplies\s*Net after rounding\s*up my supplies\s*Still needed\s*to goal\s*Supplies needed\s*Net after\s*buying supplies\s*Total net gp\s*toward goal$/);
+  // (v2.10.1: with the XP of each stage: from the bank, after rounding up, and in all once the supplies needed are made)
+  assert.match(head.trim(), /^Use\s*Lvl\s*Potion\s*XP\s*Net\/item\s*gp\/XP\s*From bank\s*XP from\s*bank\s*Gross from\s*banked supplies\s*Round up\s*my supplies\s*XP after rounding\s*up my supplies\s*Net after rounding\s*up my supplies\s*Still needed\s*to goal\s*Supplies needed\s*Total XP after\s*supplies needed\s*Net after\s*buying supplies\s*Total net gp\s*toward goal$/);
   assert.doesNotMatch(head, /To goal/);
   assert.doesNotMatch(head, /even out/i);
   // Round up my supplies and Net after rounding up my supplies go together, with a dark line on each side
@@ -473,7 +489,7 @@ await check("goals: Ostap's example, 700 potions from the bank, 4,251 more and 3
   assert.match((await plant.locator('th.sep-l').innerText()).trim(), /^Round up\s*my supplies$/);
   assert.match(await plant.locator('th.sep-r').innerText(), /^Net after rounding\s*up my supplies$/);
   // the group's name sits above the potions' names, not under Use
-  assert.deepEqual(await plant.locator('tr.grp').first().locator('td').evaluateAll(tds => tds.map(td => [td.colSpan, td.innerText.trim()])), [[2, ''], [12, 'Potions']]);
+  assert.deepEqual(await plant.locator('tr.grp').first().locator('td').evaluateAll(tds => tds.map(td => [td.colSpan, td.innerText.trim()])), [[2, ''], [15, 'Potions']]);
   assert.equal(await plant.locator('tr.grp td').nth(1).evaluate(td => Math.round(td.getBoundingClientRect().left)),
     await plant.locator('thead th').nth(2).evaluate(th => Math.round(th.getBoundingClientRect().left)), 'it starts where the Potion column does');
   const rowCount = await plant.locator('tr[data-method]').count();
@@ -481,12 +497,21 @@ await check("goals: Ostap's example, 700 potions from the bank, 4,251 more and 3
   assert.equal(await plant.locator('tr[data-method] td.sep-r').count(), rowCount, 'every Net after rounding up my supplies cell has the line after it');
   assert.deepEqual(await plant.locator('th.sep-l').evaluate(el => [getComputedStyle(el).borderLeftStyle, getComputedStyle(el).borderLeftColor]), ['solid', 'rgb(0, 0, 0)']);
   assert.deepEqual(await plant.locator('th.sep-r').evaluate(el => [getComputedStyle(el).borderRightStyle, getComputedStyle(el).borderRightColor]), ['solid', 'rgb(0, 0, 0)']);
-  const row = await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText();
-  const cells = row.split('\t').map(c => c.trim());
-  assert.equal(cells[6], '700', 'from bank');
-  assert.match(cells[8], /^300\s*→\s*1,000$/, 'round up: 300 snape grass, and the bank covers 1,000');
-  assert.equal(cells[10], '4,251', 'still needed');
-  assert.match(cells[11], /^3,951\s*4,251$/, 'collect: ranarr and snape grass; vials are bought as you go');
+  const cells = await rowBy(firstGoal(), 'hb_3doseprayerrestore');
+  assert.equal(cells['From bank'], '700', 'from bank');
+  assert.match(cells['Round up my supplies'], /^300\s*→\s*1,000$/, 'round up: 300 snape grass, and the bank covers 1,000');
+  assert.equal(cells['Still needed to goal'], '4,251', 'still needed');
+  assert.match(cells['Supplies needed'], /^3,951\s*4,251$/, 'collect: ranarr and snape grass; vials are bought as you go');
+  // the XP of each stage: 700 from the bank, 1,000 once rounded up, and with the 4,251 still needed the goal's 432,925 and a little
+  assert.deepEqual([cells['XP from bank'], cells['XP after rounding up my supplies'], cells['Total XP after supplies needed']], ['+61,250', '+87,500', '+433,212.5']);
+  assert.equal(700 * 87.5 + 4251 * 87.5, 433212.5);
+  assert.equal(await cells.td('XP from bank').getAttribute('title'), "Your bank plan makes 700 × Prayer potion: +61,250 XP, with what's made on the way: 700 × Ranarr potion (unf).");
+  assert.equal(await cells.td('XP after rounding up my supplies').getAttribute('title'), '1,000 × Prayer potion, with your supplies rounded up: +87,500 XP.');
+  assert.match(await cells.td('Total XP after supplies needed').getAttribute('title'), /^Everything your bank makes \(\+61,250 XP\) and 4,251 × Prayer potion \(\+371,962\.5 XP\): \+433,212\.5 XP in all, which takes you to [\d,.]+ XP \(level 78\)\.$/);
+  // a potion the bank makes none of: nothing from the bank, and the same total by its own count
+  const none = await rowBy(firstGoal(), 'hb_3dose1attack');
+  assert.deepEqual([none['XP from bank'], none['XP after rounding up my supplies']], ['–', '–']);
+  assert.match(none['Total XP after supplies needed'], /^\+43[23],\d{3}(\.\d)?$/);
   // "I'll buy vials of water as I go" leaves them out of what to collect
   const collectLine = () => page.locator('.goal >> nth=0 >> .collect').first().innerText();
   assert.doesNotMatch(await collectLine(), /Vial/);
@@ -527,9 +552,10 @@ await check('goals: picking another potion and leaving the bank out change the p
   // are 61,250 XP, the same as 2,450 attack potions
   const cellsOf = async id => (await page.locator(`.goal >> nth=0 >> tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
   const num = c => Number(c.replace(/,/g, ''));
-  const attack = await cellsOf('hb_3dose1attack');
-  assert.equal(attack[7], '–', 'the bank plan makes none of these');
-  assert.match(attack[11], new RegExp(`^${attack[10]}\\s*${attack[10]}$`), 'collect: guam and eyes of newt for those');
+  const attackOn = await rowBy(firstGoal(), 'hb_3dose1attack');
+  const attack = { 10: attackOn['Still needed to goal'] };
+  assert.equal(attackOn['Gross from banked supplies'], '–', 'the bank plan makes none of these');
+  assert.match(attackOn['Supplies needed'], new RegExp(`^${attack[10]}\\s*${attack[10]}$`), 'collect: guam and eyes of newt for those');
   await page.uncheck('.goal input[data-gopt="useBank"]');
   await page.waitForFunction(() => !/From your bank/.test(document.querySelector('.goal').innerText));
   assert.match(await goalText(), /4,951 × Prayer potion/);
@@ -575,16 +601,17 @@ await check('goals: Round up my supplies, per potion (605 kwuarm and 518 limpwur
   await page.click('.tab[data-tab="goals"]');
   const row = page.locator('.goal').first().locator('tr[data-method="hb_3dose2strength"]');
   await row.waitFor();
-  const cells = (await row.innerText()).split('\t').map(c => c.trim());
-  assert.equal(cells[6], '518', 'from bank');
-  assert.match(cells[8], /^87\s*→\s*605$/);
+  const cells = await rowBy(firstGoal(), 'hb_3dose2strength');
+  assert.equal(cells['From bank'], '518', 'from bank');
+  assert.match(cells['Round up my supplies'], /^87\s*→\s*605$/);
+  assert.deepEqual([cells['XP from bank'], cells['XP after rounding up my supplies']], ['+64,750', '+75,625'], '518 and 605 super strength, 125 XP each');
   assert.equal(await row.locator('td.even').getAttribute('title'), 'Collect 87 Limpwurt root, and your bank covers 605 × Super strength instead of 518.');
   assert.match(await row.locator('td.even .it-chip').getAttribute('title'), /^Limpwurt root/);
   // the other way round: more limpwurt than kwuarm
   await setBank('herblore', { kwuarm: '500', limpwurt_root: '518' });
   await page.click('.tab[data-tab="goals"]');
   await row.waitFor();
-  assert.match((await row.innerText()).split('\t')[8].trim(), /^18\s*→\s*518$/);
+  assert.match((await rowBy(firstGoal(), 'hb_3dose2strength'))['Round up my supplies'], /^18\s*→\s*518$/);
   assert.match(await row.locator('td.even .it-chip').getAttribute('title'), /^Kwuarm/);
   await page.screenshot({ path: `${SHOTS}/10c-round-up-column.png`, fullPage: true });
   await setBank('herblore', { kwuarm: '', limpwurt_root: '' });
@@ -592,7 +619,25 @@ await check('goals: Round up my supplies, per potion (605 kwuarm and 518 limpwur
 });
 
 await check('prices: sales medians, placeholder prices fixed from notes, 4-dose fallback and your own price', async () => {
+  const flat = t => t.replace(/\s+/g, ' ').trim();
   await page.click('.tab[data-tab="prices"]');
+  // the very first time it opens on All: every item the planner prices, once each, A to Z (v2.10.1)
+  await page.waitForSelector('#prices-head [data-bskill="all"].active');
+  assert.equal(await page.locator('#prices-body table').count(), 1);
+  assert.match(flat(await page.locator('#prices-body thead').innerText()), /^Every item Market all High alch all Your price$/);
+  const listed = await page.$$eval('#prices-body [data-price]', els => els.map(e => [e.dataset.price, e.closest('tr').querySelector('a.mk').innerText.trim()]));
+  assert.ok(listed.length > 500, `${listed.length} items`);
+  assert.equal(new Set(listed.map(([slug]) => slug)).size, listed.length, 'each item once, though skills share them (logs, runes, ore)');
+  const names = listed.map(([, name]) => name);
+  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' })), 'A to Z');
+  for (const slug of ['ranarr_weed', 'magic_logs', 'dragon_bones', 'naturerune', 'raw_shark', 'runite_ore', 'air_battlestaff']) assert.ok(listed.some(([s]) => s === slug), slug);
+  assert.match(flat(await page.locator('#prices-head .note').innerText()), new RegExp(`All is every item the planner prices, ${listed.length} of them, A to Z\\. Opening it checks nothing`));
+  assert.equal(flat(await page.locator('#prices-head .bulk').innerText()), 'Every item: Market High alch');
+  // a skill's tab is that skill's lists, and it's the one remembered
+  await page.click('#prices-head [data-bskill="herblore"]');
+  await page.waitForSelector('#prices-head [data-bskill="herblore"].active');
+  assert.equal(flat(await page.locator('#prices-head .bulk').innerText()), 'Every Herblore item: Market High alch');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).priceView), 'herblore');
   await page.waitForFunction(() => {
     const t = document.querySelector('#prices-body').innerText;
     return /Ranarr weed\s*3,000\s*median of 6 sales/.test(t) && /Prayer potion\(3\)\s*[\d,.]+[KM]?\s*¾ of the 4-dose price/.test(t);
@@ -609,6 +654,11 @@ await page.screenshot({ path: `${SHOTS}/11-prices.png`, fullPage: true });
 await check('prices: each item uses the price you pick (market, high alch or yours), and it sticks', async () => {
   await page.click('.tab[data-tab="prices"]');
   await page.click('#prices-head [data-bskill="herblore"]');
+  // the skill buttons go in the hiscores' order here too, after All: the skills a new goal is picked from, less those with nothing to price (v2.10.1)
+  const tabs = await page.$$eval('#prices-head [data-bskill]', els => els.map(e => e.dataset.bskill));
+  assert.deepEqual(tabs, ['all', 'prayer', 'magic', 'cooking', 'woodcutting', 'fletching', 'fishing', 'firemaking', 'crafting', 'smithing', 'mining', 'herblore', 'thieving', 'runecraft']);
+  assert.deepEqual(tabs.slice(1), (await page.$$eval('#goal-new [data-nskill]', els => els.map(e => e.dataset.nskill))).filter(k => tabs.includes(k)), "the new goal's order");
+  assert.equal(await page.locator('#prices-head [data-bskill="herblore"].active').count(), 1);
   const row = slug => page.locator(`#prices-body tr:has([data-psrc="${slug}"])`);
   const on = async slug => (await row(slug).locator('td.pc.on input[type=radio]').getAttribute('value'));
   const gp = slug => page.evaluate(s => window.__skills.prices.gp(s), slug);
@@ -670,20 +720,20 @@ await check('goals: with prices known the plan shows cost, value, gross and net'
   const step = await page.locator('.goal').first().locator('.step', { hasText: '700 × Prayer potion' }).innerText();
   assert.match(step, new RegExp(`\\+61,250 XP · ${total.replace('.', '\\.')} gp \\([\\d.,]+[KM]? each\\)`), step);
   // and the table's totals have their numbers
-  const row = (await page.locator('tr[data-method="hb_3doseprayerrestore"]').innerText()).split('\t').map(c => c.trim());
-  assert.doesNotMatch(row.join(' '), /\?/);
-  assert.equal(row[7], `+${total}`, 'gross from banked supplies: its part of From your bank');
-  assert.match(row[9], /^[+−][\d.,]+[KM]?$/, 'net after rounding up my supplies');
-  assert.match(row[12], /^[+−][\d.,]+[KM]?$/, 'net after buying supplies');
-  assert.equal(row[12], money.match(/Net: ([+−]?[\d.,]+[KM]?) gp/)[1], 'the same as the plan\'s own Net for the potion you train with');
-  assert.match(row[13], /^[+−][\d.,]+[KM]?$/, 'total net gp toward goal');
+  const row = await rowBy(firstGoal(), 'hb_3doseprayerrestore');
+  assert.doesNotMatch(Object.values(row).join(' '), /\?/);
+  assert.equal(row['Gross from banked supplies'], `+${total}`, 'gross from banked supplies: its part of From your bank');
+  assert.match(row['Net after rounding up my supplies'], /^[+−][\d.,]+[KM]?$/, 'net after rounding up my supplies');
+  assert.match(row['Net after buying supplies'], /^[+−][\d.,]+[KM]?$/, 'net after buying supplies');
+  assert.equal(row['Net after buying supplies'], money.match(/Net: ([+−]?[\d.,]+[KM]?) gp/)[1], 'the same as the plan\'s own Net for the potion you train with');
+  assert.match(row['Total net gp toward goal'], /^[+−][\d.,]+[KM]?$/, 'total net gp toward goal');
   // the total net: what the bank makes of it before rounding up (the 700 prayer
   // potions under From your bank) plus the net after buying supplies
-  const netTip = await page.locator('tr[data-method="hb_3doseprayerrestore"] td').nth(13).getAttribute('title');
-  assert.equal(netTip, `Gross from banked supplies ${row[7]} + net after buying supplies ${row[12]}`);
+  const netTip = await row.td('Total net gp toward goal').getAttribute('title');
+  assert.equal(netTip, `Gross from banked supplies ${row['Gross from banked supplies']} + net after buying supplies ${row['Net after buying supplies']}`);
   // one item's own net, in the row's tooltip: a loss is a net below zero
   const rowTip = await page.locator('tr[data-method="hb_3doseprayerrestore"]').getAttribute('title');
-  assert.match(rowTip, new RegExp(`Costs [\\d.,]+[KM]?, worth [\\d.,]+[KM]?: net ${row[4].replace(/[+.]/g, '\\$&')} each$`), rowTip);
+  assert.match(rowTip, new RegExp(`Costs [\\d.,]+[KM]?, worth [\\d.,]+[KM]?: net ${row['Net/item'].replace(/[+.]/g, '\\$&')} each$`), rowTip);
   // Gross and Net only: the word profit is gone, tooltips included
   assert.doesNotMatch(await page.content(), /profit/i);
   // sort by Total net, after Cheapest XP: most gp toward the goal first
@@ -696,7 +746,8 @@ await check('goals: with prices known the plan shows cost, value, gross and net'
     const v = parseFloat(m[2]) * ({ K: 1e3, M: 1e6, B: 1e9 }[m[3]] || 1);
     return m[1] === '−' || m[1] === '-' ? -v : v;
   };
-  const nets = (await page.locator('.goal >> nth=0 >> tr[data-method]').allInnerTexts()).map(t => gp(t.split('\t')[13].trim()));
+  const netCol = (await page.locator('.goal >> nth=0 >> .plan-t thead th').allInnerTexts()).findIndex(t => /Total net gp/.test(t));
+  const nets = (await page.locator('.goal >> nth=0 >> tr[data-method]').allInnerTexts()).map(t => gp(t.split('\t')[netCol].trim()));
   const known = nets.filter(v => v != null);
   assert.ok(known.length > 5, nets.join(' '));
   assert.deepEqual(known, [...known].sort((a, b) => b - a), 'most first');
@@ -716,6 +767,9 @@ await check('goals: Round up my supplies shows your bank with nothing left over,
   assert.equal(await goal.locator('.tip', { hasText: 'Tip: collect' }).count(), 1, 'the tip for the potion you train with');
   const box = goal.locator('input[data-gopt="roundUp"]');
   assert.equal(await box.isChecked(), false, 'off until you ask');
+  // (the row as it is, to set beside what rounding up makes of it)
+  const asItIs = await rowBy(goal, 'hb_3dose2strength');
+  assert.deepEqual([asItIs['From bank'], asItIs['XP from bank'], asItIs['XP after rounding up my supplies']], ['518', '+64,750', '+75,625']);
   // it sits right after Use my bank, before the other tick boxes
   assert.match(flat(await goal.locator('.plan-opts').innerText()), /^Use my bank Round up my supplies I'll buy vials of water as I go /);
   assert.match(await goal.locator('label:has(input[data-gopt="roundUp"])').getAttribute('title'), /^Off, the plan uses your bank as it is\. On, your supplies are rounded up/);
@@ -735,19 +789,29 @@ await check('goals: Round up my supplies shows your bank with nothing left over,
   // the rest of the goal comes after it, and the tip it replaces is gone
   assert.equal(await goal.locator('.tip', { hasText: 'Tip: collect' }).count(), 0);
   assert.match(await goalText(), /Then, to reach your goal: 270,048 XP/, '433,173 XP to go, less 163,125');
-  // the table: each row on its own is as it was; the bank part of the totals is the rounded-up one
+  // the table (v2.10.1): the same columns, on or off. Gross from banked supplies stays the bank as it is (it used
+  // to turn into "Net from bank, supplies rounded up", the same number as Net after rounding up my supplies);
+  // rounding up shows in the columns after it
   const head = flat(await goal.locator('.plan-t thead').innerText());
-  assert.match(head, /From bank Net from bank, supplies rounded up Round up my supplies Net after rounding up my supplies Still needed to goal/);
-  assert.doesNotMatch(head, /Gross from/);
-  const cellsOf = async id => (await goal.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
-  const ss = await cellsOf('hb_3dose2strength');
-  assert.equal(ss[6], '518', 'From bank');
-  assert.match(ss[8], /^87\s*→\s*605$/, 'Round up my supplies');
-  assert.equal(ss[7], ss[9], 'net from bank, supplies rounded up: 605 less 87 limpwurt, the same as its Net after rounding up my supplies');
-  assert.match(await goal.locator('tr[data-method="hb_3dose2strength"] td').nth(7).getAttribute('title'),
-    /^Your bank plan, with your supplies rounded up, makes 605 × Super strength: worth [\d.,]+[KM]?, less [\d.,]+[KM]? to collect\. Your banked supplies are yours already\.$/);
-  assert.equal(await goal.locator('tr[data-method="hb_3dose2strength"] td').nth(13).getAttribute('title'),
-    `Net from bank, supplies rounded up ${ss[7]} + net after buying supplies ${ss[12]}`);
+  assert.match(head, /From bank XP from bank Gross from banked supplies Round up my supplies XP after rounding up my supplies Net after rounding up my supplies Still needed to goal Supplies needed Total XP after supplies needed Net after buying supplies Total net gp toward goal$/);
+  assert.doesNotMatch(head, /Net from bank/);
+  const ss = await rowBy(goal, 'hb_3dose2strength');
+  for (const col of ['From bank', 'XP from bank', 'Gross from banked supplies', 'Round up my supplies', 'XP after rounding up my supplies', 'Net after rounding up my supplies']) {
+    assert.equal(ss[col], asItIs[col], `${col}: as it was with Round up my supplies off`);
+  }
+  assert.match(ss['Round up my supplies'], /^87\s*→\s*605$/);
+  assert.notEqual(ss['Gross from banked supplies'], ss['Net after rounding up my supplies'], 'no longer the same number twice');
+  assert.match(await ss.td('Gross from banked supplies').getAttribute('title'),
+    /^Your bank plan makes 518 × Super strength as your bank is, before rounding up: worth [\d.,]+[KM]?\. Your banked supplies are yours already\.$/);
+  // what comes after follows the rounded-up plan: fewer still needed, and the same total XP to the goal
+  const num = c => Number(c.replace(/[,+]/g, ''));
+  assert.ok(num(ss['Still needed to goal']) < num(asItIs['Still needed to goal']), `${ss['Still needed to goal']} < ${asItIs['Still needed to goal']}`);
+  assert.equal(num(ss['Total XP after supplies needed']), 163125 + num(ss['Still needed to goal']) * 125);
+  assert.match(await ss.td('Total XP after supplies needed').getAttribute('title'),
+    /^Everything your bank makes, supplies rounded up \(\+163,125 XP\) and [\d,]+ × Super strength \(\+[\d,.]+ XP\): \+[\d,.]+ XP in all, which takes you to [\d,.]+ XP \(level 78\)\.$/);
+  // Total net counts the rounded-up plan's part: 605 less the 87 limpwurt collected (here the same as Net after rounding up)
+  assert.equal(await ss.td('Total net gp toward goal').getAttribute('title'),
+    `Your bank plan, with your supplies rounded up, makes 605 × Super strength: worth ${(await ss.td('Net after rounding up my supplies').getAttribute('title')).match(/worth ([\d.,]+[KM]?), less ([\d.,]+[KM]?) to collect/).slice(1).join(', less ')} to collect (${ss['Net after rounding up my supplies']}) + net after buying supplies ${ss['Net after buying supplies']}`);
   assert.match(flat(await goal.locator('.plan-sec').last().locator('.small-note').last().innerText()), /^Round up my supplies is on: the plan above is your bank with its supplies rounded up/);
   await page.screenshot({ path: `${SHOTS}/10e-round-up.png`, fullPage: true });
   // it's kept with the goal
@@ -765,9 +829,119 @@ await check('goals: Round up my supplies shows your bank with nothing left over,
   await goal.locator('input[data-gopt="roundUp"]').uncheck();
   await goal.locator('.step', { hasText: '518 × Super strength' }).waitFor();
   assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +126,000 XP → level 75');
-  assert.match(flat(await goal.locator('.plan-t thead').innerText()), /From bank Gross from banked supplies Round up my supplies/);
+  assert.match(flat(await goal.locator('.plan-t thead').innerText()), /From bank XP from bank Gross from banked supplies Round up my supplies/);
   await setBank('herblore', { kwuarm: '', limpwurt_root: '' });
   await page.click('.tab[data-tab="goals"]');
+});
+
+await check('goals: Hide unused items takes the rows unticked under Use out of the table, and says how many (v2.10.1)', async () => {
+  await page.click('.tab[data-tab="goals"]');
+  const goal = page.locator('.goal').first();
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  await goal.locator('.plan-t').waitFor();
+  const box = () => goal.locator('input[data-topt="hideOff"]');
+  const label = async () => flat(await goal.locator('label.hide-off').innerText());
+  const rows = () => goal.locator('tr[data-method]').evaluateAll(trs => trs.map(tr => tr.dataset.method));
+  try {
+    // beside Sort, off until you ask
+    assert.deepEqual([await box().isChecked(), await label()], [false, 'Hide unused items']);
+    assert.equal(await goal.locator('.plan-sec').last().locator('.bar .seg + label.hide-off').count(), 1, 'right after the Sort buttons');
+    assert.match(await goal.locator('label.hide-off').getAttribute('title'), /^Leave the rows you've unticked under Use out of the table\. Untick this to see them again\./);
+    const all = await rows();
+    // unticked rows stay in the table, dimmed, until they're hidden
+    for (const id of ['hb_3dose1attack', 'hb_3doseantipoison']) await goal.locator(`input[data-use="${id}"]`).uncheck();
+    await page.waitForFunction(() => document.querySelectorAll('.goal tr.off').length === 2);
+    assert.deepEqual(await rows(), all);
+    await box().check();
+    await page.waitForFunction(n => document.querySelector('.goal').querySelectorAll('tr[data-method]').length === n, all.length - 2);
+    assert.deepEqual(await rows(), all.filter(id => !['hb_3dose1attack', 'hb_3doseantipoison'].includes(id)));
+    assert.equal(await label(), 'Hide unused items (2 hidden)');
+    assert.equal(await goal.locator('tr.off').count(), 0);
+    // unticking another takes it out at once (a click: the box is gone with its row before it can be looked at again)
+    await goal.locator('input[data-use="hb_3dose1strength"]').click();
+    await page.waitForFunction(n => document.querySelector('.goal').querySelectorAll('tr[data-method]').length === n, all.length - 3);
+    assert.equal(await label(), 'Hide unused items (3 hidden)');
+    // with the bank left out the Use boxes are still there, and so is this
+    await goal.locator('input[data-gopt="useBank"]').uncheck();
+    await page.waitForFunction(() => !/From your bank/.test(document.querySelector('.goal').innerText));
+    assert.deepEqual([(await rows()).length, await label()], [all.length - 3, 'Hide unused items (3 hidden)']);
+    await goal.locator('input[data-gopt="useBank"]').check();
+    await page.waitForFunction(() => /From your bank/.test(document.querySelector('.goal').innerText));
+    // it's one switch, remembered: every plan's table follows it
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).hideOff), true);
+    const boxes = await page.locator('input[data-topt="hideOff"]').evaluateAll(els => els.map(el => el.checked));
+    assert.ok(boxes.length >= 1 && boxes.every(Boolean), JSON.stringify(boxes));
+    // off again: the unticked rows are back, to be ticked again
+    await box().uncheck();
+    await page.waitForFunction(n => document.querySelector('.goal').querySelectorAll('tr[data-method]').length === n, all.length);
+    assert.deepEqual([await rows(), await label(), await goal.locator('tr.off').count()], [all, 'Hide unused items', 3]);
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).hideOff), false);
+  } finally {
+    if (await box().isChecked()) await box().uncheck();
+    for (const id of ['hb_3dose1attack', 'hb_3doseantipoison', 'hb_3dose1strength']) await goal.locator(`input[data-use="${id}"]`).check();
+    await page.waitForFunction(() => document.querySelectorAll('.goal tr.off').length === 0);
+    if (!(await goal.locator('input[data-gopt="useBank"]').isChecked())) await goal.locator('input[data-gopt="useBank"]').check();
+  }
+});
+
+await check("goals: a plan's table can be hidden, one plan at a time or all at once; the rest of the plan stays (v2.10.1)", async () => {
+  await page.click('.tab[data-tab="goals"]');
+  const goal = page.locator('.goal').first();
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  await goal.locator('.plan-t').waitFor();
+  const id = await goal.getAttribute('data-goal');
+  const head = async () => flat(await goal.locator('.plan-sec').last().locator('h4').innerText());
+  try {
+    assert.match(await head(), /^Every option \(on its own, from level \d+; click one to train with it\) Hide table$/);
+    const before = flat(await goal.locator('.plan-sec').first().innerText());
+    await goal.locator('[data-act="table-toggle"]').click();
+    await page.waitForFunction(() => !document.querySelector('.goal .plan-t'));
+    // only the heading is left of it, with the way back; the plan's own lines are as they were
+    assert.equal(await head(), 'Every option (the table is hidden) Show table');
+    assert.equal(await goal.locator('[data-tsort-plan], [data-topt], .group-pick, table').count(), 0);
+    assert.equal(flat(await goal.locator('.plan-sec').first().innerText()), before);
+    assert.equal(await goal.locator('select[data-gopt="fill"]').count(), 1, 'Train with still picks what to make');
+    // it's remembered with the goal
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).tableOff), [id]);
+    await page.click('.tab[data-tab="bank"]');
+    await page.click('.tab[data-tab="goals"]');
+    assert.equal(await head(), 'Every option (the table is hidden) Show table');
+    await goal.locator('[data-act="table-toggle"]').click();
+    await goal.locator('.plan-t').waitFor();
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).tableOff), []);
+    // all at once, for the plans that are open: beside Hide all plans (there once there's more than one goal)
+    await addGoal('firemaking', 99);
+    const fire = page.locator('.goal').filter({ has: page.locator('.goal-name', { hasText: /^Firemaking$/ }) });
+    await fire.locator('.plan-t').waitFor();
+    // (a skill with nothing to round up: the XP from its bank and the total, and no rounded-up columns between)
+    assert.match(flat(await fire.locator('.plan-t thead').innerText()), /^Use Lvl \w+ XP Net\/item gp\/XP From bank XP from bank Gross from banked supplies Still needed to goal Supplies needed Total XP after supplies needed Net after buying supplies Total net gp toward goal$/);
+    assert.equal(flat(await page.locator('.goal-filter [data-act="tables-off"]').innerText()), 'Hide all tables');
+    await page.click('.goal-filter [data-act="tables-off"]');
+    await page.waitForFunction(() => !document.querySelector('.goal .plan-t'));
+    assert.equal(await page.locator('.goal .plan').count() >= 2, true, 'the plans stay open');
+    assert.equal(flat(await page.locator('.goal-filter [data-act="tables-on"]').innerText()), 'Show all tables');
+    // one shown again is enough for the bar to offer hiding them all
+    await fire.locator('[data-act="table-toggle"]').click();
+    await fire.locator('.plan-t').waitFor();
+    assert.equal(await page.locator('.goal-filter [data-act="tables-off"]').count(), 1);
+    await page.click('.goal-filter [data-act="tables-off"]');
+    await page.waitForFunction(() => !document.querySelector('.goal .plan-t'));
+    await page.click('.goal-filter [data-act="tables-on"]');
+    await goal.locator('.plan-t').waitFor();
+    await fire.locator('.plan-t').waitFor();
+    // a goal taken off the list is forgotten here too
+    await fire.locator('[data-act="table-toggle"]').click();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lchs.planUi')).tableOff.length === 1);
+    await fire.locator('[data-act="remove-goal"]').click();
+    await fire.locator('[data-act="remove-goal"]').click();
+    await page.waitForFunction(() => ![...document.querySelectorAll('.goal .goal-name')].some(el => el.innerText.trim() === 'Firemaking'));
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).tableOff), []);
+  } finally {
+    const fire = page.locator('.goal').filter({ has: page.locator('.goal-name', { hasText: /^Firemaking$/ }) });
+    if (await fire.count()) { await fire.locator('[data-act="remove-goal"]').click(); await fire.locator('[data-act="remove-goal"]').click(); }
+    // (whatever happened, every table is shown again for the checks that follow)
+    for (let i = 0; i < 20 && await page.locator('[data-act="table-toggle"][aria-expanded="false"]').count(); i++) await page.locator('[data-act="table-toggle"][aria-expanded="false"]').first().click();
+  }
 });
 
 await check('goals: rounded up, vials you count never hold a potion back; the ones you are short of are collected too', async () => {
@@ -789,12 +963,12 @@ await check('goals: rounded up, vials you count never hold a potion back; the on
   const cellsOf = async id => (await goal.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
   let ss = await cellsOf('hb_3dose2strength');
   assert.equal(ss[6], '518', 'From bank');
-  assert.match(ss[8], /^87\s*5\s*→\s*605$/, 'Round up my supplies: 87 limpwurt root, and 5 vials');
+  assert.match(ss[9], /^87\s*5\s*→\s*605$/, 'Round up my supplies: 87 limpwurt root, and 5 vials');
   assert.equal(await goal.locator('tr[data-method="hb_3dose2strength"] td.even').getAttribute('title'),
     'Collect 87 Limpwurt root and 5 Vial of water, and your bank covers 605 × Super strength instead of 518.');
   const pp = await cellsOf('hb_3doseprayerrestore');
   assert.equal(pp[6], '600', 'From bank: the vials hold it back');
-  assert.match(pp[8], /^300\s*400\s*→\s*1,000$/, 'Round up my supplies: 300 snape grass, and 400 vials');
+  assert.match(pp[9], /^300\s*400\s*→\s*1,000$/, 'Round up my supplies: 300 snape grass, and 400 vials');
   // rounded up: the potions you'd get buying vials as you go, all 605 super strength among them
   // (v2.5.0 left the 87 kwuarm over: with no vials left, they didn't count)
   await goal.locator('input[data-gopt="roundUp"]').check();
@@ -1077,18 +1251,20 @@ await check('crafting: the calculator\'s four tabs, gems cut and glass made on t
   assert.equal((await card.locator('.group-pick .chip.on').innerText()).trim(), 'Jewellery');
   assert.equal(await card.locator('tr[data-method]').count(), 46, 'the calculator\'s 35, and the 11 enchanted ones');
   const head = await card.locator('.plan-t thead').innerText();
-  assert.match(head.trim(), /^Use\s*Lvl\s*Item\s*XP\s*Net\/item\s*gp\/XP\s*From bank\s*Gross from\s*banked supplies\s*Round up\s*my supplies\s*Net after rounding\s*up my supplies\s*Still needed\s*to goal\s*Supplies needed\s*Net after\s*buying supplies\s*Total net gp\s*toward goal$/);
-  assert.deepEqual(await card.locator('tr.grp').first().locator('td').evaluateAll(tds => tds.map(td => [td.colSpan, td.innerText.trim()])), [[2, ''], [12, 'Jewellery']]);
+  assert.match(head.trim(), /^Use\s*Lvl\s*Item\s*XP\s*Net\/item\s*gp\/XP\s*From bank\s*XP from\s*bank\s*Gross from\s*banked supplies\s*Round up\s*my supplies\s*XP after rounding\s*up my supplies\s*Net after rounding\s*up my supplies\s*Still needed\s*to goal\s*Supplies needed\s*Total XP after\s*supplies needed\s*Net after\s*buying supplies\s*Total net gp\s*toward goal$/);
+  assert.deepEqual(await card.locator('tr.grp').first().locator('td').evaluateAll(tds => tds.map(td => [td.colSpan, td.innerText.trim()])), [[2, ''], [15, 'Jewellery']]);
   const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
   const ring = await cells('cr_sapphire_ring');
   assert.deepEqual([ring[1], ring[2], ring[3], ring[6]], ['20', 'Sapphire ring', '40', '300'], 'from bank: 300 uncut sapphires count, cut on the way');
-  assert.match(ring[8], /^200\s*→\s*500$/, 'round up: 200 more sapphires for the 500 gold bars');
-  assert.match(ring[11], /^([\d,]+)\s*\1$/, 'supplies: a gold bar and a cut sapphire each, as the calculator lists them');
+  assert.match(ring[9], /^200\s*→\s*500$/, 'round up: 200 more sapphires for the 500 gold bars');
+  assert.match(ring[13], /^([\d,]+)\s*\1$/, 'supplies: a gold bar and a cut sapphire each, as the calculator lists them');
+  // (v2.10.1) the XP of those stages, the cuts on the way included: 300 rings and their 300 cuts as the bank is, 500 and 300 rounded up
+  assert.deepEqual([ring[7], ring[10]], ['–', `+${(500 * 40 + 300 * 50).toLocaleString('en')}`], 'the bank plan makes necklaces, not rings; on its own, rounded up: 500 rings and the 300 cuts');
   assert.deepEqual((await cells('cr_sapphire_necklace')).slice(1, 4), ['20', 'Sapphire necklace', '55'], 'level 20, as the server has it');
   // the enchanted one, for what it sells as: the same Crafting XP, and the runes in its supplies
   const games = await cells('cr_ench_necklace_of_minigames_8');
   assert.deepEqual(games.slice(1, 4), ['20', 'Games necklace(8) (make & enchant)', '55']);
-  assert.match(games[11], /^([\d,]+)\s*\1\s*\1\s*\1$/, 'a gold bar, a sapphire, a water rune and a cosmic rune each');
+  assert.match(games[13], /^([\d,]+)\s*\1\s*\1\s*\1$/, 'a gold bar, a sapphire, a water rune and a cosmic rune each');
   assert.match(await card.locator('tr[data-method="cr_ench_necklace_of_minigames_8"]').getAttribute('title'),
     /Needs \(from scratch\): 1 Gold bar, 1 Sapphire, 1 Water rune, 1 Cosmic rune\nTools: Necklace mould\nEnchanted with Lvl-1 Enchant \(Magic 7\): 17\.5 Magic XP each, on top of the Crafting XP\./);
   assert.match(await card.locator('tr[data-method="cr_ench_amulet_of_glory_4"]').getAttribute('title'),
@@ -1104,7 +1280,7 @@ await check('crafting: the calculator\'s four tabs, gems cut and glass made on t
     'the halves are joined, the chest opened, the stones cut and strung on amulets: all on the way');
   const stone = await cells('cr_dragonstone');
   assert.equal(stone[6], '4', 'from bank: the 4 keys the halves make');
-  assert.match(stone[8], /^5\s*→\s*9$/, 'round up: 5 more loops');
+  assert.match(stone[9], /^5\s*→\s*9$/, 'round up: 5 more loops');
   assert.equal(await card.locator('tr[data-method="cr_dragonstone"] td.even').getAttribute('title'), 'Collect 5 Half of a key (loop), and your bank covers 9 × Dragonstone (cut) instead of 4.');
   assert.match(await card.locator('tr[data-method="cr_dragonstone"]').getAttribute('title'), /Needs \(from scratch\): 1 Uncut dragonstone\n/, 'bought as the uncut stone, like the calculator lists it');
   await setBank('crafting', { keyhalf1: '', keyhalf2: '' });
@@ -1122,11 +1298,11 @@ await check('crafting: the calculator\'s four tabs, gems cut and glass made on t
   // dragonhide: hides and leather both count; what to collect is the hide, as the calculator lists it, and the coins to tan it
   const body = await cells('cr_black_dragonhide_body');
   assert.deepEqual([body[1], body[2], body[3], body[6]], ['84', 'Dragonhide body (black)', '258', '0']);
-  const [blackHides, blackCoins, ...noMore] = body[11].split(/\s+/).map(x => Number(x.replace(/,/g, '')));
+  const [blackHides, blackCoins, ...noMore] = body[13].split(/\s+/).map(x => Number(x.replace(/,/g, '')));
   assert.deepEqual([blackCoins, noMore], [blackHides * 20, []], 'the hides and 20 coins each for the tanner: thread is bought as you go');
   assert.match(await card.locator('tr[data-method="cr_black_dragonhide_body"]').getAttribute('title'), /Needs \(from scratch\): 3 Dragonhide \(black\), 60 Coins\nTools: Needle/);
-  assert.equal(await card.locator('tr[data-method="cr_black_dragonhide_body"] td').nth(11).locator('.it-chip').nth(1).getAttribute('title'), 'Coins: a fee paid on the way');
-  assert.equal(await card.locator('tr[data-method="cr_black_dragonhide_body"] td').nth(11).locator('.it-chip .item').first().getAttribute('title'), 'Dragonhide (black)');
+  assert.equal(await card.locator('tr[data-method="cr_black_dragonhide_body"] td').nth(13).locator('.it-chip').nth(1).getAttribute('title'), 'Coins: a fee paid on the way');
+  assert.equal(await card.locator('tr[data-method="cr_black_dragonhide_body"] td').nth(13).locator('.it-chip .item').first().getAttribute('title'), 'Dragonhide (black)');
   assert.equal((await cells('cr_dragon_vambraces'))[6], '350', '300 hides and 50 leather');
   assert.match(await card.locator('tr[data-method="cr_leather_gloves"]').getAttribute('title'), /Needs \(from scratch\): 1 Leather\nTools: Needle/);
   await page.screenshot({ path: `${SHOTS}/10d-crafting.png`, fullPage: true });
@@ -1134,7 +1310,7 @@ await check('crafting: the calculator\'s four tabs, gems cut and glass made on t
   await card.locator('input[data-gopt="assume"]').uncheck();
   await page.waitForFunction(() => !/Thread is left out/.test([...document.querySelectorAll('.goal')].find(g => g.innerText.includes('Crafting')).innerText));
   const counted = await cells('cr_black_dragonhide_body');
-  const [hides, coins, reels] = counted[11].split(/\s+/).map(x => Number(x.replace(/,/g, '')));
+  const [hides, coins, reels] = counted[13].split(/\s+/).map(x => Number(x.replace(/,/g, '')));
   assert.equal(reels, Math.ceil(hides / 3 / 5), `${hides} hides are ${hides / 3} bodies: ${reels} reels`);
   assert.equal(coins, hides * 20);
   assert.equal((await cells('cr_dragon_vambraces'))[6], '0', 'no thread in the bank');
@@ -1198,14 +1374,14 @@ await check('crafting: orbs are charged on the way to battlestaves, runes are co
     const cells = async id => (await card.locator(`tr[data-method="${id}"]`).innerText()).split('\t').map(c => c.trim());
     const air = await cells('cr_air_battlestaff');
     assert.deepEqual([air[1], air[2], air[3], air[6]], ['66', 'Air battlestaff', '137.5', '0']);
-    assert.match(air[8], /^2,000\s*60,000\s*6,000\s*→\s*2,000$/, 'round up: battlestaffs and the runes to charge the orbs');
+    assert.match(air[9], /^2,000\s*60,000\s*6,000\s*→\s*2,000$/, 'round up: battlestaffs and the runes to charge the orbs');
     assert.equal(await card.locator('tr[data-method="cr_air_battlestaff"] td.even').getAttribute('title'),
       'Collect 2,000 Battlestaff, 60,000 Air rune and 6,000 Cosmic rune, and your bank covers 2,000 × Air battlestaff instead of 0.');
     assert.match(await card.locator('tr[data-method="cr_air_battlestaff"]').getAttribute('title'),
       /Air battlestaff: level 66, 137\.5 XP each\nNeeds \(from scratch\): 1 Unpowered orb, 30 Air rune, 3 Cosmic rune, 1 Battlestaff\nThe orb is an unpowered orb charged with Charge Air Orb \(Magic 66\): 76 Magic XP each\./);
     // the orbs in your bank count toward what's still needed: 2,000 fewer to buy than battlestaffs
-    const [orbs, , , staffs] = air[11].split(/\s+/).map(x => Number(x.replace(/,/g, '')));
-    assert.equal(staffs - orbs, 2000, air[11]);
+    const [orbs, , , staffs] = air[13].split(/\s+/).map(x => Number(x.replace(/,/g, '')));
+    assert.equal(staffs - orbs, 2000, air[13]);
     // rounded up: the orbs are charged and put on battlestaves, with the battlestaffs and runes to collect
     assert.match(await card.locator('label:has(input[data-gopt="roundUp"])').getAttribute('title'), /Thread, runes and balls of wool never hold it back: what you're short of is collected too\.$/);
     await card.locator('input[data-gopt="roundUp"]').check();
@@ -1268,6 +1444,93 @@ await check('crafting: orbs are charged on the way to battlestaves, runes are co
     await card.locator('[data-act="remove-goal"]').click();
     await card.locator('[data-act="remove-goal"]').click();
     await page.waitForFunction(() => ![...document.querySelectorAll('.goal')].some(g => g.innerText.includes('Crafting')));
+  }
+});
+
+await check("crafting: soda ash to battlestaves: every stage is made on the way with its XP said, and a stage the bank is short for stops it there (709 soda ash and 686 battlestaffs, v2.10.1)", async () => {
+  // Demo Main is Crafting 88 (air battlestaves from 66) and Magic 90
+  const card = page.locator('.goal', { hasText: 'Crafting' });
+  const EMPTY = { soda_ash: '', bucket_sand: '', battlestaff: '', cosmicrune: '', airrune: '' };
+  try {
+    const flat = t => t.replace(/\s+/g, ' ').trim();
+    // soda ash and battlestaffs alone: a molten glass takes a bucket of sand too, so nothing is made as the bank is
+    await setBank('crafting', { soda_ash: '709', battlestaff: '686' });
+    await addGoal('crafting', 95);
+    const sec = card.locator('.plan-sec').first();
+    await card.locator('.plan-t').waitFor();
+    assert.match(flat(await sec.innerText()), /^From your bank Nothing in your bank makes Crafting XP at your level yet\./);
+    await card.locator('[data-tgroup="Pottery & glass"]').click();
+    // the table says what's missing, row by row: sand for the glass; sand and runes for the staves the 686 battlestaffs make
+    let glass = await rowBy(card, 'cr_molten_glass');
+    assert.deepEqual([glass['From bank'], glass['XP from bank'], flat(glass['Round up my supplies']), glass['XP after rounding up my supplies']], ['0', '–', '709 → 709', '+14,180']);
+    assert.equal(await glass.td('Round up my supplies').getAttribute('title'), 'Collect 709 Bucket of sand, and your bank covers 709 × Molten glass instead of 0.');
+    let staff = await rowBy(card, 'cr_air_battlestaff');
+    assert.equal(await staff.td('Round up my supplies').getAttribute('title'),
+      'Collect 686 Bucket of sand, 20,580 Air rune and 2,058 Cosmic rune, and your bank covers 686 × Air battlestaff instead of 0.');
+    assert.equal(staff['XP after rounding up my supplies'], '+144,060');
+    // rounded up, the whole chain is planned and what it takes is listed: sand for all 709, and 23 more battlestaffs for the orbs left over
+    await card.locator('input[data-gopt="roundUp"]').check();
+    await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank, supplies rounded up +148,890 XP → level 88');
+    const whole = (await sec.locator('.step').allInnerTexts()).map(flat);
+    assert.equal(whole.length, 2, whole.join(' / '));
+    assert.match(whole[0], /^709 × Air battlestaff \+147,222\.5 XP .*incl\. 686 × Molten glass \+13,720 XP, 686 × Unpowered orb \+36,015 XP, 709 × Charge air orb collect 686 Bucket of sand 23 Battlestaff 2,127 Cosmic rune 21,270 Air rune$/);
+    assert.match(whole[1], /^23 × Unpowered orb \+1,667\.5 XP .*incl\. 23 × Molten glass \+460 XP collect 23 Bucket of sand$/);
+    assert.match(flat(await sec.locator('.collect').innerText()), /^To round up your supplies, collect: 709 Bucket of sand( \([\d.,]+[KM]?\))? 23 Battlestaff( \([\d.,]+[KM]?\))? 2,127 Cosmic rune( \([\d.,]+[KM]?\))? 21,270 Air rune( \([\d.,]+[KM]?\))?$/);
+    // (the table's bank columns stay the bank's own: nothing, as it is)
+    staff = await rowBy(card, 'cr_air_battlestaff');
+    assert.deepEqual([staff['From bank'], staff['XP from bank'], staff['Gross from banked supplies']], ['0', '–', '–']);
+    await card.locator('input[data-gopt="roundUp"]').uncheck();
+    await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor({ state: 'detached' });
+    // with the sand: the glass is made and blown, 709 orbs; the battlestaffs wait for the runes that charge an orb
+    await setBank('crafting', { bucket_sand: '709' });
+    await page.click('.tab[data-tab="goals"]');
+    await card.locator('.step', { hasText: '709 × Unpowered orb' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +51,402.5 XP → level 88');
+    assert.match(flat(await sec.locator('.step').innerText()), /^709 × Unpowered orb \+51,402\.5 XP .*incl\. 709 × Molten glass \+14,180 XP$/);
+    // with the runes too: 686 air battlestaves through every stage, each with its XP, then the 23 soda ash left become orbs
+    await setBank('crafting', { cosmicrune: '3000', airrune: '30000' });
+    await page.click('.tab[data-tab="goals"]');
+    await card.locator('.step', { hasText: '686 × Air battlestaff' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank +145,727.5 XP → level 88');
+    const steps = (await sec.locator('.step').allInnerTexts()).map(flat);
+    assert.equal(steps.length, 2, steps.join(' / '));
+    assert.match(steps[0], /^686 × Air battlestaff \+144,060 XP .*incl\. 686 × Molten glass \+13,720 XP, 686 × Unpowered orb \+36,015 XP, 686 × Charge air orb$/);
+    assert.match(steps[1], /^23 × Unpowered orb \+1,667\.5 XP .*incl\. 23 × Molten glass \+460 XP$/);
+    assert.equal(686 * (20 + 52.5 + 137.5) + 23 * (20 + 52.5), 145727.5);
+    assert.equal(flat(await sec.locator('.tip.magic').innerText()), 'Magic XP on the way: +52,136 XP from 686 × Charge Air Orb (Magic 66)');
+    // the table's XP from bank says the same, stage by stage in its tooltip; a row made only on the way has none of its own
+    await card.locator('[data-tgroup="Pottery & glass"]').click();
+    const air = await rowBy(card, 'cr_air_battlestaff'), orb = await rowBy(card, 'cr_stafforb');
+    glass = await rowBy(card, 'cr_molten_glass');
+    assert.deepEqual([air['From bank'], air['XP from bank'], flat(air['Round up my supplies']), air['XP after rounding up my supplies']], ['686', '+144,060', '23 → 709', '+148,890']);
+    assert.equal(await air.td('XP from bank').getAttribute('title'),
+      "Your bank plan makes 686 × Air battlestaff: +144,060 XP, with what's made on the way: 686 × Molten glass (+13,720 XP), 686 × Unpowered orb (+36,015 XP), 686 × Charge air orb.");
+    assert.deepEqual([orb['From bank'], orb['XP from bank'], orb['XP after rounding up my supplies']], ['709', '+1,667.5', '+51,402.5']);
+    assert.deepEqual([glass['From bank'], glass['XP from bank'], glass['XP after rounding up my supplies']], ['709', '–', '+14,180']);
+    // (and where the rest went: a stage made on the way is counted in the row it was made for, and its own cell says so)
+    assert.equal(await orb.td('XP from bank').getAttribute('title'),
+      "Your bank plan makes 23 × Unpowered orb: +1,667.5 XP, with what's made on the way: 23 × Molten glass (+460 XP). Another 686 are made on the way to Air battlestaff: +36,015 XP, counted in that row's XP from bank.");
+    assert.equal(await glass.td('XP from bank').getAttribute('title'),
+      "709 are made on the way (686 for Air battlestaff and 23 for Unpowered orb): +14,180 XP, counted in those rows' XP from bank.");
+    assert.equal(13720 + 36015 + 94325 + 460 + 1207.5, 145727.5, 'every stage, once');
+    await page.screenshot({ path: `${SHOTS}/10v-battlestaff-chain.png`, fullPage: true });
+    // rounded up: the 23 orbs left over go on battlestaves too, with 23 more battlestaffs to collect
+    await card.locator('input[data-gopt="roundUp"]').check();
+    await sec.locator('h4', { hasText: 'supplies rounded up' }).waitFor();
+    assert.equal(flat(await sec.locator('h4').innerText()), 'From your bank, supplies rounded up +148,890 XP → level 88');
+    assert.match(flat(await sec.locator('.collect').innerText()), /^To round up your supplies, collect: 23 Battlestaff( \([\d.,]+[KM]?\))?$/);
+    assert.equal((await rowBy(card, 'cr_air_battlestaff'))['XP from bank'], '+144,060', "the bank's own, rounded up or not");
+  } finally {
+    // leave things as they were, whatever happened
+    await setBank('crafting', EMPTY);
+    await page.click('.tab[data-tab="goals"]');
+    if (await card.count()) {
+      if (await card.locator('input[data-gopt="roundUp"]').count() && await card.locator('input[data-gopt="roundUp"]').isChecked()) await card.locator('input[data-gopt="roundUp"]').uncheck();
+      await card.locator('[data-act="remove-goal"]').click();
+      await card.locator('[data-act="remove-goal"]').click();
+      await page.waitForFunction(() => ![...document.querySelectorAll('.goal')].some(g => g.innerText.includes('Crafting')));
+    }
   }
 });
 
@@ -1659,8 +1922,8 @@ await check("cooking: burnt food is counted by the server's chances, a level at 
     const tip = id => card.locator(`tr[data-method="${id}"]`).getAttribute('title');
     const badge = id => card.locator(`tr[data-method="${id}"] .burn`);
     let lob = await cells('ck_lobster');
-    assert.deepEqual([lob[1], lob[2], lob[3], lob[6], lob[10]], ['40', 'Lobster 27% burn', '120', '293', '1,050'], 'From bank is at your level now: 400 × 188/256');
-    assert.match(lob[11], /^1,312\b/, 'Supplies needed: the raw ones');
+    assert.deepEqual([lob[1], lob[2], lob[3], lob[6], lob[12]], ['40', 'Lobster 27% burn', '120', '293', '1,050'], 'From bank is at your level now: 400 × 188/256');
+    assert.match(lob[13], /^1,312\b/, 'Supplies needed: the raw ones');
     assert.equal(await badge('ck_lobster').getAttribute('title'), 'About 27 in 100 burn at level 51; none from level 74. Plans count them.');
     assert.match(await tip('ck_lobster'), /^Lobster: level 40, 120 XP each\nAbout 27 in 100 burn at level 51; none from level 74\. What it needs allows for that\.\nNeeds \(from scratch\): 1\.362 Raw lobster/);
     assert.equal(await badge('ck_trout').count(), 0, 'trout stopped burning at 49');
@@ -1715,7 +1978,7 @@ await check("cooking: burnt food is counted by the server's chances, a level at 
     assert.doesNotMatch((await card.locator('.plan-sec .step').allInnerTexts()).join(' '), /burn/i);
     assert.doesNotMatch(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()), /burn/i);
     lob = await cells('ck_lobster');
-    assert.deepEqual([lob[2], lob[6], lob[10]], ['Lobster', '400', '948']);
+    assert.deepEqual([lob[2], lob[6], lob[12]], ['Lobster', '400', '948']);
     assert.match(await tip('ck_lobster'), /^Lobster: level 40, 120 XP each\nNeeds \(from scratch\): 1 Raw lobster/);
     assert.deepEqual((await goalOf('old_badger', 'cooking')).opts, { burnt: 'ignore' }, 'kept with the goal');
     await card.locator('select[data-opt="burnt"]').selectOption('count');
@@ -2278,7 +2541,7 @@ await check("magic: spells by how you train with them, each with its own runes; 
     assert.match(await sec.locator('.tip.crafting').getAttribute('title'), /^Not part of the XP above: it's what making these on the way gives your Crafting\./);
     await card.locator('[data-tgroup="Enchantment"]').click();
     const recoil = await cells('mg_enchant_ring_of_recoil');
-    assert.deepEqual([recoil[6], flat(recoil[8])], ['250', '50 → 300'], 'From bank; and rounded up to the gold bars, with 50 sapphires to collect');
+    assert.deepEqual([recoil[6], flat(recoil[9])], ['250', '50 → 300'], 'From bank; and rounded up to the gold bars, with 50 sapphires to collect');
     assert.equal((await cells('mg_air_orb'))[6], '100', 'the glass is 100 orbs, once Magic is 66');
     // what the rest of a goal takes is still the ring itself
     assert.match(await tip('mg_enchant_ring_of_recoil'), /\nNeeds \(from scratch\): 1 Sapphire ring, 1 Water rune, 1 Cosmic rune\n/);
@@ -2351,7 +2614,7 @@ await check('combat: Attack is trained on monsters: kills to the goal, the usual
     assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Monster', 'HP', 'XP', 'To goal', 'Plan to kill']);
     assert.deepEqual(await card.locator('.plan-t thead th').evaluateAll(ths => ths.map(th => th.title).slice(0, 4)), ['Combat level', '', 'Hitpoints: a kill is this much damage', 'Attack XP a kill, in the style you picked']);
     assert.deepEqual((await card.locator('.bar .seg button').allInnerTexts()).map(flat), ['Level', 'XP each']);
-    assert.match(flat(await card.locator('.plan-sec').last().locator('h4').innerText()), /^Every monster \(on its own, from level 51; click one to train on it\)$/);
+    assert.match(flat(await card.locator('.plan-sec').last().locator('h4').innerText()), /^Every monster \(on its own, from level 51; click one to train on it\) Hide table$/);
     assert.equal(flat(await card.locator('.plan-sec').last().locator('.bar .small-note').last().innerText()),
       'Lvl = combat level · HP = hitpoints: a kill is that much damage · XP = what a kill gives in the style you picked · To goal = kills of it alone · Plan to kill = your mix of monsters.');
     // (a row's cells, shown or not: the search and the bands only hide rows)
@@ -2538,110 +2801,169 @@ await check('combat: Strength, Defence, Hitpoints and Ranged, each with its own 
   }
 });
 
-await check("goals: the combat level card, the same one Lookup has: your level now, with your goals reached, and its calculator", async () => {
+await check("goals: the combat level card: its own card before the first combat goal, shut until its Plan (Calculator) is opened, the same calculator Lookup has; each combat plan says what its goal adds", async () => {
+  const combat = () => page.locator('#goals-list [data-combat]');
   const live = () => page.locator('#gc-live');
-  const shut = async () => flat(await page.locator('#goals-combat').innerText());
+  const shut = async () => flat(await combat().innerText());
+  const tipOf = async name => flat(await goalCard(name).locator('.tip.combat').innerText());
   await planAs('old badger', 'Old Badger');
   const saved = await page.evaluate(() => localStorage.getItem('lchs.goals.old_badger'));
   try {
-    // no goal in a combat skill: your combat level, and a button for the calculator
+    // no goal in a combat skill: no card (it used to sit between the skill picker and the goals, whatever they were)
     assert.deepEqual(JSON.parse(saved || '[]').filter(g => ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic'].includes(g.skill)), [], 'no goal of an earlier check is left in a combat skill');
-    await page.waitForSelector('#goals-combat .combat-card');
-    assert.equal(await shut(), 'Combat level 67 Combat calculator');
-    assert.equal(await page.locator('#goals-combat .ico-combat').count(), 1, 'the crossed swords');
-    assert.equal(await page.locator('#gc-live, #goals-combat [data-gcalc]').count(), 0, 'one line until you open it');
-    // a goal in a combat skill: what your combat level is once it's reached. Attack 51 to 60 is three combat levels
+    assert.equal(await page.locator('#goals-combat, [data-combat]').count(), 0);
+    await addGoal('cooking', 60);
+    await goalCard('Cooking').waitFor();
+    assert.equal(await combat().count(), 0, 'not for a skill that has nothing to do with combat');
+    // a goal in a combat skill: the card comes just before it, shut, with the same button as a goal's plan
     await addGoal('attack', 60);
-    await page.waitForFunction(() => /once your goals are reached/.test(document.querySelector('#goals-combat').innerText));
-    assert.equal(await shut(), 'Combat level 67 → 70 once your goals are reached Combat calculator');
-    // a goal that changes nothing says so: Ranged 55 to 56 leaves melee the best of the three
+    await combat().waitFor();
+    assert.equal(await combat().evaluate(el => el.nextElementSibling.querySelector('.goal-name').innerText.trim()), 'Attack', 'just before the first combat goal');
+    assert.equal(await combat().evaluate(el => el.previousElementSibling.querySelector('.goal-name')?.innerText.trim()), 'Cooking', 'and after the goals before it');
+    assert.equal(await combat().locator('.ico-combat').count(), 1, 'the crossed swords');
+    assert.equal(await page.locator('#gc-live, [data-gcalc]').count(), 0, 'shut until you open it');
+    assert.deepEqual([flat(await combat().locator('.goal-name').innerText()), flat(await combat().locator('.goal-title').innerText()), flat(await combat().locator('[data-act="combat-toggle"]').innerText())],
+      ['Combat level', 'Level 67 → 70', 'Plan (Calculator)']);
+    assert.equal(flat(await goalCard('Attack').locator('[data-act="toggle-plan"]').innerText()), 'Hide Plan (Calculator)', "a goal's own button, its plan open");
+    // Attack 51 to 60 is 809 rock crabs, and those are Hitpoints XP too: 54 to 57. Both count
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "70 once your goals are reached (Attack 60, Hitpoints 57 from their kills). Each of those goals' plans says what it adds on its own.");
+    // the goal's own plan says what it adds: 9 Attack levels are 2.925, 3 Hitpoints levels 0.75
+    assert.equal(await tipOf('Attack'), 'Combat level: this goal alone adds about 3.7 (67 → 70), with what its kills give besides (Hitpoints 54 → 57).');
+    assert.match(await goalCard('Attack').locator('.tip.combat').getAttribute('title'), /^Your combat level is a quarter of Defence \+ Hitpoints \+ half your Prayer, plus 0\.325 of the best of Attack \+ Strength,.*A plan's kills give Hitpoints XP too/);
+    assert.equal(await goalCard('Attack').locator('.plan > .tip.combat + .plan-sec table.plan-t').count(), 1, "under the plan's own lines, above the table");
+    assert.equal(await goalCard('Attack').locator('[data-topt]').count(), 0, 'no Hide unused items where there are no Use boxes');
+    // a goal that adds nothing says why: Ranged 55 to 56 leaves melee the best of the three (and its 87 kills aren't a Hitpoints level)
     await addGoal('ranged', 56);
     await goalCard('Ranged').waitFor();
-    assert.equal(await shut(), 'Combat level 67 → 70 once your goals are reached Combat calculator');
-    await removeGoal(goalCard('Attack'));
-    await noGoalFor('Attack');
-    assert.equal(await shut(), 'Combat level 67 and the same once your goals are reached Combat calculator');
+    assert.equal(await tipOf('Ranged'), 'Combat level: this goal alone adds nothing (67 now): only the best of melee, Ranged and Magic counts, and your melee (Attack and Strength) is ahead. All your goals together: 70.');
+    assert.equal(await tipOf('Attack'), 'Combat level: this goal alone adds about 3.7 (67 → 70), with what its kills give besides (Hitpoints 54 → 57). All your goals together: 70.', 'now that there are two');
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "70 once your goals are reached (Attack 60, Hitpoints 57 from their kills, Ranged 56). Each of those goals' plans says what it adds on its own.");
+    // a goal can add through its kills alone: Ranged 55 to 60 is 536 rock crabs, and their Hitpoints XP is two levels (54 to 56),
+    // half a combat level, while Ranged 60 itself still isn't ahead of melee
     await removeGoal(goalCard('Ranged'));
     await noGoalFor('Ranged');
-    assert.equal(await shut(), 'Combat level 67 Combat calculator');
+    await addGoal('ranged', 60);
+    await goalCard('Ranged').waitFor();
+    assert.equal(await tipOf('Ranged'), 'Combat level: this goal alone adds about 0.5 (67 now: not a whole level by itself), through what its kills give besides (Hitpoints 54 → 56). '
+      + 'Ranged itself adds nothing: only the best of melee, Ranged and Magic counts, and your melee (Attack and Strength) is ahead. All your goals together: 71.');
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "71 once your goals are reached (Attack 60, Hitpoints 58 from their kills, Ranged 60). Each of those goals' plans says what it adds on its own.");
+    await removeGoal(goalCard('Ranged'));
+    await noGoalFor('Ranged');
+    await addGoal('ranged', 56);
+    await goalCard('Ranged').waitFor();
+    // Prayer counts by halves: 56 to 60 is two halves of a quarter each. Said to two places under one
+    await addGoal('prayer', 60);
+    await goalCard('Prayer').waitFor();
+    assert.equal(await tipOf('Prayer'), 'Combat level: this goal alone adds about 0.5 (67 now: not a whole level by itself). All your goals together: 71.');
+    assert.equal(flat(await combat().locator('.goal-title').innerText()), 'Level 67 → 71', '70.975 and a half');
+    await removeGoal(goalCard('Prayer'));
+    await noGoalFor('Prayer');
+    // without the Attack goal: Ranged 56 alone adds no level, and the card says so
+    await removeGoal(goalCard('Attack'));
+    await noGoalFor('Attack');
+    assert.equal(await combat().evaluate(el => el.nextElementSibling.querySelector('.goal-name').innerText.trim()), 'Ranged');
+    assert.equal(flat(await combat().locator('.goal-title').innerText()), 'Level 67');
+    assert.equal(flat(await combat().locator('.goal-sub').innerText()), "The same once your goals are reached (Ranged 56): together they don't add a whole combat level yet.");
+    assert.equal(await tipOf('Ranged'), 'Combat level: this goal alone adds nothing (67 now): only the best of melee, Ranged and Magic counts, and your melee (Attack and Strength) is ahead.');
+    // filtered to a skill that isn't one of the seven, it's off the page; back with them
+    await page.click('[data-gonly="cooking"]');
+    await page.waitForFunction(() => !document.querySelector('[data-combat]'));
+    await page.click('[data-gonly="cooking"]');
+    await combat().waitFor();
+    await removeGoal(goalCard('Ranged'));
+    await noGoalFor('Ranged');
+    assert.equal(await combat().count(), 0, 'gone with the last combat goal');
     // open: how the level is made up and what gets the next one, as on Lookup
+    await addGoal('attack', 60);
+    await combat().waitFor();
     await page.click('[data-act="combat-toggle"]');
     await live().waitFor();
-    assert.equal(flat(await live().locator('.cc-head').innerText()), 'Combat level 67 Hide calculator');
+    assert.equal(flat(await combat().locator('[data-act="combat-toggle"]').innerText()), 'Hide Plan (Calculator)');
+    assert.equal(flat(await live().locator('.cc-head').innerText()), "Combat level once your goals are reached 70 +3 from Old Badger's 67");
     const lines = async () => (await live().locator('.cc-line').allInnerTexts()).map(flat);
-    assert.deepEqual(await lines(), ['Base: ¼ × (Defence 52 + Hitpoints 54 + half of Prayer 56 = 28) = 33.50',
-      'Plus the best of: Melee 0.325 × (Attack 51 + Strength 53) = 33.80 · Ranged 0.325 × (55 + half 27) = 26.65 · Magic 0.325 × (50 + half 25) = 24.375',
-      '= 67.30, rounded down to 67. Any one of these gets 68:']);
-    assert.deepEqual((await live().locator('.cc-next .need').allInnerTexts()).map(flat), ['Attack +3', 'Strength +3', 'Defence +3', 'Hitpoints +3', 'Prayer +6', 'Ranged +17', 'Magic +22']);
-    assert.deepEqual(await page.locator('#goals-combat [data-gcalc]').evaluateAll(els => els.map(el => [el.dataset.gcalc, el.value])),
-      [['attack', '51'], ['strength', '53'], ['defence', '52'], ['hitpoints', '54'], ['ranged', '55'], ['prayer', '56'], ['magic', '50']]);
-    assert.equal(flat(await page.locator('#goals-combat .calc .small-note').innerText()), "Combat calculator: it starts from Old Badger's levels. Type a level to see what it does.");
+    assert.deepEqual(await lines(), ['Base: ¼ × (Defence 52 + Hitpoints 57 + half of Prayer 56 = 28) = 34.25',
+      'Plus the best of: Melee 0.325 × (Attack 60 + Strength 53) = 36.725 · Ranged 0.325 × (55 + half 27) = 26.65 · Magic 0.325 × (50 + half 25) = 24.375',
+      '= 70.975, rounded down to 70. Any one of these gets 71:']);
+    assert.deepEqual(await page.locator('[data-combat] [data-gcalc]').evaluateAll(els => els.map(el => [el.dataset.gcalc, el.value])),
+      [['attack', '60'], ['strength', '53'], ['defence', '52'], ['hitpoints', '57'], ['ranged', '55'], ['prayer', '56'], ['magic', '50']]);
+    assert.equal(flat(await combat().locator('.calc .small-note').innerText()), "Combat calculator: it starts from Old Badger's levels, with your goals reached and what their kills give besides. Type a level to see what it does.");
     assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), true);
-    assert.equal(flat(await page.locator('[data-act="combat-reset"]').innerText()), 'Reset to Old Badger');
-    // it is Lookup's card: the same lines for the same levels
-    await page.click('.tab[data-tab="lookup"]');
-    await page.fill('#lookup-name', 'old badger');
-    await page.click('#lookup-form button');
-    await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.includes('Old Badger'), null, { timeout: 15000 });
-    await page.click('#filter-seg [data-filter="combat"]');
-    await page.waitForFunction(() => /67\.30/.test(document.querySelector('#cc-live')?.innerText || ''));
-    const lookup = (await page.locator('#cc-live .cc-line').allInnerTexts()).map(flat);
-    const hints = (await page.locator('#cc-live .cc-next .need').allInnerTexts()).map(flat);
-    await page.click('#filter-seg [data-filter="all"]');
-    await page.click('.tab[data-tab="goals"]');
-    await live().waitFor();
-    assert.deepEqual([await lines(), (await live().locator('.cc-next .need').allInnerTexts()).map(flat)], [lookup, hints]);
-    // with goals, its boxes start from your levels with those reached
-    await addGoal('attack', 60);
-    await page.waitForFunction(() => /once your goals are reached/.test(document.querySelector('#gc-live')?.innerText || ''));
-    assert.equal(flat(await live().locator('.cc-head').innerText()), "Combat level once your goals are reached 70 +3 from Old Badger's 67 Hide calculator");
-    assert.equal(await page.inputValue('[data-gcalc="attack"]'), '60');
-    assert.equal((await lines())[1], 'Plus the best of: Melee 0.325 × (Attack 60 + Strength 53) = 36.725 · Ranged 0.325 × (55 + half 27) = 26.65 · Magic 0.325 × (50 + half 25) = 24.375');
-    assert.equal(flat(await page.locator('#goals-combat .calc .small-note').innerText()), "Combat calculator: it starts from Old Badger's levels, with your goals reached (Attack). Type a level to see what it does.");
     assert.equal(flat(await page.locator('[data-act="combat-reset"]').innerText()), 'Reset to your goals');
     // type a level to try it: the card follows as you type, and the box keeps the cursor
     await page.fill('[data-gcalc="defence"]', '70');
     await page.waitForFunction(() => /What-if/.test(document.querySelector('#gc-live').innerText));
-    assert.equal(flat(await live().locator('.cc-head').innerText()), "What-if combat level 74 +7 from Old Badger's 67 Hide calculator");
+    assert.equal(flat(await live().locator('.cc-head').innerText()), "What-if combat level 75 +8 from Old Badger's 67");
     assert.equal(await page.evaluate(() => document.activeElement?.dataset.gcalc), 'defence');
     assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), false);
     // typed back to what it started from, there's nothing to reset
     await page.fill('[data-gcalc="defence"]', '52');
     await page.waitForFunction(() => !/What-if/.test(document.querySelector('#gc-live').innerText));
     assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), true);
-    await page.fill('[data-gcalc="defence"]', '70');
-    await page.waitForFunction(() => /What-if/.test(document.querySelector('#gc-live').innerText));
-    assert.equal(await page.locator('[data-act="combat-reset"]').isDisabled(), false);
+    // it is Lookup's card: with the levels the hiscores have typed in, the same lines
+    await page.fill('[data-gcalc="attack"]', '51');
+    await page.fill('[data-gcalc="hitpoints"]', '54');
+    await page.waitForFunction(() => /67\.30/.test(document.querySelector('#gc-live').innerText));
+    assert.equal(flat(await live().locator('.cc-head').innerText()), "What-if combat level 67 +0 from Old Badger's 67");
+    const mine = [await lines(), (await live().locator('.cc-next .need').allInnerTexts()).map(flat)];
+    await page.click('.tab[data-tab="lookup"]');
+    await page.fill('#lookup-name', 'old badger');
+    await page.click('#lookup-form button');
+    await page.waitForFunction(() => document.querySelector('.pc-name')?.innerText.includes('Old Badger'), null, { timeout: 15000 });
+    await page.click('#filter-seg [data-filter="combat"]');
+    await page.waitForFunction(() => /67\.30/.test(document.querySelector('#cc-live')?.innerText || ''));
+    const lookup = [(await page.locator('#cc-live .cc-line').allInnerTexts()).map(flat), (await page.locator('#cc-live .cc-next .need').allInnerTexts()).map(flat)];
+    await page.click('#filter-seg [data-filter="all"]');
+    await page.click('.tab[data-tab="goals"]');
+    await live().waitFor();
+    assert.deepEqual(mine, lookup);
+    assert.deepEqual(mine[1], ['Attack +3', 'Strength +3', 'Defence +3', 'Hitpoints +3', 'Prayer +6', 'Ranged +17', 'Magic +22']);
     // a level out of range is brought back into it when you leave the box
+    await page.fill('[data-gcalc="defence"]', '70');
     await page.fill('[data-gcalc="prayer"]', '150');
     await page.press('[data-gcalc="prayer"]', 'Tab');
     assert.equal(await page.inputValue('[data-gcalc="prayer"]'), '99');
-    // what's typed stays through a redraw, and through the goals changing under it
-    await page.evaluate(() => { document.querySelector('#goals-combat').firstElementChild.mark = true; });
+    // what's typed stays through a redraw
+    await combat().evaluate(el => { el.mark = true; });
     await page.click('[data-act="refresh-xp"]');
-    await page.waitForFunction(() => !document.querySelector('#goals-combat').firstElementChild.mark, null, { timeout: 10000 });
-    assert.deepEqual([await page.inputValue('[data-gcalc="defence"]'), await page.inputValue('[data-gcalc="prayer"]'), await page.inputValue('[data-gcalc="attack"]')], ['70', '99', '60']);
+    await page.waitForFunction(() => { const el = document.querySelector('[data-combat]'); return el && !el.mark; }, null, { timeout: 10000 });
+    assert.deepEqual([await page.inputValue('[data-gcalc="defence"]'), await page.inputValue('[data-gcalc="prayer"]'), await page.inputValue('[data-gcalc="attack"]')], ['70', '99', '51']);
     await page.click('[data-act="combat-reset"]');
     await page.waitForFunction(() => !/What-if/.test(document.querySelector('#gc-live').innerText));
-    assert.deepEqual([await page.inputValue('[data-gcalc="defence"]'), await page.inputValue('[data-gcalc="prayer"]')], ['52', '56']);
-    assert.equal(flat(await live().locator('.cc-head').innerText()), "Combat level once your goals are reached 70 +3 from Old Badger's 67 Hide calculator");
+    assert.deepEqual([await page.inputValue('[data-gcalc="defence"]'), await page.inputValue('[data-gcalc="prayer"]'), await page.inputValue('[data-gcalc="attack"]'), await page.inputValue('[data-gcalc="hitpoints"]')], ['52', '56', '60', '57']);
+    assert.equal(flat(await live().locator('.cc-head').innerText()), "Combat level once your goals are reached 70 +3 from Old Badger's 67");
+    await combat().evaluate(el => el.scrollIntoView({ block: 'start' }));
     await page.screenshot({ path: `${SHOTS}/10u-combat-card.png`, fullPage: false });
-    // open or shut is remembered
+    // open or shut is remembered, and Hide all plans / Show all plans take it along with the goals' plans
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).combatOpen), true);
+    await page.click('[data-act="close-all"]');
+    await page.waitForFunction(() => !document.querySelector('#gc-live') && !document.querySelector('.goal .plan'));
+    assert.equal(flat(await combat().locator('[data-act="combat-toggle"]').innerText()), 'Plan (Calculator)');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).combatOpen), false);
+    await page.click('[data-act="open-all"]');
+    await live().waitFor();
+    await goalCard('Attack').locator('.plan').waitFor();
     await page.click('[data-act="combat-toggle"]');
     await page.waitForFunction(() => !document.querySelector('#gc-live'));
-    assert.equal(await shut(), 'Combat level 67 → 70 once your goals are reached Combat calculator');
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.planUi')).combatOpen), false);
+    assert.equal(await shut(), "Combat level Level 67 → 70 Plan (Calculator) 70 once your goals are reached (Attack 60, Hitpoints 57 from their kills). Each of those goals' plans says what it adds on its own.");
     await removeGoal(goalCard('Attack'));
     await noGoalFor('Attack');
+    await removeGoal(goalCard('Cooking'));
+    await noGoalFor('Cooking');
     // an account with combat skills off the hiscores: a range, and the card says why
     await planAs('lowbie', 'Lowbie');
-    await page.waitForFunction(() => /Combat level\s+\d+–\d+/.test(document.querySelector('#goals-combat').innerText));
-    assert.match(await shut(), /^Combat level \d+–\d+ Combat calculator$/);
-    await page.click('[data-act="combat-toggle"]');
-    await live().waitFor();
-    assert.match(flat(await live().innerText()), /Some combat skills are below 15, so they're not on the hiscores\. Their lowest possible levels are used below, and you can change them in the calculator\./);
-    await page.click('[data-act="combat-toggle"]');
+    const lowSaved = await page.evaluate(() => localStorage.getItem('lchs.goals.lowbie'));
+    try {
+      await addGoal('attack', 30);
+      await combat().waitFor();
+      assert.match(flat(await combat().locator('.goal-title').innerText()), /^Level \d+–\d+( → \d+)?$/);
+      assert.match(await tipOf('Attack'), /^Combat level: this goal alone adds about [\d.]+ \(at least \d+ (→ \d+|now: not a whole level by itself)\)/);
+      await page.click('[data-act="combat-toggle"]');
+      await live().waitFor();
+      assert.match(flat(await live().innerText()), /Some combat skills are below 15, so they're not on the hiscores\. Their lowest possible levels are used below, and you can change them in the calculator\./);
+      await page.click('[data-act="combat-toggle"]');
+    } finally {
+      await page.evaluate(v => (v == null ? localStorage.removeItem('lchs.goals.lowbie') : localStorage.setItem('lchs.goals.lowbie', v)), lowSaved);
+    }
   } finally {
     await planAs('old badger', 'Old Badger');
     await page.evaluate(v => (v == null ? localStorage.removeItem('lchs.goals.old_badger') : localStorage.setItem('lchs.goals.old_badger', v)), saved);
@@ -2856,7 +3178,7 @@ await check('smithing: ore is smelted on the way; bars bought, smelted or superh
       ['Bronze bar', 'Iron bar', 'Elemental metal', 'Silver bar', 'Steel bar', 'Gold bar', 'Mithril bar', 'Adamantite bar', 'Runite bar']);
     const iron = await cells('sm_iron_bar');
     assert.deepEqual([iron[1], iron[3], iron[6]], ['15', '12.5', '420'], '3 rings: 420 bars from the bank on its own');
-    assert.match(iron[8], /^5\s*→\s*1,000$/);
+    assert.match(iron[9], /^5\s*→\s*1,000$/);
     assert.equal(await card.locator('tr[data-method="sm_iron_bar"] td.even').getAttribute('title'), 'Collect 5 Ring of forging, and your bank covers 1,000 × Iron bar instead of 420.');
     assert.match(await card.locator('tr[data-method="sm_iron_bar"]').getAttribute('title'),
       /Iron bar: level 15, 12\.5 XP each\nNeeds \(from scratch\): 1 Iron ore, 1\/140 Ring of forging\nWith a ring of forging every ore is a bar\. A ring lasts 140 bars, and they're counted\./);
@@ -3394,6 +3716,10 @@ await check('inside LostKit an item opens its market page right in the tool\'s t
   const p2 = await c.newPage();
   await p2.goto(BASE + '/?api=local#prices');
   await p2.waitForSelector('#prices-body a.mk');
+  // (a first visit: All, which checks no prices by being opened)
+  assert.equal(await p2.locator('#prices-head [data-bskill="all"].active').count(), 1);
+  await p2.waitForTimeout(1500);
+  assert.deepEqual(await p2.evaluate(() => { const st = window.__skills.prices.status(); return [st.busy, st.queued, st.total]; }), [false, 0, 0]);
   const link = p2.locator('#prices-body a.mk[href$="/items/kwuarm"]');
   assert.match(await link.innerText(), /^\s*Kwuarm\s*$/);
   assert.equal(await link.getAttribute('target'), null, 'same tab: LostKit\'s back button comes back');

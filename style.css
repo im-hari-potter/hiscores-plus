@@ -537,10 +537,13 @@ table.plan-t .per { font-family: var(--small); font-size: 12px; color: var(--fai
 .find-bar { margin: 0 0 6px; }
 .find-bar .find-in { width: 290px; max-width: 100%; }
 table.plan-t .catch { color: var(--gold-hi); cursor: help; }
-/* The combat card on the Goals tab: shut, it's one line */
-.combat-card.shut .cc-head .big { font-size: 19px; }
-.cc-style b { color: #fff; font-weight: normal; font-size: 15px; }
+/* The combat level card among the goals: a line like a goal's, its calculator under a Plan (Calculator) button like theirs */
+.combat-goal .goal-sub b { color: var(--text); }
 .calc > .small-note { margin-bottom: 2px; }
+/* What one goal adds to your combat level, in its plan */
+.tip.combat b { color: #fff; font-weight: normal; }
+/* Hide unused items, beside a table's Sort */
+.check.hide-off { white-space: nowrap; }
 
 .skill-switch { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
 .skill-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; }

@@ -1039,24 +1039,33 @@ export function planGoal(ix, opts) {
   // what's left in the bank. Without it they're the totals, from scratch.
   const bankStock = new Stock(bank);
   const after = useBank ? fromBank.leftover : new Stock();
-  // What the bank plan makes of each method, as From your bank shows it: the
-  // gross before any rounding up.
-  const bankMade = new Map(), bankRuns = new Map(), bankCollect = new Map();     // (bankCollect: collected for it, and fees paid)
-  if (useBank) {
-    for (const st of fromBank.steps) {
-      const acc = bankMade.get(st.id) || {};
+  // What a bank plan makes of each method, line by line as From your bank shows
+  // it: what was made, how many, what was collected for it (rounding up) and
+  // paid in fees, and the XP (what's made on the way included).
+  const tally = steps => {
+    const made = new Map(), runs = new Map(), taken = new Map(), xp = new Map();
+    for (const st of steps) {
+      const acc = made.get(st.id) || {};
       for (const [item, n] of Object.entries(st.made || {})) acc[item] = (acc[item] || 0) + n;
-      bankMade.set(st.id, acc);
-      bankRuns.set(st.id, (bankRuns.get(st.id) || 0) + st.runs);
+      made.set(st.id, acc);
+      runs.set(st.id, (runs.get(st.id) || 0) + st.runs);
+      xp.set(st.id, (xp.get(st.id) || 0) + st.xp10);
       // what was collected for it (rounding up) and paid in fees, which come off what it's worth
-      for (const taken of [st.collect, st.paid]) {
-        if (!taken) continue;
-        const got = bankCollect.get(st.id) || {};
-        for (const [item, n] of Object.entries(taken)) got[item] = tidy((got[item] || 0) + n);
-        bankCollect.set(st.id, got);
+      for (const part of [st.collect, st.paid]) {
+        if (!part) continue;
+        const got = taken.get(st.id) || {};
+        for (const [item, n] of Object.entries(part)) got[item] = tidy((got[item] || 0) + n);
+        taken.set(st.id, got);
       }
     }
-  }
+    return { made, runs, taken, xp };
+  };
+  // Two of them when your supplies are rounded up: the plan in use (rounded up),
+  // and the bank as it is. The gross from banked supplies and its XP are always
+  // the bank's as it is; rounding up only shows in what comes after.
+  const inUse = tally(useBank ? fromBank.steps : []);
+  const asIs = useBank && roundUp ? tally(bankNow.steps) : inUse;
+  const bankXp = afterXp - currentXp10;                      // (everything the bank plan in use makes)
   const table = ix.train.map(m => {
     // (from scratch, with the bars smelted on the way counted when you make your own)
     const each = xpEach(ix, m);
@@ -1069,11 +1078,12 @@ export function planGoal(ix, opts) {
     // Still needed: after everything the bank (or your mix) makes; with neither, all of them.
     const still = !useBank && !fromMix ? needed : remaining > 0 ? Math.max(fewest(ix, m, remaining, after, { level: MAX_LEVEL, unlimited, excluded }), atLeast)
       : owed && m.id === finish.id ? atLeast : 0;
-    const collect = without(expandOver(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited, excluded }, afterXp).buy, unlimited);
+    const rest = expandOver(ix, m, still, after.clone(), { level: MAX_LEVEL, unlimited, excluded }, afterXp);
+    const collect = without(rest.buy, unlimited);
     // Balance: the most you could make if every ingredient matched your most
     // plentiful one, and what that would take. (In actions: a log of arrows
     // takes 15 feathers.)
-    let balance = null;
+    let balance = null, evenXp = null;
     // (fees paid on the way to those: the tanner's)
     // (what's made from your bank as it is, is made at the level you are)
     const here = ix.byLevel ? { at: lvl } : null;
@@ -1084,10 +1094,13 @@ export function planGoal(ix, opts) {
       const lo = heldTo(m, loose, unlimited) ? unlimited : loose;
       const most = mostRuns(ix, m, bankStock, lo === unlimited ? ctx : { ...ctx, unlimited: lo });
       if (most > have) {
-        const extra = without(expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited: lo, excluded, most: true, ...here }).buy, [...unlimited, ...ix.fees]);
+        const all = expand(ix, m, most, bankStock.clone(), { level: MAX_LEVEL, unlimited: lo, excluded, most: true, ...here });
+        const extra = without(all.buy, [...unlimited, ...ix.fees]);
         const paid = paidFor(most);
-        if (Object.keys(extra).length) balance = { runs: most, collect: minorLast(extra, minor), ...(Object.keys(paid).length ? { paid } : {}) };
+        if (Object.keys(extra).length) { balance = { runs: most, collect: minorLast(extra, minor), ...(Object.keys(paid).length ? { paid } : {}) }; evenXp = all.xp; }
       }
+      // (nothing to round up: what your bank makes of it on its own, as it is)
+      if (!balance && have > 0 && Number.isFinite(have)) evenXp = perform(ix, m, have, bankStock.clone(), ctx, { steps: {}, assumed: {} });
     }
     // Totals, counting what's in your bank as already yours: what the bank
     // makes of it once rounded up, less what rounding up takes (Net after
@@ -1100,21 +1113,35 @@ export function planGoal(ix, opts) {
         : have > 0 && Number.isFinite(have) ? gainOf(made(have), paidFor(have), priceOf) : null,
       collect: useBank && still > 0 ? gainOf(made(still), collect, priceOf) : null,
     };
-    // The total net toward the goal: what the bank plan makes of it, before
-    // rounding up (Gross from banked supplies), plus the net after buying the
-    // supplies still needed. (Net after rounding up would count what rounding up
-    // takes twice: the supplies left in the bank go to the ones still needed
-    // as well.)
-    gains.before = bankMade.has(m.id) ? gainOf(bankMade.get(m.id), bankCollect.get(m.id) || {}, priceOf) : null;
-    gains.net = gains.before || gains.collect ? {
-      total: (gains.before?.total || 0) + (gains.collect?.total || 0),
-      missing: [...(gains.before?.missing || []), ...(gains.collect?.missing || [])],
+    // Gross from banked supplies (before): what your bank plan makes of it as
+    // your bank is, whether or not your supplies are rounded up. bank: the bank
+    // part of the plan in use: the same, or with your supplies rounded up what
+    // the rounded-up plan makes of it, less what that takes to collect.
+    // The total net toward the goal is that bank part plus the net after buying
+    // the supplies still needed. (Net after rounding up would count what
+    // rounding up takes twice: the supplies left in the bank go to the ones
+    // still needed as well.)
+    const partOf = t => (t.made.has(m.id) ? gainOf(t.made.get(m.id), t.taken.get(m.id) || {}, priceOf) : null);
+    gains.before = partOf(asIs);
+    gains.bank = asIs === inUse ? gains.before : partOf(inUse);
+    gains.net = gains.bank || gains.collect ? {
+      total: (gains.bank?.total || 0) + (gains.collect?.total || 0),
+      missing: [...(gains.bank?.missing || []), ...(gains.collect?.missing || [])],
     } : null;
+    // The XP of each stage, in tenths. bank: what your bank plan makes of it as
+    // your bank is (the XP of its From your bank lines, what's made on the way
+    // included). even: what your bank makes of it on its own once its supplies
+    // are rounded up (or as they are, with nothing to round up). total: all the
+    // bank plan in use makes, and the ones still needed: what you've gained by
+    // the time the goal is reached (rest: the still-needed ones' part).
+    const restXp = still > 0 ? (ix.through ? rest.xp : still * m.xp) : 0;
+    const xp = !useBank ? null : { bank: asIs.xp.get(m.id) ?? null, even: evenXp, rest: restXp, total: bankXp + restXp };
     return {
       id: m.id, level: m.level, xp10: m.xp, ...(each !== m.xp ? { xpAll: each } : {}), locked: m.level > level,
-      needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), fromPlan: bankRuns.get(m.id) || 0, toMake: still,
+      // (fromPlan: how many the bank plan in use makes of it; fromNow: the bank as it is)
+      needed, have: Math.min(have, Number.MAX_SAFE_INTEGER), fromPlan: inUse.runs.get(m.id) || 0, fromNow: asIs.runs.get(m.id) || 0, toMake: still,
       planned: !useBank ? Math.max(0, Math.floor(Number(mix?.[m.id]) || 0)) : 0,
-      collect, balance, gains,
+      collect, balance, gains, ...(xp ? { xp } : {}),
       econ: methodEconomics(ix, m, priceOf, { level: lvl, unlimited }),
     };
   });

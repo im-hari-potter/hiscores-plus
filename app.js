@@ -13,7 +13,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.10.0';
+const VERSION = '2.10.1';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -436,11 +436,16 @@ const FRESH = { attack: 1, strength: 1, defence: 1, hitpoints: 10, ranged: 1, pr
 // The card's two pieces, which the Goals tab uses as well for the account you
 // plan for (planner-ui.js): the calculator's boxes, and what follows the levels.
 // attr: the data attribute the boxes carry (Lookup's: calc).
+// text: plain text boxes that take digits, for a view that's redrawn as XP and
+// prices arrive (Goals): a redraw puts back what was selected in the box you're
+// in, which a number box doesn't let a page do. So a level typed over the
+// selected one replaces it, as it should, and isn't added to its end.
 const CALC_ORDER = ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic'];
-const calcGridHtml = (L, attr = 'calc') => `<div class="calc-grid">
+const calcGridHtml = (L, attr = 'calc', text = false) => `<div class="calc-grid">
           ${CALC_ORDER.map(k => {
             const s = SKILLS.find(x => x.key === k);
-            return `<label>${iconImg(s)}<span>${s.name}</span><input class="input small" type="number" min="${k === 'hitpoints' ? 10 : 1}" max="99" value="${L[k]}" data-${attr}="${k}" aria-label="${s.name} level"></label>`;
+            const kind = text ? 'type="text" inputmode="numeric" maxlength="3" autocomplete="off"' : `type="number" min="${k === 'hitpoints' ? 10 : 1}" max="99"`;
+            return `<label>${iconImg(s)}<span>${s.name}</span><input class="input small" ${kind} value="${L[k]}" data-${attr}="${k}" aria-label="${s.name} level"></label>`;
           }).join('')}
         </div>`;
 // head: the line that says the level (HTML). note: a line under the bar, if any.

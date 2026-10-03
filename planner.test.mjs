@@ -170,7 +170,11 @@ test('totals per row: net after rounding up my supplies, and after collecting th
   assert.ok(row(plan, 'hb_3dose1attack').gains.collect.missing.length, 'no prices for attack potions here');
   // without the bank there are no totals
   const off = row(planGoal(ix, { ...plan, bank: { kwuarm: 605 }, currentXp10: xp10ForLevel(75), targetXp10: xp10ForLevel(78), useBank: false }), 'hb_3dose2strength');
-  assert.deepEqual(off.gains, { even: null, collect: null, before: null, net: null });
+  assert.deepEqual(off.gains, { even: null, collect: null, before: null, bank: null, net: null });
+  assert.equal(off.xp, undefined, 'and no XP per stage');
+  // (v2.10.1) not rounding up, the bank part of the total is the gross itself
+  assert.equal(ss.gains.bank, ss.gains.before);
+  assert.deepEqual([ss.fromNow, fish.fromNow], [518, 403]);
 });
 
 test('with the bank off, a mix you plan yourself goes first, from scratch (v2.4.6)', () => {
@@ -951,6 +955,54 @@ test("crafting: a battlestaff's orb is charged on the way: the spell's runes are
   assert.deepEqual(row(goal, 'cr_air_battlestaff').collect, goal.fill.buy);
 });
 
+test("crafting: soda ash to battlestaves: every stage is made on the way with its XP, as far as the bank reaches (709 soda ash and 686 battlestaffs, v2.10.1)", () => {
+  // the chain: soda ash + sand → molten glass (20 XP) → unpowered orb (52.5) → charged (runes; Magic XP) → on a battlestaff (137.5 for air)
+  assert.deepEqual(['cr_molten_glass', 'cr_stafforb', 'cr_charge_air_orb', 'cr_air_battlestaff'].map(id => { const m = cr.byId.get(id); return [m.level, m.xp, m.in, m.out]; }), [
+    [1, 200, { bucket_sand: 1, soda_ash: 1 }, { molten_glass: 1 }], [46, 525, { molten_glass: 1 }, { stafforb: 1 }],
+    [1, 0, { stafforb: 1, airrune: 30, cosmicrune: 3 }, { air_orb: 1 }], [66, 1375, { air_orb: 1, battlestaff: 1 }, { air_battlestaff: 1 }]]);
+  const at = (bank, more = {}) => planGoal(cr, { bank, currentXp10: xp10ForLevel(70), targetXp10: xp10ForLevel(80), unlimited: THREAD, minor: minorOf('crafting'), ...more });
+  const lines = plan => plan.fromBank.steps.map(st => [st.id, st.runs, st.xp10, st.sub, ...(st.rounded ? ['rounded'] : []), ...(st.collect ? [st.collect] : [])]);
+  const HAVE = { soda_ash: 709, battlestaff: 686 };
+  // with the sand and the runes: 686 battlestaves through every stage, then the 23 soda ash left become orbs
+  const all = at({ ...HAVE, bucket_sand: 709, cosmicrune: 3000, airrune: 30_000 });
+  assert.deepEqual(lines(all), [
+    ['cr_air_battlestaff', 686, 686 * (200 + 525 + 1375), { cr_molten_glass: 686, cr_stafforb: 686, cr_charge_air_orb: 686 }],
+    ['cr_stafforb', 23, 23 * (200 + 525), { cr_molten_glass: 23 }]]);
+  assert.equal(all.fromBank.xp10, 709 * 200 + 709 * 525 + 686 * 1375, '709 glass, 709 orbs, 686 battlestaves');
+  assert.equal(all.fromBank.xp10, 1_457_275);
+  assert.deepEqual(all.fromBank.leftover.toObject(), { cosmicrune: 3000 - 3 * 686, airrune: 30_000 - 30 * 686, stafforb: 23, air_battlestaff: 686 });
+  assert.deepEqual(castsIn(cr, all.fromBank.steps.flatMap(st => [[st.id, st.runs], ...Object.entries(st.sub)])), { xp10: 686 * 760, level: 66, by: { cr_charge_air_orb: 686 } });
+  // each stage only as far as the next one's supplies: runes for 100 orbs are 100 battlestaves, and the rest of the soda ash is orbs
+  assert.deepEqual(lines(at({ ...HAVE, bucket_sand: 709, cosmicrune: 300, airrune: 3000 })), [
+    ['cr_air_battlestaff', 100, 100 * 2100, { cr_molten_glass: 100, cr_stafforb: 100, cr_charge_air_orb: 100 }], ['cr_stafforb', 609, 609 * 725, { cr_molten_glass: 609 }]]);
+  // what's further along in the bank is used first: 50 charged orbs, then 200 molten glass, then soda ash with the 500 sand
+  assert.deepEqual(lines(at({ ...HAVE, bucket_sand: 500, molten_glass: 200, air_orb: 50, cosmicrune: 5000, airrune: 50_000 })), [
+    ['cr_air_battlestaff', 686, 50 * 1375 + 200 * (525 + 1375) + 436 * 2100, { cr_molten_glass: 436, cr_stafforb: 636, cr_charge_air_orb: 636 }],
+    ['cr_stafforb', 64, 64 * 725, { cr_molten_glass: 64 }]]);
+  // a stage the bank is short for stops the chain there. No runes: the orbs stay unpowered
+  assert.deepEqual(lines(at({ ...HAVE, bucket_sand: 709 })), [['cr_stafforb', 709, 709 * 725, { cr_molten_glass: 709 }]]);
+  // no sand: no glass, so nothing at all
+  assert.deepEqual(lines(at(HAVE)), []);
+  // Round up my supplies carries it through, with what to collect: sand and runes for the 686, then the 23 soda ash
+  // left over are rounded up to battlestaves too (23 more battlestaffs)
+  const up = at(HAVE, { roundUp: true });
+  assert.deepEqual(lines(up), [
+    ['cr_air_battlestaff', 686, 686 * 2100, { cr_molten_glass: 686, cr_stafforb: 686, cr_charge_air_orb: 686 }, 'rounded', { bucket_sand: 686, cosmicrune: 2058, airrune: 20_580 }],
+    ['cr_stafforb', 23, 23 * 725, { cr_molten_glass: 23 }, 'rounded', { bucket_sand: 23 }],
+    ['cr_air_battlestaff', 23, 23 * 1375, { cr_charge_air_orb: 23 }, 'rounded', { battlestaff: 23, cosmicrune: 69, airrune: 690 }]]);
+  assert.deepEqual(up.fromBank.collect, { bucket_sand: 709, battlestaff: 23, cosmicrune: 2127, airrune: 21_270 });
+  assert.equal(up.fromBank.xp10, 709 * (200 + 525 + 1375));
+  // below the battlestaff's level the orbs come first, and the staves once the orbs' XP gets there (water: Crafting 54)
+  assert.deepEqual(lines(at({ ...HAVE, bucket_sand: 709, cosmicrune: 5000, waterrune: 50_000 }, { currentXp10: xp10ForLevel(50) })).map(l => l.slice(0, 2)),
+    [['cr_stafforb', 684], ['cr_water_battlestaff', 686], ['cr_stafforb', 23]]);
+  // the table says the XP of each stage, row by row (v2.10.1). From bank: what the plan makes of the row, what's made on the way included
+  const xpOf = id => { const r = row(all, id); return [r.have, r.fromNow, r.xp.bank, r.balance?.runs ?? null, r.xp.even]; };
+  assert.deepEqual(xpOf('cr_air_battlestaff'), [686, 686, 686 * 2100, 709, 709 * 2100], 'rounded up: 23 more battlestaffs for the 709 orbs');
+  assert.deepEqual(xpOf('cr_stafforb'), [709, 23, 23 * 725, null, 709 * 725], 'the plan makes 23 for their own sake; on its own the soda ash is 709 orbs');
+  assert.deepEqual(xpOf('cr_molten_glass'), [709, 0, null, null, 709 * 200], 'made on the way only: its XP is in the rows it was made for');
+  assert.equal(all.table.reduce((a, r) => a + (r.xp.bank || 0), 0), all.fromBank.xp10);
+});
+
 test('crafting: the Magic XP of the spells cast on the way is added up (v2.5.2)', () => {
   // 200 orbs charged on the way to 300 air battlestaves
   const res = planBank(cr, { bank: { air_orb: 100, stafforb: 250, battlestaff: 1000, cosmicrune: 600, airrune: 6000 }, startXp10: xp10ForLevel(70), unlimited: THREAD });
@@ -999,17 +1051,35 @@ test('round up my supplies, on: after the bank plan, what it leaves is used up t
   assert.equal(even.remaining, now.remaining - (87 * 1250 + 300 * 875));
   assert.equal(even.fill.id, now.fill.id);
   assert.ok(even.fill.segments[0].runs < now.fill.segments[0].runs);
-  // each row on its own is as it was; what the plan makes of it, and its net, are the rounded-up ones
+  // each row on its own is as it was, and so is the gross from banked supplies (v2.10.1: rounding up used to
+  // change it into the rounded-up plan's net, the same number as Net after rounding up my supplies)
   for (const r of even.table) {
     const r0 = row(now, r.id);
-    assert.deepEqual([r.have, r.balance, r.needed, r.gains.even], [r0.have, r0.balance, r0.needed, r0.gains.even], r.id);
+    assert.deepEqual([r.have, r.balance, r.needed, r.gains.even, r.gains.before, r.fromNow, r.xp.bank, r.xp.even], [r0.have, r0.balance, r0.needed, r0.gains.even, r0.gains.before, r0.fromNow, r0.xp.bank, r0.xp.even], r.id);
     assert.ok(r.toMake <= r0.toMake, r.id);
   }
-  const ss = row(even, 'hb_3dose2strength');
-  assert.equal(ss.fromPlan, 605);
-  assert.deepEqual(ss.gains.before, { total: 605 * 3000 - 87 * 300, value: 605 * 3000, cost: 87 * 300, missing: [] }, 'less the limpwurt collected for it');
-  assert.deepEqual(row(now, 'hb_3dose2strength').gains.before, { total: 518 * 3000, value: 518 * 3000, cost: 0, missing: [] });
-  assert.equal(ss.gains.net.total, ss.gains.before.total + ss.gains.collect.total);
+  const ss = row(even, 'hb_3dose2strength'), ss0 = row(now, 'hb_3dose2strength');
+  assert.deepEqual(ss.gains.before, { total: 518 * 3000, value: 518 * 3000, cost: 0, missing: [] }, 'the bank as it is');
+  assert.deepEqual(ss0.gains.before, ss.gains.before);
+  // what the rounded-up plan makes of it is the bank part of the total net: less the limpwurt collected for it
+  assert.deepEqual([ss.fromPlan, ss.fromNow, ss0.fromPlan, ss0.fromNow], [605, 518, 518, 518]);
+  assert.deepEqual(ss.gains.bank, { total: 605 * 3000 - 87 * 300, value: 605 * 3000, cost: 87 * 300, missing: [] }, 'less the limpwurt collected for it');
+  assert.equal(ss.gains.net.total, ss.gains.bank.total + ss.gains.collect.total);
+  assert.equal(ss0.gains.net.total, ss0.gains.before.total + ss0.gains.collect.total);
+  // the XP of each stage (v2.10.1): from the bank as it is, after rounding up, and in all once the supplies needed are made
+  assert.deepEqual([ss0.xp.bank, ss0.xp.even], [518 * 1250, 605 * 1250]);
+  assert.deepEqual([row(now, 'hb_3doseprayerrestore').xp.bank, row(now, 'hb_3doseprayerrestore').xp.even], [700 * 875, 1000 * 875]);
+  assert.deepEqual(row(now, 'hb_3dose1attack').xp, { bank: null, even: null, rest: row(now, 'hb_3dose1attack').toMake * 250, total: now.fromBank.xp10 + row(now, 'hb_3dose1attack').toMake * 250 }, 'nothing of it from the bank');
+  assert.equal(now.table.reduce((a, r) => a + (r.xp.bank || 0), 0), now.fromBank.xp10, 'XP from bank adds up to what From your bank says');
+  assert.equal(even.table.reduce((a, r) => a + (r.xp.bank || 0), 0), now.fromBank.xp10, 'rounded up or not');
+  for (const [plan, bankXp] of [[now, 518 * 1250 + 700 * 875], [even, 605 * 1250 + 1000 * 875]]) {
+    for (const r of plan.table) {
+      const m = ix.byId.get(r.id);
+      assert.deepEqual([r.xp.rest, r.xp.total], [r.toMake * m.xp, bankXp + r.toMake * m.xp], r.id);
+      // it reaches the goal, and one fewer wouldn't
+      assert.ok(opts.currentXp10 + r.xp.total >= opts.targetXp10 && opts.currentXp10 + r.xp.total - m.xp < opts.targetXp10, r.id);
+    }
+  }
   // with the bank left out there's nothing to round up
   const off = planGoal(ix, { ...opts, useBank: false, roundUp: true });
   assert.equal(off.bankNow, undefined);
@@ -1149,7 +1219,9 @@ test("round up my supplies, on: vials you count never hold it back, and the ones
   assert.equal(bought.fromBank.xp10, counted.fromBank.xp10);
   // the money counts the vials collected, and the rest of the goal comes after it all
   const priced = planGoal(ix, { ...opts, roundUp: true, priceOf: k => ({ vial_water: 10, limpwurt_root: 300, '3dose2strength': 3000 })[k] ?? null });
-  assert.deepEqual(row(priced, SS).gains.before, { total: 605 * 3000 - 87 * 300 - 87 * 10, value: 605 * 3000, cost: 87 * 300 + 87 * 10, missing: [] });
+  assert.deepEqual(row(priced, SS).gains.bank, { total: 605 * 3000 - 87 * 300 - 87 * 10, value: 605 * 3000, cost: 87 * 300 + 87 * 10, missing: [] });
+  // (v2.10.1: the gross from banked supplies stays the bank's as it is: 518, nothing collected)
+  assert.deepEqual(row(priced, SS).gains.before, { total: 518 * 3000, value: 518 * 3000, cost: 0, missing: [] });
   assert.equal(counted.remaining, xp10ForLevel(78) - xp10ForLevel(74) - counted.fromBank.xp10);
 
   const fb = (b, more = {}) => planGoal(ix, { ...opts, bank: b, roundUp: true, ...more }).fromBank;

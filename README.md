@@ -34,7 +34,8 @@ LostKit, or remove it and add it again. Your saved data stays either way.
 ### Planner
 
 The planner works out what it takes to reach a goal, from your XP on the hiscores, what's in your bank
-and the prices you set. Every skill has its planner: set a goal in any of them and open its plan.
+and the prices you set. Every skill has its planner: set a goal in any of them and open its
+**Plan (Calculator)**.
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill. Your XP comes from the hiscores.
   - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
@@ -42,10 +43,22 @@ and the prices you set. Every skill has its planner: set a goal in any of them a
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
   - **Edit** (beside a goal's title) moves the goalpost: type a new target, or switch the goal to
     another kind (level, XP, rank, top %). Its plan, ticks, order and progress bar stay as they are.
-  - **Combat level**, under the skill picker: your combat level now, and what it is once your goals
-    in the combat skills are reached. **Combat calculator** opens the card Lookup has under Combat:
-    how the level is made up, what gets the next one, and a box for each combat skill. The boxes
-    start from your levels with your goals reached; type a level to try it, and reset to go back.
+  - **Plan (Calculator)**, on each goal, opens its plan: what your bank makes, what's left to do
+    after that, and under them the calculator, a table of every way to train.
+  - **Combat level** is a card of its own among your goals, just before the first one in a combat
+    skill (it's there while one is listed). It combines your goals in Attack, Strength, Defence,
+    Hitpoints, Ranged, Prayer and Magic into the combat level they come to.
+    - Its **Plan (Calculator)** button opens the card Lookup has under Combat: how the level is
+      made up, what gets the next one, and a box for each combat skill. The boxes start from your
+      levels with your goals reached; type a level to try it, and reset to go back.
+    - Each combat skill's own plan has a tip with what its goal adds by itself: "this goal alone
+      adds about 3.7 (67 → 70), with what its kills give besides (Hitpoints 54 → 57)". Combat level
+      counts quarters and thirds of a level, so several goals' parts add up before they show as
+      whole levels; the card has the total.
+    - What a plan's kills give the other skills counts, in the tip and in the card: every point of
+      damage is Hitpoints XP too, and Controlled and Longrange share theirs. So a Ranged goal that
+      adds nothing by itself (melee still ahead) can still be a combat level, through the Hitpoints
+      level its kills come to. Bones aren't counted, since burying them is up to you.
 
 #### How the calculators work
 
@@ -128,11 +141,24 @@ and the prices you set. Every skill has its planner: set a goal in any of them a
         and on the Prices tab; the row makes the charged one.
       - The bank plan makes the plain piece (the XP is the same) unless you pick the enchanted one
         under **Train with** and have the runes in your bank, or you've unticked the plain one.
-    - **Battlestaves**: the orb on a battlestaff is an unpowered orb charged with a Charge Orb spell
-      (30 of the element's runes and 3 cosmic runes; Magic 56 for water, 60 earth, 63 fire, 66 air).
-      The plan does that on the way:
-      - Charged orbs in your bank are used first, then unpowered orbs, then molten glass (blown into
-        orbs on the way, which counts its 52.5 XP), as far as your runes go.
+    - **Battlestaves** are the end of a chain, and the plan makes every stage of it on the way,
+      with each stage's XP counted:
+      1. **Molten glass**: a soda ash and a bucket of sand each (20 XP).
+      2. **Unpowered orb**: blown from a molten glass (52.5 XP, Crafting 46).
+      3. **Charged** with a Charge Orb spell: 30 of the element's runes and 3 cosmic runes (Magic 56
+         for water, 60 earth, 63 fire, 66 air). That's Magic XP, said under the plan.
+      4. **Battlestaff**: the orb goes on a battlestaff (100 to 137.5 XP, Crafting 54 to 66).
+      - Each stage is made only as far as your bank reaches. Charged orbs in your bank are used
+        first, then unpowered orbs, then molten glass, then soda ash and sand, for as many
+        battlestaffs and runes as you have. What's left over is still made into the furthest stage
+        it gets to.
+      - With 709 soda ash, 709 buckets of sand, 686 battlestaffs and the runes: 686 air battlestaves
+        (+144,060 XP: 13,720 for the glass, 36,015 for the orbs, 94,325 for the staves), then the 23
+        soda ash left over become 23 unpowered orbs (+1,667.5 XP). Each line under From your bank
+        says what was made on the way, with its XP.
+      - As your bank is, a stage it's short for stops the chain there: with no sand there's no
+        glass, and with no runes the orbs stay unpowered. **Round up my supplies** carries it
+        through, and lists the sand, runes and battlestaffs to collect.
       - What's still to buy lists the unpowered orbs and the runes instead of the orb, and the
         orbs or glass you already have come off it: 2,000 molten glass are 2,000 fewer orbs to buy.
     - **Magic XP**: a line under each part of the plan adds up what the spells cast on the way give
@@ -445,11 +471,14 @@ combat skill it's **Plan to kill**: 500 fire giants, then the rest on moss giant
 | **To goal** | not shown | How many to reach the goal, on their own |
 | **Plan to make** | not shown | How many you'll make in your mix (see above) |
 | **From bank** | How many your bank makes of it now | not shown |
+| **XP from bank** | The XP of what your bank plan makes of it (its lines under From your bank), what's made on the way included. The column adds up to From your bank's total | not shown |
 | **Gross from banked supplies** | What your bank plan makes of it (its part of From your bank) is worth, before any rounding up. Your banked supplies are yours already | not shown |
 | **Round up my supplies** | What to collect so nothing in your bank is left over: your most plentiful ingredient decides | not shown |
+| **XP after rounding up my supplies** | The XP of what your bank makes of it on its own once its supplies are rounded up. Shown with Round up my supplies | not shown |
 | **Net after rounding up my supplies** | What your bank makes of it once your supplies are rounded up is worth, less what rounding up takes to collect. Your banked supplies are yours already. Shown with Round up my supplies | not shown |
 | **Still needed to goal** | How many more to reach your goal, after everything your bank makes | After your mix, once you've planned one |
 | **Supplies needed** | What those take, beyond what's left in your bank | not shown |
+| **Total XP after supplies needed** | The XP you've gained once those are made too: everything your bank makes, plus the ones still needed. That's your goal reached; hover for the XP and level it takes you to | not shown |
 | **Net after buying supplies** | What the ones still needed are worth, less what their supplies cost | not shown |
 | **Total net gp toward goal** | Gross from banked supplies + net after buying supplies: the gp it all comes to on the way to your goal, from your bank and from what you still buy. Net after rounding up my supplies isn't part of it, since rounding up would count those supplies twice | not shown |
 
@@ -463,6 +492,10 @@ For example, Herblore 74 → 78 with Super attack: with the bank off, **4,328** 
 limpwurt root, and your bank covers 605 instead of 518.
 
 Each group's name (Potions, Bows, Jewellery) sits right above the names in it.
+
+The table is long, so it can be put away: **Hide table**, in its heading, hides one plan's table
+(and **Show table** brings it back), and **Hide all tables**, above your goals, does it for every
+open plan. The rest of the plan stays, and **Train with** still picks what to make.
 
 #### Round up my supplies
 
@@ -495,11 +528,13 @@ your bank. It's one or the other: the table below already shows both side by sid
     up: 30 apples and 20 pie dishes make 20 pies, and the dishes for the rest aren't listed.
   - **To round up your supplies, collect** lists it all, and the money line takes its cost off: Gross,
     Rounding up your supplies, Net.
-  - Everything after it (Then, Still needed to goal, Supplies needed) comes after the rounded-up bank.
-    In the table, Gross from banked supplies becomes **Net from bank, supplies rounded up**: what the
-    plan makes of each then, less what was collected for it, and that's the bank part of Total net.
-    From bank, Round up my supplies and Net after rounding up my supplies stay as they are: each row
-    on its own, from your bank as it is.
+  - Everything after it (Then, Still needed to goal, Supplies needed, Total XP after supplies
+    needed) comes after the rounded-up bank.
+  - In the table, the columns before those stay as they are, on or off. **From bank, XP from bank
+    and Gross from banked supplies** are your bank as it is, before any rounding up. **Round up my
+    supplies, XP after rounding up my supplies and Net after rounding up my supplies** are each row
+    on its own, rounded up. Only **Total net** counts differently with it on: its bank part is
+    what the rounded-up plan makes of the row, less what was collected for it (hover for the sum).
 - With nothing to collect, both views are the same. Skills with one ingredient to an item (Firemaking,
   Runecraft) have nothing to round up, so they don't show the tick box.
 
@@ -512,6 +547,10 @@ The **Use** boxes at the front of each row decide what the bank plan may make. I
 by default, so **turn off anything you don't plan to make**: a potion you'd rather not, or one whose
 supplies you're saving. Otherwise the plan spends your supplies on it, and From your bank, Still needed to
 goal and the gp totals count XP you won't get. Unticked options also leave the Train with list.
+
+**Hide unused items**, beside the table's Sort, takes the rows you've unticked out of the table, so
+it only lists what you use. It says how many it's hiding; untick it to see them again. It's one
+switch for every plan's table.
 
 In Crafting and Smithing, what a ticked row needs is still made on the way, even if that row is unticked
 itself: with Sapphire (cut), Molten glass or Unpowered orb unticked, sapphires are still cut for a games
@@ -532,7 +571,8 @@ Counted, they hold back the plan from your bank as it is: 600 vials make 600 pot
 supplies** looks past that (see above): it uses up your herbs and lists the vials you're short of.
 
 - **Bank**: type in what you have (`1500`, `1.5k` and `2m` all work), one tab per skill. Each account has
-  its own bank, and the tabs share it (logs count for Firemaking and Fletching alike).
+  its own bank, and the tabs share it (logs count for Firemaking and Fletching alike). The skill tabs here
+  and on Prices come after **All** and go in the hiscores' order, like the skill buttons everywhere else.
   - **All** shows everything you have and what your whole bank is worth, in the order your bank has
     in-game (once you've read it from screenshots). Drag items into your own order, or show the most
     valuable first. A skill's tab shows only its items and what they're worth; every tab shows its value.
@@ -581,6 +621,10 @@ supplies** looks past that (see above): it uses up your herbs and lists the vial
     toward the bank's value, priced from the market's unid listing. Plans leave them out until you
     identify them.
 - **Prices**: pick the price each item uses, and it sticks. Check them before trusting a plan's money.
+  - **All**, where it opens the first time, is every item the planner prices, once each, A to Z; a
+    skill's tab has that skill's own lists. Opening All checks nothing, since that's every item there is:
+    **Check prices now** goes through them all (it takes a while; Stop ends it). A skill's tab checks its
+    own prices when you open it, and your goals and bank check the ones they use.
   - **Market**, the default, comes from player listings on
     [markets.lostcity.rs](https://markets.lostcity.rs): the median of recent sales, otherwise of open
     offers. If the market has nothing for an item, its high alch value is used. A 3-dose potion with no
