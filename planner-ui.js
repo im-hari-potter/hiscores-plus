@@ -4,7 +4,7 @@
 // per account so alts can have their own. The maths lives in planner.js; this
 // file only turns it into LostKit-style panels.
 
-import { SKILLS, SKILL_BY_KEY, SKILL_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels, combatFromProfile, combatLevel, combatBreakdown } from './skills.js';
+import { SKILLS, SKILL_BY_KEY, SKILL_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels, combatFromProfile, combatLevel, combatBreakdown, combatNeeds } from './skills.js';
 import { ITEMS, METHODS, BANK_GROUPS, SALE_GROUPS, PLACES, CHOICES, ICONS_PER_ROW, ICON_SIZE, ICON_SHEET, UNID_HERBS } from './gamedata.js';
 import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, minorLast, castsIn, xpEach, chanceUnits, sureLevel, averaged, WHOLE, MAX_XP10 } from './planner.js';
 import { store, players } from './store.js';
@@ -298,7 +298,6 @@ export function createPlanner(ctx) {
     more: new Set(),                          // goals showing what else their bank could make
     editing: null,                            // the goal being changed: { id, type, draft, problem }
     search: {},                               // goal id -> what's typed in its monster search
-    combat: { typed: {} },                    // a Combat level goal's calculator: the levels typed into it, by goal id
     hideOff: !!ui.hideOff,                    // plan tables leave out the rows unticked under Use
     tableOff: new Set(ui.tableOff || []),     // goals whose plan has its table of every option hidden
   };
@@ -362,7 +361,6 @@ export function createPlanner(ctx) {
     S.account = toDisplayName(name);
     store.set('plan.account', S.account);
     S.profile = null;
-    S.combat.typed = {};
     showMsg('goals-msg', '');
     loadProfile();
     return true;
@@ -411,9 +409,11 @@ export function createPlanner(ctx) {
   // shows up by itself. Its Plan (Calculator) is the full calculator (the card
   // Lookup has under its Combat filter): it starts from your levels with your
   // goals in Attack, Strength, Defence, Hitpoints, Ranged, Prayer and Magic
-  // reached, says what each skill alone would take to get to the goal, and a
-  // level you type into it stays until you reset it, changing no goal. (Each
-  // combat skill's own plan says what its goal adds: combatTip.)
+  // reached, and a level you type into it is a what-if that changes no goal: it's
+  // kept with the goal (goal.what) until you reset it. Above the calculator, the
+  // plan says what each kind of level takes to get to the goal from your levels
+  // now (or from the what-if, once there is one). (Each combat skill's own plan
+  // says what its goal adds: combatTip.)
   //
   // While the goals are narrowed to one combat skill, a Combat level goal stays
   // listed with that skill's goals: that's where it's wanted.
@@ -482,10 +482,12 @@ export function createPlanner(ctx) {
     return (combatCache = { real, goal, to, also, side });
   }
   // The levels in a Combat level goal's calculator: your goals', with what you've typed into it.
-  function combatLevels(id) {
+  function combatLevels(goal) {
     const c = combatNow();
-    return c ? { ...c.goal, ...S.combat.typed[id] } : null;
+    return c ? { ...c.goal, ...(goal?.what || {}) } : null;
   }
+  // (what's typed differs from your goals: the calculator is a what-if)
+  const whatIf = (c, L) => COMBAT_KEYS.some(k => L[k] !== c.goal[k]);
   // (the skills a goal takes to a new level, with the level: "Attack 60, Strength 70")
   // (one the kills take there, with no goal of its own that does: "Hitpoints 87 from their kills")
   const combatPlanned = c => COMBAT_KEYS.filter(k => c.goal[k] !== c.real.low[k]).map(k => `${SKILL_BY_KEY.get(k).name} ${c.goal[k]}${c.side[k] ? ' from their kills' : ''}`);
@@ -529,12 +531,13 @@ export function createPlanner(ctx) {
       const p = reached ? 100 : pct(exact - start, goal.value - start);
       bar = `<div class="pbar goal-bar${reached ? ' maxed' : ''}" title="${p.toFixed(1)}% of the way since you set this goal"><div style="width:${p.toFixed(1)}%"></div></div>`;
       if (open) {
-        const L = combatLevels(goal.id);
-        const typed = Object.keys(S.combat.typed[goal.id] || {}).length > 0;
+        const L = combatLevels(goal);
+        const typed = Object.keys(goal.what || {}).length > 0;
         plan = `<div class="plan combat-plan">
+          <div class="gc-needs">${combatNeedsHtml(c, goal, L)}</div>
           <div class="gc-live">${combatLiveHtml(c, L, goal.value)}</div>
           <div class="calc">
-            <div class="c-faint small-note">Combat calculator: it starts from ${esc(S.profile.name)}'s levels${planned.length ? `, with your goals reached${Object.keys(c.side).length ? ' and what their kills give besides' : ''}` : ''}. Type a level to see what it does: that changes none of your goals.</div>
+            <div class="c-faint small-note">Combat calculator: it starts from ${esc(S.profile.name)}'s levels${planned.length ? `, with your goals reached${Object.keys(c.side).length ? ' and what their kills give besides' : ''}` : ''}. Type a level to try it: that changes none of your goals, and it stays (with this goal) until you reset it.</div>
             ${combatCard.grid(L, 'gcalc', true)}
             <div class="bar"><button type="button" class="btn small" data-act="combat-reset"${typed ? '' : ' disabled'}>${planned.length ? 'Reset to your goals' : `Reset to ${esc(S.profile.name)}`}</button></div>
           </div>
@@ -570,23 +573,79 @@ export function createPlanner(ctx) {
     const c = el && combatNow();
     const goal = c && goals().find(g => g.id === card.dataset.goal);
     if (!goal) return;
-    el.innerHTML = combatLiveHtml(c, combatLevels(goal.id), goal.value);
+    const L = combatLevels(goal);
+    el.innerHTML = combatLiveHtml(c, L, goal.value);
+    const needs = card.querySelector('.gc-needs');
+    if (needs) needs.innerHTML = combatNeedsHtml(c, goal, L);
     const reset = card.querySelector('[data-act="combat-reset"]');
-    if (reset) reset.disabled = !Object.keys(S.combat.typed[goal.id] || {}).length;
+    if (reset) reset.disabled = !Object.keys(goal.what || {}).length;
+  }
+  // What a Combat level goal takes, at the top of its plan: from your levels now
+  // (strictly this goal, not after your other goals), or once there's a what-if,
+  // from the calculator's levels. Kind by kind, any one of them enough by itself:
+  // Attack or Strength (any levels between them), Defence or Hitpoints (the same),
+  // Prayer (every second level counts), Ranged, Magic (once ahead of melee).
+  function combatNeedsHtml(c, goal, L) {
+    const what = whatIf(c, L);
+    const from = what ? L : c.real.low;
+    const b = combatBreakdown(from);
+    const atLeast = !what && c.real.min !== c.real.max ? 'at least ' : '';
+    const f2 = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+    const where = what ? 'your what-if levels' : 'your levels now';
+    if (b.level >= goal.value) {
+      return `<div class="cc-goal"><div class="cc-goal-head">${what ? 'Your what-if levels reach' : 'Your levels now already reach'} <b>${goal.value}</b>${b.level > goal.value ? ` (${b.level})` : ''}.</div></div>`;
+    }
+    const need = combatNeeds(from, goal.value);
+    const sk = k => SKILL_BY_KEY.get(k);
+    const lv = (k, n) => (from[k] + n <= MAX_LEVEL ? from[k] + n : null);
+    // (two that count the same: either one alone to a level, or any of those levels between them)
+    const pair = (a, b2, n, why) => {
+      const [x, y] = [lv(a, n), lv(b2, n)];
+      const label = x && y ? `${iconImg(sk(a))} ${sk(a).name} ${x} <span class="c-faint">or</span> ${iconImg(sk(b2))} ${sk(b2).name} ${y}`
+        : x ? `${iconImg(sk(a))} ${sk(a).name} ${x}` : y ? `${iconImg(sk(b2))} ${sk(b2).name} ${y}`
+        : `${iconImg(sk(a))} ${sk(a).name} <span class="c-faint">and</span> ${iconImg(sk(b2))} ${sk(b2).name}`;
+      const title = `${sk(a).name} and ${sk(b2).name} count the same (${why}): ${n} more level${n === 1 ? '' : 's'} between them${x ? `, like ${sk(a).name} ${from[a]} → ${x}` : ''}${y ? `${x ? ' or' : ', like'} ${sk(b2).name} ${from[b2]} → ${y}` : ''}${!x || !y ? ` (${!x ? sk(a).name : sk(b2).name} stops at 99)` : ''}.`;
+      return { n, html: `<span class="need" title="${esc(title)}">${label} <b>+${n}</b></span>` };
+    };
+    const single = (k, n, why) => ({ n, html: `<span class="need" title="${esc(`${sk(k).name} ${from[k]} → ${from[k] + n}: ${why}.`)}">${iconImg(sk(k))} ${sk(k).name} ${from[k] + n} <b>+${n}</b></span>` });
+    const chips = [
+      need.melee != null && pair('attack', 'strength', need.melee, 'melee, 0.325 of a combat level a level while it\'s your best style'),
+      need.base != null && pair('defence', 'hitpoints', need.base, 'a quarter of a combat level a level'),
+      need.prayer != null && single('prayer', need.prayer, 'Prayer counts every second level, a quarter each time'),
+      need.ranged != null && single('ranged', need.ranged, 'Ranged counts once it\'s ahead of your melee and Magic'),
+      need.magic != null && single('magic', need.magic, 'Magic counts once it\'s ahead of your melee and Ranged'),
+    ].filter(Boolean).sort((x, y) => x.n - y.n);
+    // (the kinds left out, and why: Ranged or Magic still behind your best style at 99, or 99 not enough)
+    const behind = ['ranged', 'magic'].filter(k => need[k] == null && combatBreakdown({ ...from, [k]: MAX_LEVEL }).style !== k);
+    const short = [
+      need.melee == null && 'Attack and Strength',
+      need.base == null && 'Defence and Hitpoints',
+      need.prayer == null && 'Prayer',
+      ...['ranged', 'magic'].filter(k => need[k] == null && !behind.includes(k)).map(k => sk(k).name),
+    ].filter(Boolean);
+    const STYLE = { melee: 'melee', ranged: 'Ranged', magic: 'Magic' };
+    const left = [
+      behind.length ? `${behind.map(k => sk(k).name).join(' and ')} ${behind.length > 1 ? "don't count here: even at 99 they'd" : "doesn't count here: even at 99 it'd"} stay behind your ${STYLE[b.style]}.` : '',
+      short.length ? `Not enough alone, even at 99: ${short.join(' · ')}.` : '',
+    ].filter(Boolean).join(' ');
+    return `<div class="cc-goal">
+      <div class="cc-goal-head">To reach <b>${goal.value}</b> from ${where} (${atLeast}${f2(b.exact)}), any one of these:</div>
+      <div class="cc-next">${chips.length ? chips.map(x => x.html).join('') : '<span class="c-faint">No one kind of level gets there by itself by 99: it takes a few together.</span>'}</div>
+      ${chips.length ? `<div class="cc-line">Each is enough by itself. Levels from more than one add up too.${left ? ` <span class="c-faint">${left}</span>` : ''}</div>` : ''}
+    </div>`;
   }
   // What one goal in a combat skill adds to your combat level on its own, as a
-  // tip in that goal's plan. The combat level counts quarters and thirds of a
-  // level, so it's said as a part ("about 2.9", "about 0.25"), with the whole
-  // levels it comes to. What its plan's kills give the other skills counts too:
-  // a Ranged goal that adds nothing by itself (melee still ahead) can still be a
-  // combat level, through the Hitpoints level its kills come to. A Combat level
-  // goal combines them all.
+  // one-line tip in that goal's plan: "this goal adds +0.75 (87 → 88)". The combat
+  // level counts quarters and thirds of a level, so it's a part of one (to two
+  // places), with the whole levels when it crosses one. What its
+  // plan's kills give the other skills counts too (a Ranged goal's kills are
+  // Hitpoints XP), and the tooltip says so, and why a goal adds nothing. A Combat
+  // level goal combines them all.
   function combatTip(goal) {
     if (!COMBAT_KEYS.includes(goal.skill)) return '';
     const c = combatNow();
     const to = c?.to.get(goal.id);
     if (to == null) return '';
-    const name = esc(SKILL_BY_KEY.get(goal.skill).name);
     const now = c.real.low;
     // own: with the goal's own level alone. alone: and the levels its kills give
     // the other skills (Hitpoints, and more on Controlled or Longrange)
@@ -599,26 +658,25 @@ export function createPlanner(ctx) {
     }
     const a = combatBreakdown(now), o = combatBreakdown(own), b = combatBreakdown(alone);
     const add = b.exact - a.exact, addOwn = o.exact - a.exact;
-    // (a tenth of a level is near enough for a whole one or more; under one, two places: 0.25, 0.33)
-    const about = n => (Math.round((n + 1e-9) * (n < 1 ? 100 : 10)) / (n < 1 ? 100 : 10)).toLocaleString('en-US');
+    // (to two places: 0.25, 1.25, 3.68)
+    const about = n => (Math.round((n + 1e-9) * 100) / 100).toLocaleString('en-US');
     const atLeast = c.real.min !== c.real.max ? 'at least ' : '';
     const list = parts => (parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]);
     // (the only ways a new level adds nothing: another style counts for more, or Prayer's odd level)
     const STYLE = { melee: 'melee (Attack and Strength)', ranged: 'Ranged', magic: 'Magic' };
     const why = goal.skill === 'prayer' ? 'Prayer counts every second level' : `only the best of melee, Ranged and Magic counts, and your ${STYLE[o.style]} is ahead`;
     const raised = own[goal.skill] > now[goal.skill];
-    const levels = `<span class="c-faint">(${b.level > a.level ? `${atLeast}${a.level} → ${b.level}` : `${atLeast}${a.level} now${add > 1e-9 ? ': not a whole level by itself' : ''}`})</span>`;
-    let text;
-    if (add <= 1e-9) text = raised ? `this goal alone adds nothing ${levels}: ${why}.` : `this goal doesn't take your ${name} to a new level, so on its own it adds nothing ${levels}.`;
-    else if (addOwn > 1e-9) text = `this goal alone adds about <b>${about(add)}</b> ${levels}${kills.length ? `, with what its kills give besides (${esc(list(kills))})` : ''}.`;
-    // (all of it from the kills: say so, and why the skill itself adds nothing)
-    else text = `this goal alone adds about <b>${about(add)}</b> ${levels}, through what its kills give besides (${esc(list(kills))}).${raised ? ` ${name} itself adds nothing: ${why}.` : ''}`;
-    const all = combatLevel(c.goal);
-    const others = COMBAT_KEYS.some(k => c.goal[k] !== alone[k]);
-    const title = 'Your combat level is a quarter of Defence + Hitpoints + half your Prayer, plus 0.325 of the best of Attack + Strength, one and a half times Ranged, or one and a half times Magic, rounded down. '
-      + 'So one goal adds a part of a level, and the parts add up. A plan\'s kills give Hitpoints XP too (and more on Controlled or Longrange), and the levels that comes to are counted; bones aren\'t, since burying them is up to you. '
-      + 'A Combat level goal (the first of the buttons a goal is picked with) combines them all, and its calculator lets you try other levels.';
-    return `<div class="tip combat" title="${esc(title)}">${iconImg(combatCard.icon)}<span>Combat level: ${text}${others ? ` All your goals together: <b>${all}</b>.` : ''}</span></div>`;
+    // Said simply: how much this goal adds to your combat level, from your levels now
+    // (what its kills give the other skills included); the how and why are in its tooltip.
+    const text = add > 1e-9 ? `this goal adds <b>+${about(add)}</b>${b.level > a.level ? ` <span class="c-faint">(${atLeast}${a.level} → ${b.level})</span>` : ''}.`
+      : 'this goal adds nothing.';
+    const how = [`Counted from your levels now: ${SKILL_BY_KEY.get(goal.skill).name} ${now[goal.skill]} → ${own[goal.skill]}${kills.length ? `, and what its kills give besides: ${list(kills)}` : ''}.`];
+    if (add <= 1e-9) how.push(raised ? `It adds nothing because ${why}.` : `It doesn't take your ${SKILL_BY_KEY.get(goal.skill).name} to a new level.`);
+    else if (addOwn <= 1e-9 && raised) how.push(`All of it comes from what its kills give: ${SKILL_BY_KEY.get(goal.skill).name} itself adds nothing, since ${why}.`);
+    const title = [...how,
+      'Your combat level is a quarter of Defence + Hitpoints + half your Prayer, plus 0.325 of the best of Attack + Strength, one and a half times Ranged, or one and a half times Magic, rounded down, so one goal adds a part of a level. Bones aren\'t counted.',
+      'A Combat level goal (the first of the buttons a goal is picked with) combines all your goals, and its calculator lets you try other levels.'].join(' ');
+    return `<div class="tip combat" title="${esc(title)}">${iconImg(combatCard.icon)}<span>Combat level: ${text}</span></div>`;
   }
 
   // ── Goal targets ────────────────────────────────────────────────────────
@@ -860,8 +918,10 @@ export function createPlanner(ctx) {
     const list = goals();
     const box = $('goals-list');
     if (!S.account) { box.innerHTML = ''; return; }
+    // (the goals you've set, under a title of their own: the buttons above are for setting one)
+    const title = `<h4 class="row-title goals-title">Your goals</h4>`;
     if (!list.length) {
-      box.innerHTML = `<div class="empty">No goals yet. Pick a skill above and set a level, XP, rank or top % to reach. The first button is your combat level.</div>`;
+      box.innerHTML = `${title}<div class="empty">No goals yet. Pick a skill above and set a level, XP, rank or top % to reach. The first button is your combat level.</div>`;
       return;
     }
     // A goal set before your XP had loaded starts counting from the first XP seen
@@ -883,11 +943,13 @@ export function createPlanner(ctx) {
       return !!(t && !t.pending && (t.reached || t.xp10 <= cur.xp10));
     };
     const status = new Map(list.map(g => [g.id, done(g)]));
-    const skills = [...new Set(list.map(g => g.skill))];
+    const inStatus = g => S.show === 'all' || (S.show === 'done') === status.get(g.id);
+    // (a button for each skill with a goal among those shown: In progress leaves out the skills whose goals are all reached)
+    const skills = [...new Set(list.filter(inStatus).map(g => g.skill))];
     if (S.only && !skills.includes(S.only)) S.only = null;
     // (narrowed to one combat skill, a Combat level goal stays with that skill's goals: it's about them)
     const only = g => !S.only || g.skill === S.only || (isCombatGoal(g) && COMBAT_KEYS.includes(S.only));
-    const shown = list.filter(g => (S.show === 'all' || (S.show === 'done') === status.get(g.id)) && only(g));
+    const shown = list.filter(g => inStatus(g) && only(g));
     S.visible = shown.map(g => g.id);
     const count = k => list.filter(g => k === 'all' || (k === 'done') === status.get(g.id)).length;
     const sBtn = (k, label) => `<button type="button" class="${S.show === k ? 'on' : ''}" data-gshow="${k}">${label} <span class="c-faint">${count(k)}</span></button>`;
@@ -895,6 +957,11 @@ export function createPlanner(ctx) {
     // (the tables of the plans that are open: all hidden or shown at once)
     const tablesOpen = shown.filter(g => S.open.has(g.id) && hasCalculator(g.skill));
     const tablesOn = tablesOpen.some(g => !S.tableOff.has(g.id));
+    // (Hide all plans and Hide all tables: on a line of their own under the filter, side by side)
+    const links = [
+      shown.some(hasPlan) ? `<button type="button" class="linkish" data-act="${anyOpen ? 'close-all' : 'open-all'}">${anyOpen ? 'Hide all plans' : 'Show all plans'}</button>` : '',
+      tablesOpen.length ? `<button type="button" class="linkish" data-act="${tablesOn ? 'tables-off' : 'tables-on'}" title="${tablesOn ? "Hide the table of every option in each open plan. The plans' own lines stay." : 'Show the table of every option in each open plan.'}">${tablesOn ? 'Hide all tables' : 'Show all tables'}</button>` : '',
+    ].filter(Boolean).join('');
     const bar = list.length > 1 ? `<div class="goal-filter">
         <span class="c-muted small-note">Show</span>
         <div class="seg" role="group" aria-label="Show goals">${sBtn('all', 'All')}${sBtn('active', 'In progress')}${sBtn('done', 'Reached')}</div>
@@ -905,13 +972,10 @@ export function createPlanner(ctx) {
           const too = COMBAT_KEYS.includes(k) && skills.includes(COMBAT_PICK) ? ', with your Combat level goal' : '';
           return `<button type="button" class="skill-btn${on ? ' on' : ''}" data-gonly="${k}" title="${on ? 'Show every skill' : `Only ${esc(sk.name)}${too}`}" aria-pressed="${on}">${iconImg(sk)}</button>`;
         }).join('')}</div>` : ''}
-        <span class="grow"></span>
-        ${tablesOpen.length ? `<button type="button" class="linkish" data-act="${tablesOn ? 'tables-off' : 'tables-on'}" title="${tablesOn ? "Hide the table of every option in each open plan. The plans' own lines stay." : 'Show the table of every option in each open plan.'}">${tablesOn ? 'Hide all tables' : 'Show all tables'}</button>` : ''}
-        ${shown.some(hasPlan) ? `<button type="button" class="linkish" data-act="${anyOpen ? 'close-all' : 'open-all'}">${anyOpen ? 'Hide all plans' : 'Show all plans'}</button>` : ''}
-      </div>` : '';
+      </div>${links ? `<div class="goal-links">${links}</div>` : ''}` : '';
     // (a "Remove?" waiting for its second click stays that way through a redraw)
     const armed = box.querySelector('[data-act="remove-goal"][data-armed]')?.closest('[data-goal]')?.dataset.goal;
-    box.innerHTML = bar + (shown.length
+    box.innerHTML = title + bar + (shown.length
       ? shown.map((g, i) => (isCombatGoal(g) ? combatGoalCard : goalCard)(g, i === 0, i === shown.length - 1)).join('')
       : `<div class="empty">No goals match. <button type="button" class="linkish" data-act="show-all-goals">Show all goals</button></div>`);
     const again = armed && [...box.querySelectorAll('[data-goal]')].find(c => c.dataset.goal === armed)?.querySelector('[data-act="remove-goal"]');
@@ -952,7 +1016,9 @@ export function createPlanner(ctx) {
     const g = S.newGoal;
     const pick = (key, name, icon) => `<button type="button" class="skill-btn${key === g.skill ? ' on' : ''}" data-nskill="${key}" title="${esc(name)}" aria-label="${esc(name)}" aria-pressed="${key === g.skill}">${icon}</button>`;
     // Combat level first, before Attack, then the skills in the hiscores' order.
-    const picker = `<div class="skill-picker">${pick(COMBAT_PICK, 'Combat level', iconImg(combatCard.icon))}${SKILL_IDS.map(id => {
+    // (under a title: these buttons set a goal; the ones under "Your goals" are for the goals you've set)
+    const picker = `<h4 class="row-title">Set a goal <span class="c-faint small-note">Pick a skill or your combat level, then what to reach. Each goal gets its own Plan (Calculator).</span></h4>
+      <div class="skill-picker">${pick(COMBAT_PICK, 'Combat level', iconImg(combatCard.icon))}${SKILL_IDS.map(id => {
       const s = SKILLS.find(x => x.id === id);
       return pick(s.key, s.name, iconImg(s));
     }).join('')}</div>`;
@@ -2479,7 +2545,7 @@ export function createPlanner(ctx) {
       case 'remove-goal':
         if (!act.dataset.armed) { arm(act); break; }
         saveGoals(goals().filter(g => g.id !== card.dataset.goal));
-        S.open.delete(card.dataset.goal); S.tableOff.delete(card.dataset.goal); delete S.combat.typed[card.dataset.goal]; saveUi();
+        S.open.delete(card.dataset.goal); S.tableOff.delete(card.dataset.goal); saveUi();
         if (S.editing?.id === card.dataset.goal) S.editing = null;
         renderGoals();
         break;
@@ -2510,7 +2576,7 @@ export function createPlanner(ctx) {
         }
         saveUi(); renderGoals();
         break;
-      case 'combat-reset': delete S.combat.typed[card.dataset.goal]; renderGoals(); break;
+      case 'combat-reset': updateGoal(card.dataset.goal, g => { delete g.what; }); renderGoals(); break;
       case 'to-bank':
         if (BANK_GROUPS[act.dataset.skill]) { S.bankView = act.dataset.skill; saveUi(); }
         ctx.goTab('bank');
@@ -2562,7 +2628,12 @@ export function createPlanner(ctx) {
       }
     }
     // (a level in a Combat level goal's calculator, entered or left: shown as it's counted, 1 to 99)
-    if (t.dataset.gcalc) { const L = combatLevels(t.closest('[data-goal]')?.dataset.goal); if (L) t.value = L[t.dataset.gcalc]; return; }
+    if (t.dataset.gcalc) {
+      const id = t.closest('[data-goal]')?.dataset.goal;
+      const L = combatLevels(goals().find(g => g.id === id));
+      if (L) t.value = L[t.dataset.gcalc];
+      return;
+    }
     if (t.dataset.topt === 'hideOff') { S.hideOff = t.checked; saveUi(); renderGoals(); return; }
     const card = t.closest('[data-goal]');
     if (card && t.dataset.gopt) {
@@ -2656,10 +2727,13 @@ export function createPlanner(ctx) {
       if (card && Number.isFinite(v)) {
         const key = t.dataset.gcalc;
         const level = Math.min(MAX_LEVEL, Math.max(key === 'hitpoints' ? 10 : 1, v));
-        const typed = S.combat.typed[card.dataset.goal] || (S.combat.typed[card.dataset.goal] = {});
-        // (typed back to what it started from: nothing to reset)
-        if (level === combatNow()?.goal[key]) delete typed[key];
-        else typed[key] = level;
+        // (kept with the goal: a what-if stays until it's reset. Typed back to what it started from, there's nothing to keep)
+        updateGoal(card.dataset.goal, g => {
+          const what = { ...(g.what || {}) };
+          if (level === combatNow()?.goal[key]) delete what[key];
+          else what[key] = level;
+          if (Object.keys(what).length) g.what = what; else delete g.what;
+        });
         renderCombatLive(card);
       }
       return;

@@ -13,7 +13,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.10.2';
+const VERSION = '2.10.3';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -72,6 +72,8 @@ const state = {
 };
 
 function savePrefs() {
+  // (kept up to date here too: the Lookup tab reopens on it)
+  prefs.lastLookup = state.lookup.profile?.name || prefs.lastLookup || null;
   store.set('prefs', {
     tab: state.tab,
     filter: state.filter,
@@ -85,7 +87,7 @@ function savePrefs() {
     lbPage: state.leaders.page,
     tileOrder: state.tileOrder,
     tileSort: state.tileSort,
-    lastLookup: state.lookup.profile?.name || prefs.lastLookup || null,
+    lastLookup: prefs.lastLookup,
   });
 }
 
@@ -217,6 +219,15 @@ function setTab(tab) {
   if (tab === 'leaders') loadLeaders();
   if (tab === 'gains') maybeAutoUpdateGains();
   if (PLAN_TABS.includes(tab)) planner.show(tab);
+  if (tab === 'lookup') reopenLookup();
+}
+
+// The Lookup tab shows the last player looked up, whichever tab the tool opened
+// on: with none shown yet (nor one on its way), it looks them up again.
+function reopenLookup() {
+  if (state.tab !== 'lookup' || state.lookup.profile || lookupBusy || !prefs.lastLookup) return;
+  $('lookup-name').value = prefs.lastLookup;
+  doLookup(prefs.lastLookup, { auto: true });
 }
 
 // Chips for saved and recent players. mode 'lookup' opens them, 'compare' toggles them.
@@ -246,6 +257,8 @@ function renderChips() {
 
 // ── Lookup ───────────────────────────────────────────────────────────────
 // auto: not you looking someone up (the tool reopening on your last lookup, a link's address).
+// The latest lookup started is the one shown: one that answers after a newer one began is dropped.
+let lookupSeq = 0, lookupBusy = false;
 async function doLookup(rawName, { force = false, auto = false } = {}) {
   const problem = checkName(rawName);
   if (problem) { showMsg('lookup-msg', esc(problem), 'error'); return; }
@@ -253,8 +266,11 @@ async function doLookup(rawName, { force = false, auto = false } = {}) {
   $('lookup-name').value = name;
   if (state.tab !== 'lookup') { state.tab = 'lookup'; render(); }
   showMsg('lookup-msg', `Looking up <b>${esc(name)}</b>…`);
+  const seq = ++lookupSeq;
+  lookupBusy = true;
   try {
     const profile = await api.player(name, { force });
+    if (seq !== lookupSeq) return;
     if (!profile) {
       showMsg('lookup-msg', `No hiscores entry for <b>${esc(name)}</b>. Check the spelling. New players appear after they log out once.`, 'error');
       return;
@@ -269,7 +285,9 @@ async function doLookup(rawName, { force = false, auto = false } = {}) {
     renderLookup();
     updateHash();
   } catch (e) {
-    showMsg('lookup-msg', errorText(e), 'error');
+    if (seq === lookupSeq) showMsg('lookup-msg', errorText(e), 'error');
+  } finally {
+    if (seq === lookupSeq) lookupBusy = false;
   }
 }
 
@@ -449,13 +467,14 @@ const calcGridHtml = (L, attr = 'calc', text = false) => `<div class="calc-grid"
           }).join('')}
         </div>`;
 // head: the line that says the level (HTML). note: a line under the bar, if any.
-// goal: the combat level a Combat level goal is after. Short of it, the skills
-// listed are what each alone takes to get there, not just to the next level.
+// goal: the combat level a Combat level goal is after: the sum then ends with how
+// it compares to that goal, and what gets the next level isn't listed (the goal's
+// plan says what each skill takes to get to the goal, above the calculator).
 function combatLiveHtml(L, head, note = '', goal = null) {
   const b = combatBreakdown(L);
   const short = goal != null && b.level < goal;
-  const aim = short ? goal : b.level + 1;
-  const next = levelsToCombat(L, aim);
+  const aim = b.level + 1;
+  const next = goal == null ? levelsToCombat(L, aim) : {};
   const f2 = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 });
   // (rounded down to 88: "2 short of your goal of 90", or "that's your goal of 90")
   const vsGoal = goal == null ? '' : short ? `: <b>${goal - b.level}</b> short of your goal of <b>${goal}</b>` : `: that's your goal of <b>${goal}</b>${b.level > goal ? ' and more' : ''}`;
@@ -474,8 +493,8 @@ function combatLiveHtml(L, head, note = '', goal = null) {
     <div class="cc-line">Plus the best of: Melee 0.325 × (Attack <b>${L.attack}</b> + Strength <b>${L.strength}</b>) = <b>${f2(b.melee)}</b> ·
       Ranged 0.325 × (<b>${L.ranged}</b> + half <b>${Math.floor(L.ranged / 2)}</b>) = <b>${f2(b.range)}</b> ·
       Magic 0.325 × (<b>${L.magic}</b> + half <b>${Math.floor(L.magic / 2)}</b>) = <b>${f2(b.magic)}</b></div>
-    <div class="cc-line">= ${f2(b.exact)}, rounded down to <b>${b.level}</b>${vsGoal}${b.level < 126 ? `. Any one of these gets ${aim}:` : '. Maxed.'}</div>
-    ${b.level < 126 ? `<div class="cc-next">${needs || '<span class="c-faint">Nothing single-handedly; train a few skills.</span>'}</div>` : ''}`;
+    <div class="cc-line">= ${f2(b.exact)}, rounded down to <b>${b.level}</b>${vsGoal}${goal != null ? '.' : b.level < 126 ? `. Any one of these gets ${aim}:` : '. Maxed.'}</div>
+    ${goal == null && b.level < 126 ? `<div class="cc-next">${needs || '<span class="c-faint">Nothing single-handedly; train a few skills.</span>'}</div>` : ''}`;
 }
 
 function renderCombatCard() {
@@ -1273,6 +1292,7 @@ function wire() {
 }
 
 function afterRoute() {
+  if (state.tab === 'lookup') reopenLookup();
   if (state.tab === 'compare') loadCompareMissing();
   if (state.tab === 'leaders') loadLeaders();
   if (state.tab === 'gains') maybeAutoUpdateGains();
@@ -1282,10 +1302,9 @@ function afterRoute() {
 // ── Start ────────────────────────────────────────────────────────────────
 function start() {
   wire();
-  const routed = location.hash.length > 1 && applyHash();
-  if (!routed && state.tab === 'lookup' && prefs.lastLookup) $('lookup-name').value = prefs.lastLookup;
+  if (location.hash.length > 1) applyHash();
   render();
-  if (!routed && state.tab === 'lookup' && prefs.lastLookup) doLookup(prefs.lastLookup, { auto: true });
+  // (the Lookup tab, with no player in the address: the last one looked up)
   afterRoute();
   // Refresh any player counts older than a day and a half, in the background.
   totals.loaded.then(() => totals.refresh());

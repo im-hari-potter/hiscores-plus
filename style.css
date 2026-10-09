@@ -463,7 +463,13 @@ table.cmp tfoot td { background: #241e10; font-size: 13px; }
 .goal-new form .input.num { width: 110px; }
 
 .goal-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+/* The two button rows on Goals, each under a title: "Set a goal" (the new goal's card) and "Your goals" (the goals set) */
+.row-title { margin: 0 0 6px; font-weight: normal; font-size: 15px; color: var(--gold-hi); }
+.row-title .small-note { margin-left: 6px; }
+.goals-title { margin: 4px 2px 6px; }
 .goal-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 2px 2px 8px; }
+/* Hide all plans and Hide all tables, side by side on a line of their own under the filter */
+.goal-links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: -2px 2px 8px; }
 .goal-filter .seg button { padding: 4px 9px; }
 .skill-picker.mini { margin: 0; gap: 2px; }
 .skill-picker.mini .skill-btn { width: 32px; height: 32px; }
@@ -539,6 +545,12 @@ table.plan-t .per { font-family: var(--small); font-size: 12px; color: var(--fai
 table.plan-t .catch { color: var(--gold-hi); cursor: help; }
 /* The combat level card among the goals: a line like a goal's, its calculator under a Plan (Calculator) button like theirs */
 .combat-goal .goal-sub b { color: var(--text); }
+/* A Combat level goal's plan: what each kind of level takes to get to the goal, above the calculator */
+.cc-goal { margin: 2px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.cc-goal-head { font-size: 14px; color: var(--text); }
+.cc-goal-head b { color: var(--gold-hi); font-weight: normal; }
+.cc-goal .need .c-faint { font-family: var(--small); font-size: 12px; }
+.cc-goal .need b { color: var(--gold-hi); font-weight: normal; margin-left: 2px; }
 .calc > .small-note { margin-bottom: 2px; }
 /* What one goal adds to your combat level, in its plan */
 .tip.combat b { color: #fff; font-weight: normal; }

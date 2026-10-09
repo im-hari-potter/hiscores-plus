@@ -112,6 +112,29 @@ export function levelsToCombat(l, target = combatLevel(l) + 1) {
 // (how many more push combat up by one)
 export const levelsToNextCombat = l => levelsToCombat(l);
 
+// What a combat level takes from levels l, kind by kind, each on its own with the
+// rest as they are: { melee, base, prayer, ranged, magic } levels to add (null:
+// not by 99). Attack and Strength count the same (melee, 0.325 a level while it's
+// your best style), and so do Defence and Hitpoints (a quarter each): their levels
+// can be shared between the two, so it's how many between them. Prayer counts
+// every second level; Ranged and Magic once one is ahead of the other styles.
+export function combatNeeds(l, target) {
+  const reach = levels => combatLevel(levels) >= target;
+  const shared = (a, b) => {
+    const room = (MAX_LEVEL - l[a]) + (MAX_LEVEL - l[b]);
+    for (let n = 1; n <= room; n++) {
+      const toA = Math.min(MAX_LEVEL - l[a], n);
+      if (reach({ ...l, [a]: l[a] + toA, [b]: l[b] + n - toA })) return n;
+    }
+    return null;
+  };
+  const one = k => {
+    for (let n = 1; l[k] + n <= MAX_LEVEL; n++) if (reach({ ...l, [k]: l[k] + n })) return n;
+    return null;
+  };
+  return { melee: shared('attack', 'strength'), base: shared('defence', 'hitpoints'), prayer: one('prayer'), ranged: one('ranged'), magic: one('magic') };
+}
+
 // Skills below 15 have no hiscores row, so their level is unknown. The Overall
 // row still carries the true total level, which pins those skills down a bit:
 // together they must add up to (total level - the levels we can see).

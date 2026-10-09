@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { findTotal, pageOfRank, rankParamForPage, pageCount } from './totals-core.js';
 import {
-  xpForLevel, levelForXp, combatLevel, combatBreakdown, levelsToNextCombat, levelsToCombat,
+  xpForLevel, levelForXp, combatLevel, combatBreakdown, levelsToNextCombat, levelsToCombat, combatNeeds,
   boundUnrankedLevels, combatFromProfile, levelProgress, apiXp,
 } from './skills.js';
 
@@ -130,6 +130,36 @@ test('levelsToCombat: what each skill alone takes to reach a combat level (a Com
   assert.deepEqual(levelsToCombat(shot, 87), levelsToNextCombat(shot));
   // out of reach for any one skill
   assert.deepEqual(levelsToCombat(shot, 126), { attack: null, strength: null, defence: null, hitpoints: null, ranged: null, prayer: null, magic: null });
+});
+
+test('combatNeeds: what a combat level takes kind by kind, Attack or Strength and Defence or Hitpoints shared (a Combat level goal, v2.10.3)', () => {
+  // Ostap's levels: 87.00, after 88. Four Attack or Strength levels (0.325 each), four Defence or Hitpoints (a quarter
+  // each), seven of Prayer (43 → 50: four more halves), and Ranged or Magic can't pass melee by 99
+  const his = { attack: 60, strength: 90, defence: 45, hitpoints: 87, ranged: 90, prayer: 43, magic: 90 };
+  assert.deepEqual(combatNeeds(his, 88), { melee: 4, base: 4, prayer: 7, ranged: null, magic: null });
+  // Old Badger (the browser checks' account), 67.3 after 72
+  const badger = { attack: 51, strength: 53, defence: 52, hitpoints: 54, ranged: 55, prayer: 56, magic: 50 };
+  assert.deepEqual(combatNeeds(badger, 72), { melee: 15, base: 19, prayer: 38, ranged: 25, magic: 30 });
+  // each is the fewest that gets there, with the levels shared between the two of a kind past one's 99
+  const near = { attack: 98, strength: 60, defence: 97, hitpoints: 98, ranged: 1, prayer: 1, magic: 1 };
+  for (const [lv, target] of [[his, 88], [his, 95], [badger, 72], [badger, 80], [near, combatLevel(near) + 2]]) {
+    const need = combatNeeds(lv, target);
+    const add = (kind, n) => {
+      if (kind === 'melee' || kind === 'base') {
+        const [a, b] = kind === 'melee' ? ['attack', 'strength'] : ['defence', 'hitpoints'];
+        const toA = Math.min(99 - lv[a], n);
+        return { ...lv, [a]: lv[a] + toA, [b]: lv[b] + n - toA };
+      }
+      return { ...lv, [kind]: lv[kind] + n };
+    };
+    for (const [kind, n] of Object.entries(need)) {
+      if (n == null) continue;
+      assert.ok(combatLevel(add(kind, n)) >= target, `${kind} +${n} gets ${target}`);
+      assert.ok(n === 1 || combatLevel(add(kind, n - 1)) < target, `${kind}: one fewer isn't enough`);
+    }
+  }
+  // (Defence 97 and Hitpoints 98 have three levels' room between them: enough for +0.75)
+  assert.equal(combatNeeds(near, combatLevel(near) + 1).base <= 3, true);
 });
 
 test('levelsToNextCombat for melee-only builds', () => {

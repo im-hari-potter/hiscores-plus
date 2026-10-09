@@ -22,6 +22,8 @@ LostKit, or remove it and add it again. Your saved data stays either way.
   - Sort the tiles by level, XP, rank or Top %, or drag them into your own layout.
   - The names you've looked up are kept under **Recent**. Take one off with its ✕, or **Clear** the
     list. A name comes back when you look that player up again.
+  - The last player you looked up stays: the Lookup tab shows them again whenever it opens, whichever
+    tab the tool opened on.
   - Tiles show your goals once you set some: the goal in yellow, and the tile's bar becomes your
     progress toward it (since you set it) in place of the bar to the next level.
 - **Combat** shows only the combat skills and your combat level, worked out with the game's own formula.
@@ -39,8 +41,11 @@ and the prices you set. Every skill has its planner: set a goal in any of them a
 
 - **Goals**: set a **level, XP, rank or top %** goal in any skill, or a level for your combat level.
   Your XP comes from the hiscores.
-  - Move goals up and down to put them in your own order. Show only the ones in progress or reached,
-    or only one skill.
+  - The buttons under **Set a goal** pick what a new goal is for; the ones under **Your goals** show
+    only the goals in progress or reached, or only one skill's. A skill has a button there while it has
+    a goal among those shown.
+  - Move goals up and down to put them in your own order.
+  - **Hide all plans** and **Hide all tables** sit together on a line of their own under the filter.
   - A rank or top % goal becomes "beat whoever holds that rank now", and it re-checks as they train.
   - **Edit** (beside a goal's title) moves the goalpost: type a new target, or switch the goal to
     another kind (level, XP, rank, top %). Its plan, ticks, order and progress bar stay as they are.
@@ -50,19 +55,27 @@ and the prices you set. Every skill has its planner: set a goal in any of them a
     goal's skill, before Attack. Give it a level to reach (86 → 90) and it sits among your goals with
     its progress bar, to move, edit or remove like any of them. Nothing about your combat level shows
     up by itself.
-    - Its **Plan (Calculator)** is the combat calculator (the card Lookup has under Combat): how the
-      level is made up, how far short of the goal it is, and what each combat skill alone would take
-      to get there ("88: 2 short of your goal of 90. Any one of these gets 90: Attack +6 …").
+    - Its **Plan (Calculator)** starts with what the goal takes from your levels now (strictly this
+      goal, not after your other goals), kind by kind, any one of them enough by itself:
+      "To reach 88 from your levels now (87.00), any one of these: Attack 64 or Strength 94 +4 ·
+      Defence 49 or Hitpoints 91 +4 · Prayer 50 +7". Attack and Strength count the same, so any 4
+      levels between them do; so do Defence and Hitpoints. Prayer counts every second level, and Ranged
+      or Magic only once one of them is ahead of your melee. Levels from more than one add up too.
+      A kind that can't get there alone says why: "Ranged and Magic don't count here: even at 99
+      they'd stay behind your melee", or "Not enough alone, even at 99: Prayer".
+    - Under it is the combat calculator (the card Lookup has under Combat): how the level is made up
+      and how it compares to the goal ("88: that's your goal of 88", "87: 1 short of your goal of 88").
     - The calculator's boxes start from your levels with your goals in Attack, Strength, Defence,
       Hitpoints, Ranged, Prayer and Magic reached: a Prayer goal of 52 puts 52 in the Prayer box. Type
-      over a level to try something else (Prayer 43, Defence 70): that changes none of your goals, and
-      **Reset to your goals** puts their values back. What you type lasts until you reset it or reload.
+      over a level to try something else (Prayer 43, Defence 70): that changes none of your goals. It
+      sticks, kept with this goal even through a reload, and what the goal takes is then worked out
+      from those what-if levels. **Reset to your goals** puts your goals' values back.
     - Narrowing the goals to one combat skill keeps your Combat level goal on screen with that skill's
       goals; a skill that has nothing to do with combat leaves it out.
-    - Each combat skill's own plan has a tip with what its goal adds by itself: "this goal alone
-      adds about 3.7 (67 → 70), with what its kills give besides (Hitpoints 54 → 57)". Combat level
-      counts quarters and thirds of a level, so several goals' parts add up before they show as
-      whole levels; a Combat level goal has the total.
+    - Each combat skill's own plan has a one-line tip with what its goal adds to your combat level:
+      "Combat level: this goal adds +0.25" (with the levels when it crosses one: "+0.75 (87 → 88)").
+      Its hover text says how that's counted. Combat level counts quarters and thirds of a level, so
+      several goals' parts add up before they show as whole levels; a Combat level goal has the total.
     - What a plan's kills give the other skills counts, in the tip and in the calculator: every point
       of damage is Hitpoints XP too, and Controlled and Longrange share theirs. So a Ranged goal that
       adds nothing by itself (melee still ahead) can still be a combat level, through the Hitpoints
