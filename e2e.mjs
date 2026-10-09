@@ -124,8 +124,9 @@ await check('calculator what-if updates live', async () => {
   assert.match(await text('#cc-live'), /What-if combat level\s*99/);
   // (the top stays the player's: a what-if changes only the calculator, v2.10.4)
   assert.equal(await page.locator('#cc-needs').innerHTML(), top);
-  // (every box shows its whole level, the longest names too)
+  // (every box shows its whole level, the longest names too, and the seven are on one row, v2.10.5)
   assert.deepEqual(await page.$$eval('[data-calc]', els => els.filter(e => e.scrollWidth > e.clientWidth).map(e => e.dataset.calc)), []);
+  assert.equal(await page.$eval('.combat-card .calc-grid', g => new Set([...g.querySelectorAll('label')].map(l => Math.round(l.getBoundingClientRect().top))).size), 1, 'one row');
   await page.click('[data-action="calc-reset"]');
   await page.waitForFunction(() => !document.querySelector('#cc-live').innerText.includes('What-if'));
 });
@@ -2926,6 +2927,10 @@ await check("goals: Combat level is a goal like a skill's: picked with the first
     // the boxes start from your goals: Attack 60 is the Attack goal's, Hitpoints 57 what its kills give
     const boxes = () => combat().locator('[data-gcalc]').evaluateAll(els => els.map(el => [el.dataset.gcalc, el.value]));
     assert.deepEqual(await boxes(), [['attack', '60'], ['strength', '53'], ['defence', '52'], ['hitpoints', '57'], ['ranged', '55'], ['prayer', '56'], ['magic', '50']]);
+    // (the seven boxes on one row, each showing its whole level, v2.10.5)
+    assert.deepEqual(await combat().locator('.calc-grid').evaluate(g => ({
+      rows: new Set([...g.querySelectorAll('label')].map(l => Math.round(l.getBoundingClientRect().top))).size,
+      cut: [...g.querySelectorAll('input')].filter(e => e.scrollWidth > e.clientWidth).map(e => e.dataset.gcalc) })), { rows: 1, cut: [] });
     assert.equal(flat(await combat().locator('.calc .small-note').innerText()), "Combat calculator: it starts from Old Badger's levels, with your goals reached and what their kills give besides. Type a level to try it: that changes none of your goals, and it stays (with this goal) until you reset it.");
     const reset = () => combat().locator('[data-act="combat-reset"]');
     assert.equal(await reset().isDisabled(), true);
