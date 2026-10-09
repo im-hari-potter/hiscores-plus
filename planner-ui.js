@@ -4,7 +4,7 @@
 // per account so alts can have their own. The maths lives in planner.js; this
 // file only turns it into LostKit-style panels.
 
-import { SKILLS, SKILL_BY_KEY, SKILL_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels, combatFromProfile, combatLevel, combatBreakdown, combatNeeds } from './skills.js';
+import { SKILLS, SKILL_BY_KEY, SKILL_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels, combatFromProfile, combatLevel, combatBreakdown } from './skills.js';
 import { ITEMS, METHODS, BANK_GROUPS, SALE_GROUPS, PLACES, CHOICES, ICONS_PER_ROW, ICON_SIZE, ICON_SHEET, UNID_HERBS } from './gamedata.js';
 import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, minorLast, castsIn, xpEach, chanceUnits, sureLevel, averaged, WHOLE, MAX_XP10 } from './planner.js';
 import { store, players } from './store.js';
@@ -412,8 +412,8 @@ export function createPlanner(ctx) {
   // reached, and a level you type into it is a what-if that changes no goal: it's
   // kept with the goal (goal.what) until you reset it. Above the calculator, the
   // plan says what each kind of level takes to get to the goal from your levels
-  // now (or from the what-if, once there is one). (Each combat skill's own plan
-  // says what its goal adds: combatTip.)
+  // now, whatever the what-if. (Each combat skill's own plan says what its goal
+  // adds: combatTip.)
   //
   // While the goals are narrowed to one combat skill, a Combat level goal stays
   // listed with that skill's goals: that's where it's wanted.
@@ -486,8 +486,6 @@ export function createPlanner(ctx) {
     const c = combatNow();
     return c ? { ...c.goal, ...(goal?.what || {}) } : null;
   }
-  // (what's typed differs from your goals: the calculator is a what-if)
-  const whatIf = (c, L) => COMBAT_KEYS.some(k => L[k] !== c.goal[k]);
   // (the skills a goal takes to a new level, with the level: "Attack 60, Strength 70")
   // (one the kills take there, with no goal of its own that does: "Hitpoints 87 from their kills")
   const combatPlanned = c => COMBAT_KEYS.filter(k => c.goal[k] !== c.real.low[k]).map(k => `${SKILL_BY_KEY.get(k).name} ${c.goal[k]}${c.side[k] ? ' from their kills' : ''}`);
@@ -534,7 +532,7 @@ export function createPlanner(ctx) {
         const L = combatLevels(goal);
         const typed = Object.keys(goal.what || {}).length > 0;
         plan = `<div class="plan combat-plan">
-          <div class="gc-needs">${combatNeedsHtml(c, goal, L)}</div>
+          <div class="gc-needs">${combatNeedsHtml(c, goal)}</div>
           <div class="gc-live">${combatLiveHtml(c, L, goal.value)}</div>
           <div class="calc">
             <div class="c-faint small-note">Combat calculator: it starts from ${esc(S.profile.name)}'s levels${planned.length ? `, with your goals reached${Object.keys(c.side).length ? ' and what their kills give besides' : ''}` : ''}. Type a level to try it: that changes none of your goals, and it stays (with this goal) until you reset it.</div>
@@ -575,64 +573,18 @@ export function createPlanner(ctx) {
     if (!goal) return;
     const L = combatLevels(goal);
     el.innerHTML = combatLiveHtml(c, L, goal.value);
-    const needs = card.querySelector('.gc-needs');
-    if (needs) needs.innerHTML = combatNeedsHtml(c, goal, L);
     const reset = card.querySelector('[data-act="combat-reset"]');
     if (reset) reset.disabled = !Object.keys(goal.what || {}).length;
   }
-  // What a Combat level goal takes, at the top of its plan: from your levels now
-  // (strictly this goal, not after your other goals), or once there's a what-if,
-  // from the calculator's levels. Kind by kind, any one of them enough by itself:
-  // Attack or Strength (any levels between them), Defence or Hitpoints (the same),
-  // Prayer (every second level counts), Ranged, Magic (once ahead of melee).
-  function combatNeedsHtml(c, goal, L) {
-    const what = whatIf(c, L);
-    const from = what ? L : c.real.low;
-    const b = combatBreakdown(from);
-    const atLeast = !what && c.real.min !== c.real.max ? 'at least ' : '';
-    const f2 = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
-    const where = what ? 'your what-if levels' : 'your levels now';
-    if (b.level >= goal.value) {
-      return `<div class="cc-goal"><div class="cc-goal-head">${what ? 'Your what-if levels reach' : 'Your levels now already reach'} <b>${goal.value}</b>${b.level > goal.value ? ` (${b.level})` : ''}.</div></div>`;
-    }
-    const need = combatNeeds(from, goal.value);
-    const sk = k => SKILL_BY_KEY.get(k);
-    const lv = (k, n) => (from[k] + n <= MAX_LEVEL ? from[k] + n : null);
-    // (two that count the same: either one alone to a level, or any of those levels between them)
-    const pair = (a, b2, n, why) => {
-      const [x, y] = [lv(a, n), lv(b2, n)];
-      const label = x && y ? `${iconImg(sk(a))} ${sk(a).name} ${x} <span class="c-faint">or</span> ${iconImg(sk(b2))} ${sk(b2).name} ${y}`
-        : x ? `${iconImg(sk(a))} ${sk(a).name} ${x}` : y ? `${iconImg(sk(b2))} ${sk(b2).name} ${y}`
-        : `${iconImg(sk(a))} ${sk(a).name} <span class="c-faint">and</span> ${iconImg(sk(b2))} ${sk(b2).name}`;
-      const title = `${sk(a).name} and ${sk(b2).name} count the same (${why}): ${n} more level${n === 1 ? '' : 's'} between them${x ? `, like ${sk(a).name} ${from[a]} → ${x}` : ''}${y ? `${x ? ' or' : ', like'} ${sk(b2).name} ${from[b2]} → ${y}` : ''}${!x || !y ? ` (${!x ? sk(a).name : sk(b2).name} stops at 99)` : ''}.`;
-      return { n, html: `<span class="need" title="${esc(title)}">${label} <b>+${n}</b></span>` };
-    };
-    const single = (k, n, why) => ({ n, html: `<span class="need" title="${esc(`${sk(k).name} ${from[k]} → ${from[k] + n}: ${why}.`)}">${iconImg(sk(k))} ${sk(k).name} ${from[k] + n} <b>+${n}</b></span>` });
-    const chips = [
-      need.melee != null && pair('attack', 'strength', need.melee, 'melee, 0.325 of a combat level a level while it\'s your best style'),
-      need.base != null && pair('defence', 'hitpoints', need.base, 'a quarter of a combat level a level'),
-      need.prayer != null && single('prayer', need.prayer, 'Prayer counts every second level, a quarter each time'),
-      need.ranged != null && single('ranged', need.ranged, 'Ranged counts once it\'s ahead of your melee and Magic'),
-      need.magic != null && single('magic', need.magic, 'Magic counts once it\'s ahead of your melee and Ranged'),
-    ].filter(Boolean).sort((x, y) => x.n - y.n);
-    // (the kinds left out, and why: Ranged or Magic still behind your best style at 99, or 99 not enough)
-    const behind = ['ranged', 'magic'].filter(k => need[k] == null && combatBreakdown({ ...from, [k]: MAX_LEVEL }).style !== k);
-    const short = [
-      need.melee == null && 'Attack and Strength',
-      need.base == null && 'Defence and Hitpoints',
-      need.prayer == null && 'Prayer',
-      ...['ranged', 'magic'].filter(k => need[k] == null && !behind.includes(k)).map(k => sk(k).name),
-    ].filter(Boolean);
-    const STYLE = { melee: 'melee', ranged: 'Ranged', magic: 'Magic' };
-    const left = [
-      behind.length ? `${behind.map(k => sk(k).name).join(' and ')} ${behind.length > 1 ? "don't count here: even at 99 they'd" : "doesn't count here: even at 99 it'd"} stay behind your ${STYLE[b.style]}.` : '',
-      short.length ? `Not enough alone, even at 99: ${short.join(' · ')}.` : '',
-    ].filter(Boolean).join(' ');
-    return `<div class="cc-goal">
-      <div class="cc-goal-head">To reach <b>${goal.value}</b> from ${where} (${atLeast}${f2(b.exact)}), any one of these:</div>
-      <div class="cc-next">${chips.length ? chips.map(x => x.html).join('') : '<span class="c-faint">No one kind of level gets there by itself by 99: it takes a few together.</span>'}</div>
-      ${chips.length ? `<div class="cc-line">Each is enough by itself. Levels from more than one add up too.${left ? ` <span class="c-faint">${left}</span>` : ''}</div>` : ''}
-    </div>`;
+  // What a Combat level goal takes, at the top of its plan: from your levels now,
+  // strictly this goal (not after your other goals), kind by kind (app.js
+  // combatNeedsHtml, which Lookup's combat card has at its top too). A what-if
+  // typed into the calculator under it changes none of it.
+  function combatNeedsHtml(c, goal) {
+    const from = c.real.low;
+    const level = combatLevel(from);
+    if (level >= goal.value) return `<div class="cc-goal"><div class="cc-goal-head">Your levels now already reach <b>${goal.value}</b>${level > goal.value ? ` (${level})` : ''}.</div></div>`;
+    return combatCard.needs(from, goal.value, 'your levels now', c.real.min !== c.real.max);
   }
   // What one goal in a combat skill adds to your combat level on its own, as a
   // one-line tip in that goal's plan: "this goal adds +0.75 (87 → 88)". The combat

@@ -103,17 +103,50 @@ await check('combat filter shows 7 tiles, the formula and next-level hints', asy
   assert.match(card, /Combat level\s*86/);
   assert.doesNotMatch(card, /build/i);
   assert.ok(await page.locator('.combat-card .ico-combat').count() >= 1, 'crossed swords on the combat card');
-  assert.match(card, /Attack \+1/);
   assert.match(card, /86\.75/);
+  // at the top, laid out like a Combat level goal's plan: what gets the next level from the player's levels now,
+  // kind by kind, each enough by itself; Ranged and Magic can't, and it says why (v2.10.4)
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  await page.waitForSelector('.combat-card > #cc-needs:first-child .cc-goal');
+  assert.equal(flat(await page.locator('#cc-needs .cc-goal-head').innerText()), "To reach 87 from Demo Main's levels now (86.75), any one of these:");
+  assert.deepEqual((await page.locator('#cc-needs .need').allInnerTexts()).map(flat), ['Attack 61 or Strength 91 +1', 'Defence 46 or Hitpoints 87 +1', 'Prayer 44 +1']);
+  assert.equal(flat(await page.locator('#cc-needs .cc-line').innerText()), "Each is enough by itself. Levels from more than one add up too. Ranged and Magic don't count here: even at 99 they'd stay behind your melee.");
+  // (and nothing of the sort under the sum any more)
+  assert.equal(flat((await page.locator('#cc-live .cc-line').allInnerTexts()).at(-1)), '= 86.75, rounded down to 86.');
+  assert.equal(await page.locator('#cc-live .need, #cc-live .cc-next').count(), 0);
 });
 
 await check('calculator what-if updates live', async () => {
+  const top = await page.locator('#cc-needs').innerHTML();
   await page.click('.calc summary');
   await page.fill('[data-calc="attack"]', '99');
   await page.waitForFunction(() => document.querySelector('#cc-live').innerText.includes('What-if'));
   assert.match(await text('#cc-live'), /What-if combat level\s*99/);
+  // (the top stays the player's: a what-if changes only the calculator, v2.10.4)
+  assert.equal(await page.locator('#cc-needs').innerHTML(), top);
+  // (every box shows its whole level, the longest names too)
+  assert.deepEqual(await page.$$eval('[data-calc]', els => els.filter(e => e.scrollWidth > e.clientWidth).map(e => e.dataset.calc)), []);
   await page.click('[data-action="calc-reset"]');
   await page.waitForFunction(() => !document.querySelector('#cc-live').innerText.includes('What-if'));
+});
+
+await check('lookup: with no player looked up, the top of the combat calculator goes by its own levels as they are typed (v2.10.4)', async () => {
+  const c = await browser.newContext({ viewport: { width: 1000, height: 900 } });
+  const p2 = await c.newPage();
+  const flat = t => t.replace(/\s+/g, ' ').trim();
+  try {
+    await p2.goto(BASE + '/?api=local#lookup');
+    await p2.click('#filter-seg [data-filter="combat"]');
+    await p2.waitForSelector('#cc-needs .cc-goal');
+    assert.equal(flat(await p2.locator('#cc-needs .cc-goal-head').innerText()), 'To reach 4 from these levels (3.40), any one of these:');
+    // melee ahead with Attack at 99: its levels go to Strength; Ranged and Magic at 99 would stay behind
+    for (const [k, v] of [['attack', '99'], ['strength', '50'], ['defence', '1']]) await p2.fill(`[data-calc="${k}"]`, v);
+    await p2.waitForFunction(() => /To reach 52 /.test(document.querySelector('#cc-needs').innerText));
+    assert.equal(flat(await p2.locator('#cc-needs .cc-goal-head').innerText()), 'To reach 52 from these levels (51.175), any one of these:');
+    assert.deepEqual((await p2.locator('#cc-needs .need').allInnerTexts()).map(flat), ['Strength 53 +3', 'Defence 5 or Hitpoints 14 +4', 'Prayer 8 +7']);
+    assert.equal(await p2.locator('#cc-needs .need').first().getAttribute('title'), "Attack and Strength count the same (melee, 0.325 of a combat level a level while it's your best style): 3 more levels between them, like Strength 50 → 53 (Attack stops at 99).");
+    assert.equal(flat(await p2.locator('#cc-needs .cc-line').innerText()), "Each is enough by itself. Levels from more than one add up too. Ranged and Magic don't count here: even at 99 they'd stay behind your melee.");
+  } finally { await c.close(); }
 });
 await page.screenshot({ path: `${SHOTS}/2-combat.png`, fullPage: true });
 
@@ -2805,7 +2838,7 @@ await check('combat: Strength, Defence, Hitpoints and Ranged, each with its own 
   }
 });
 
-await check("goals: Combat level is a goal like a skill's: picked with the first button, before Attack, with a level to reach; its card has its progress and is moved, changed and removed like any goal; its Plan (Calculator) is the full calculator, starting from your goals, with what-ifs that change none of them; nothing shows by itself; a combat skill's goals come with it; each combat plan keeps its tip (v2.10.2). Its plan says first what each kind of level takes to reach it from your levels now, or from a what-if, which stays with the goal until reset; the tips are one line; the two rows of buttons have titles (v2.10.3)", async () => {
+await check("goals: Combat level is a goal like a skill's: picked with the first button, before Attack, with a level to reach; its card has its progress and is moved, changed and removed like any goal; its Plan (Calculator) is the full calculator, starting from your goals, with what-ifs that change none of them; nothing shows by itself; a combat skill's goals come with it; each combat plan keeps its tip (v2.10.2). Its plan says first what each kind of level takes to reach it from your levels now (whatever the what-if, v2.10.4), and a what-if stays with the goal until reset; the tips are one line; the two rows of buttons have titles (v2.10.3)", async () => {
   const combat = () => page.locator('.goal.combat-goal');
   const live = () => combat().locator('.gc-live');
   const tipOf = async name => flat(await goalCard(name).locator('.tip.combat').innerText());
@@ -2903,8 +2936,9 @@ await check("goals: Combat level is a goal like a skill's: picked with the first
     await page.waitForFunction(() => /What-if/.test(document.querySelector('.combat-goal .gc-live').innerText));
     assert.equal(flat(await live().locator('.cc-head').innerText()), "What-if combat level 75 +8 from Old Badger's 67");
     assert.equal((await lines())[2], "= 75.475, rounded down to 75: that's your goal of 72 and more.");
-    // (what the goal takes now goes by the what-if: these levels are enough)
-    assert.equal(flat(await combat().locator('.gc-needs').innerText()), 'Your what-if levels reach 72 (75).');
+    // (what the goal takes stays as it was, from the levels now: a what-if changes only the calculator, v2.10.4)
+    assert.equal(await needsHead(), 'To reach 72 from your levels now (67.30), any one of these:');
+    assert.deepEqual(await needs(), ['Attack 66 or Strength 68 +15', 'Defence 71 or Hitpoints 73 +19', 'Ranged 80 +25', 'Magic 80 +30', 'Prayer 94 +38']);
     assert.equal(await page.evaluate(() => document.activeElement?.dataset.gcalc), 'defence');
     assert.equal(await reset().isDisabled(), false);
     const afterTyping = await stored();
@@ -2928,7 +2962,7 @@ await check("goals: Combat level is a goal like a skill's: picked with the first
     assert.equal(flat(await live().locator('.cc-head').innerText()), "What-if combat level 67 +0 from Old Badger's 67");
     const here = await lines();
     assert.equal(here[2], '= 67.30, rounded down to 67: 5 short of your goal of 72.');
-    assert.equal(await needsHead(), 'To reach 72 from your what-if levels (67.30), any one of these:');
+    assert.equal(await needsHead(), 'To reach 72 from your levels now (67.30), any one of these:');
     assert.deepEqual(await needs(), ['Attack 66 or Strength 68 +15', 'Defence 71 or Hitpoints 73 +19', 'Ranged 80 +25', 'Magic 80 +30', 'Prayer 94 +38']);
     await page.click('.tab[data-tab="lookup"]');
     await page.fill('#lookup-name', 'old badger');
@@ -2937,9 +2971,13 @@ await check("goals: Combat level is a goal like a skill's: picked with the first
     await page.click('#filter-seg [data-filter="combat"]');
     await page.waitForFunction(() => /67\.30/.test(document.querySelector('#cc-live')?.innerText || ''));
     const lookup = (await page.locator('#cc-live .cc-line').allInnerTexts()).map(flat);
-    // (Lookup's has no goal to be short of: it says what gets the next level, as it always did)
-    assert.equal(lookup[2], '= 67.30, rounded down to 67. Any one of these gets 68:');
-    assert.deepEqual((await page.locator('#cc-live .cc-next .need').allInnerTexts()).map(flat), ['Attack +3', 'Strength +3', 'Defence +3', 'Hitpoints +3', 'Prayer +6', 'Ranged +17', 'Magic +22']);
+    // (Lookup's has no goal to be short of: what gets the next level is at the top of its card, laid out like the goal's, v2.10.4)
+    assert.equal(lookup[2], '= 67.30, rounded down to 67.');
+    assert.equal(await page.locator('#cc-live .cc-next, #cc-live .need').count(), 0);
+    assert.equal(flat(await page.locator('.combat-card > #cc-needs:first-child .cc-goal-head').innerText()), "To reach 68 from Old Badger's levels now (67.30), any one of these:");
+    assert.deepEqual((await page.locator('#cc-needs .need').allInnerTexts()).map(flat), ['Attack 54 or Strength 56 +3', 'Defence 55 or Hitpoints 57 +3', 'Prayer 62 +6', 'Ranged 72 +17', 'Magic 72 +22']);
+    assert.equal(flat(await page.locator('#cc-needs .cc-line').innerText()), 'Each is enough by itself. Levels from more than one add up too.');
+    assert.equal(await page.locator('#cc-needs .need').first().getAttribute('title'), "Attack and Strength count the same (melee, 0.325 of a combat level a level while it's your best style): 3 more levels between them, like Attack 51 → 54 or Strength 53 → 56.");
     await page.click('#filter-seg [data-filter="all"]');
     await page.click('.tab[data-tab="goals"]');
     await live().waitFor();
@@ -3049,21 +3087,21 @@ await check("goals: Combat level is a goal like a skill's: picked with the first
     assert.deepEqual(await combat().evaluateAll(cards => cards.map(c => [c.querySelector('.goal-title').innerText.replace(/\s+/g, ' ').trim(), c.querySelector('[data-gcalc="strength"]').value, /What-if/.test(c.querySelector('.gc-live').innerText)])),
       [['Level 67 → 70', '99', true], ['Level 67 → 80', '53', false]]);
     assert.equal(flat(await combat().nth(1).locator('.gc-live .cc-line').last().innerText()), '= 70.975, rounded down to 70: 10 short of your goal of 80.');
-    // (each by its own levels: the first's what-if is enough for its 70; the second goes from the levels now, and Defence and Hitpoints would both pass 99 alone)
-    assert.equal(flat(await combat().first().locator('.gc-needs').innerText()), 'Your what-if levels reach 70 (85).');
+    // (each to its own target, from the levels now, the what-if or not: for 80, Defence and Hitpoints would both pass 99 alone)
+    assert.deepEqual((await combat().first().locator('.gc-needs .need').allInnerTexts()).map(flat), ['Attack 60 or Strength 62 +9', 'Defence 63 or Hitpoints 65 +11', 'Ranged 76 +21', 'Prayer 78 +22', 'Magic 76 +26']);
     assert.deepEqual((await combat().nth(1).locator('.gc-needs .need').allInnerTexts()).map(flat), ['Attack 91 or Strength 93 +40', 'Ranged 96 +41', 'Magic 96 +46', 'Defence and Hitpoints +51']);
     // (a kind that can't get there alone is said, and why: Prayer even at 99 is short)
     assert.equal(flat(await combat().nth(1).locator('.gc-needs .cc-line').innerText()), 'Each is enough by itself. Levels from more than one add up too. Not enough alone, even at 99: Prayer.');
-    // a what-if with melee ahead: Attack is at 99, so its levels go to Strength; Ranged and Magic at 99 would stay behind melee
+    // a what-if on the second, with melee ahead: the calculator follows it, and what the goal takes stays as it was (v2.10.4)
+    const second = await combat().nth(1).locator('.gc-needs').innerHTML();
     for (const [k, v] of [['attack', '99'], ['strength', '50'], ['defence', '1']]) await combat().nth(1).locator(`[data-gcalc="${k}"]`).fill(v);
-    await page.waitForFunction(() => /what-if/.test(document.querySelectorAll('.combat-goal')[1].querySelector('.gc-needs').innerText));
-    assert.equal(flat(await combat().nth(1).locator('.gc-needs .cc-goal-head').innerText()), 'To reach 80 from your what-if levels (69.925), any one of these:');
-    assert.deepEqual((await combat().nth(1).locator('.gc-needs .need').allInnerTexts()).map(flat), ['Strength 81 +31', 'Defence 42 or Hitpoints 98 +41']);
-    assert.equal(flat(await combat().nth(1).locator('.gc-needs .cc-line').innerText()), "Each is enough by itself. Levels from more than one add up too. Ranged and Magic don't count here: even at 99 they'd stay behind your melee. Not enough alone, even at 99: Prayer.");
-    assert.equal(await combat().nth(1).locator('.gc-needs .need').first().getAttribute('title'), 'Attack and Strength count the same (melee, 0.325 of a combat level a level while it\'s your best style): 31 more levels between them, like Strength 50 → 81 (Attack stops at 99).');
+    await page.waitForFunction(() => /69\.925/.test(document.querySelectorAll('.combat-goal')[1].querySelector('.gc-live').innerText));
+    assert.equal(flat(await combat().nth(1).locator('.gc-live .cc-line').last().innerText()), '= 69.925, rounded down to 69: 11 short of your goal of 80.');
+    assert.equal(await combat().nth(1).locator('.gc-needs').innerHTML(), second);
+    assert.equal(flat(await combat().nth(1).locator('.gc-needs .cc-goal-head').innerText()), 'To reach 80 from your levels now (67.30), any one of these:');
     await combat().nth(1).locator('[data-act="combat-reset"]').click();
-    await page.waitForFunction(() => /from your levels now/.test(document.querySelectorAll('.combat-goal')[1].querySelector('.gc-needs').innerText));
-    assert.deepEqual((await combat().nth(1).locator('.gc-needs .need').allInnerTexts()).map(flat), ['Attack 91 or Strength 93 +40', 'Ranged 96 +41', 'Magic 96 +46', 'Defence and Hitpoints +51']);
+    await page.waitForFunction(() => !/What-if/.test(document.querySelectorAll('.combat-goal')[1].querySelector('.gc-live').innerText));
+    assert.equal(await combat().nth(1).locator('.gc-needs').innerHTML(), second);
     // removed like any goal (and what was typed into it goes with it)
     await removeGoal(combat().nth(1));
     await page.waitForFunction(() => document.querySelectorAll('.goal.combat-goal').length === 1);

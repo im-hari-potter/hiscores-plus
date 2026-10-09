@@ -3,7 +3,7 @@
 
 import {
   SKILLS, SKILL_BY_ID, SKILL_IDS, COMBAT_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL,
-  levelProgress, combatFromProfile, combatBreakdown, levelsToCombat, combatLevel, boundUnrankedLevels,
+  levelProgress, combatFromProfile, combatBreakdown, combatNeeds, combatLevel, boundUnrankedLevels,
 } from './skills.js';
 import { HiscoresApi, LIVE_API, isElectron, toSafeName, toDisplayName, checkName } from './api.js';
 import { Totals, topPercent, formatPercent } from './totals.js';
@@ -13,7 +13,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.10.3';
+const VERSION = '2.10.4';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -184,7 +184,7 @@ function topFor(id, rank) {
 const planner = createPlanner({
   api, totals, prices, esc, fmt, ago, iconImg, showMsg, errorText,
   // (the combat card's pieces, for a Combat level goal's calculator on the Goals tab)
-  combatCard: { icon: COMBAT, text: combatText, live: (...a) => combatLiveHtml(...a), grid: (...a) => calcGridHtml(...a) },
+  combatCard: { icon: COMBAT, text: combatText, live: (...a) => combatLiveHtml(...a), grid: (...a) => calcGridHtml(...a), needs: (...a) => combatNeedsHtml(...a) },
   fullMarket: LOCAL || isElectron(),
   inLostKit: isElectron(),
   defaultAccount: () => prefs.lastLookup || players.saved()[0] || null,
@@ -468,23 +468,14 @@ const calcGridHtml = (L, attr = 'calc', text = false) => `<div class="calc-grid"
         </div>`;
 // head: the line that says the level (HTML). note: a line under the bar, if any.
 // goal: the combat level a Combat level goal is after: the sum then ends with how
-// it compares to that goal, and what gets the next level isn't listed (the goal's
-// plan says what each skill takes to get to the goal, above the calculator).
+// it compares to that goal. What gets a level is said above it all, by
+// combatNeedsHtml (the top of the card).
 function combatLiveHtml(L, head, note = '', goal = null) {
   const b = combatBreakdown(L);
   const short = goal != null && b.level < goal;
-  const aim = b.level + 1;
-  const next = goal == null ? levelsToCombat(L, aim) : {};
   const f2 = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 });
   // (rounded down to 88: "2 short of your goal of 90", or "that's your goal of 90")
   const vsGoal = goal == null ? '' : short ? `: <b>${goal - b.level}</b> short of your goal of <b>${goal}</b>` : `: that's your goal of <b>${goal}</b>${b.level > goal ? ' and more' : ''}`;
-  const needs = COMBAT_KEYS
-    .filter(k => next[k] != null)
-    .sort((a, c) => next[a] - next[c])
-    .map(k => {
-      const s = SKILLS.find(x => x.key === k);
-      return `<span class="need" title="${s.name} ${L[k]} → ${L[k] + next[k]}">${iconImg(s)} ${s.name} +${next[k]}</span>`;
-    }).join('');
   return `
     <div class="cc-head">${iconImg(COMBAT)} ${head}</div>
     <div class="cc-bar" title="${Math.round(b.progress * 100)}% of the way to ${b.level + 1}"><div style="width:${(b.progress * 100).toFixed(1)}%"></div></div>
@@ -493,8 +484,59 @@ function combatLiveHtml(L, head, note = '', goal = null) {
     <div class="cc-line">Plus the best of: Melee 0.325 × (Attack <b>${L.attack}</b> + Strength <b>${L.strength}</b>) = <b>${f2(b.melee)}</b> ·
       Ranged 0.325 × (<b>${L.ranged}</b> + half <b>${Math.floor(L.ranged / 2)}</b>) = <b>${f2(b.range)}</b> ·
       Magic 0.325 × (<b>${L.magic}</b> + half <b>${Math.floor(L.magic / 2)}</b>) = <b>${f2(b.magic)}</b></div>
-    <div class="cc-line">= ${f2(b.exact)}, rounded down to <b>${b.level}</b>${vsGoal}${goal != null ? '.' : b.level < 126 ? `. Any one of these gets ${aim}:` : '. Maxed.'}</div>
-    ${goal == null && b.level < 126 ? `<div class="cc-next">${needs || '<span class="c-faint">Nothing single-handedly; train a few skills.</span>'}</div>` : ''}`;
+    <div class="cc-line">= ${f2(b.exact)}, rounded down to <b>${b.level}</b>${vsGoal}${goal == null && b.level >= 126 ? '. Maxed.' : '.'}</div>`;
+}
+
+// What gets a combat level, kind by kind, any one of them enough by itself: the top
+// of the combat card, on Lookup (the next level) and in a Combat level goal's plan
+// (the goal). from: the levels it goes by; target: the level to reach; where: whose
+// levels, for the line ("your levels now", "Pothead's levels now", "these levels");
+// atLeast: some combat skills are below 15, so from has their lowest possible levels.
+// Attack or Strength count the same, any levels between them (0.325 a level while
+// melee is the best style); so do Defence or Hitpoints (a quarter); Prayer counts
+// every second level; Ranged and Magic once ahead of melee. The kinds left out say
+// why. (A what-if typed into the calculator changes none of it.)
+function combatNeedsHtml(from, target, where, atLeast = false) {
+  const b = combatBreakdown(from);
+  const f2 = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+  const need = combatNeeds(from, target);
+  const sk = k => SKILLS.find(x => x.key === k);
+  const lv = (k, n) => (from[k] + n <= MAX_LEVEL ? from[k] + n : null);
+  // (two that count the same: either one alone to a level, or any of those levels between them)
+  const pair = (a, b2, n, why) => {
+    const [x, y] = [lv(a, n), lv(b2, n)];
+    const label = x && y ? `${iconImg(sk(a))} ${sk(a).name} ${x} <span class="c-faint">or</span> ${iconImg(sk(b2))} ${sk(b2).name} ${y}`
+      : x ? `${iconImg(sk(a))} ${sk(a).name} ${x}` : y ? `${iconImg(sk(b2))} ${sk(b2).name} ${y}`
+      : `${iconImg(sk(a))} ${sk(a).name} <span class="c-faint">and</span> ${iconImg(sk(b2))} ${sk(b2).name}`;
+    const title = `${sk(a).name} and ${sk(b2).name} count the same (${why}): ${n} more level${n === 1 ? '' : 's'} between them${x ? `, like ${sk(a).name} ${from[a]} → ${x}` : ''}${y ? `${x ? ' or' : ', like'} ${sk(b2).name} ${from[b2]} → ${y}` : ''}${!x || !y ? ` (${!x ? sk(a).name : sk(b2).name} stops at 99)` : ''}.`;
+    return { n, html: `<span class="need" title="${esc(title)}">${label} <b>+${n}</b></span>` };
+  };
+  const single = (k, n, why) => ({ n, html: `<span class="need" title="${esc(`${sk(k).name} ${from[k]} → ${from[k] + n}: ${why}.`)}">${iconImg(sk(k))} ${sk(k).name} ${from[k] + n} <b>+${n}</b></span>` });
+  const chips = [
+    need.melee != null && pair('attack', 'strength', need.melee, 'melee, 0.325 of a combat level a level while it\'s your best style'),
+    need.base != null && pair('defence', 'hitpoints', need.base, 'a quarter of a combat level a level'),
+    need.prayer != null && single('prayer', need.prayer, 'Prayer counts every second level, a quarter each time'),
+    need.ranged != null && single('ranged', need.ranged, 'Ranged counts once it\'s ahead of your melee and Magic'),
+    need.magic != null && single('magic', need.magic, 'Magic counts once it\'s ahead of your melee and Ranged'),
+  ].filter(Boolean).sort((x, y) => x.n - y.n);
+  // (the kinds left out, and why: Ranged or Magic still behind your best style at 99, or 99 not enough)
+  const behind = ['ranged', 'magic'].filter(k => need[k] == null && combatBreakdown({ ...from, [k]: MAX_LEVEL }).style !== k);
+  const short = [
+    need.melee == null && 'Attack and Strength',
+    need.base == null && 'Defence and Hitpoints',
+    need.prayer == null && 'Prayer',
+    ...['ranged', 'magic'].filter(k => need[k] == null && !behind.includes(k)).map(k => sk(k).name),
+  ].filter(Boolean);
+  const STYLE = { melee: 'melee', ranged: 'Ranged', magic: 'Magic' };
+  const left = [
+    behind.length ? `${behind.map(k => sk(k).name).join(' and ')} ${behind.length > 1 ? "don't count here: even at 99 they'd" : "doesn't count here: even at 99 it'd"} stay behind your ${STYLE[b.style]}.` : '',
+    short.length ? `Not enough alone, even at 99: ${short.join(' · ')}.` : '',
+  ].filter(Boolean).join(' ');
+  return `<div class="cc-goal">
+      <div class="cc-goal-head">To reach <b>${target}</b> from ${where} (${atLeast ? 'at least ' : ''}${f2(b.exact)}), any one of these:</div>
+      <div class="cc-next">${chips.length ? chips.map(x => x.html).join('') : '<span class="c-faint">No one kind of level gets there by itself by 99: it takes a few together.</span>'}</div>
+      ${chips.length ? `<div class="cc-line">Each is enough by itself. Levels from more than one add up too.${left ? ` <span class="c-faint">${left}</span>` : ''}</div>` : ''}
+    </div>`;
 }
 
 function renderCombatCard() {
@@ -508,6 +550,7 @@ function renderCombatCard() {
   const L = state.calc.levels;
   el.innerHTML = `
     <div class="card combat-card">
+      <div id="cc-needs"></div>
       <div id="cc-live"></div>
       <details class="calc" ${p ? '' : 'open'}>
         <summary>Combat calculator${p ? ` (starts from ${esc(p.name)}'s levels)` : ''}</summary>
@@ -533,6 +576,16 @@ function renderCombatLive() {
   const unknown = p && !differs && real.min !== real.max
     ? `<div class="cc-line">Some combat skills are below 15, so they're not on the hiscores. Their lowest possible levels are used below, and you can change them in the calculator.</div>` : '';
   el.innerHTML = combatLiveHtml(L, head, unknown);
+  // At the top: what gets the next level, from the player's levels now (a what-if
+  // typed into the calculator changes none of it), or with no player, from the
+  // calculator's levels. Redrawn only when it reads differently.
+  const top = $('cc-needs');
+  if (top) {
+    const from = p ? real.low : L;
+    const level = combatLevel(from);
+    const html = level >= 126 ? '' : combatNeedsHtml(from, level + 1, p ? `${esc(p.name)}'s levels now` : 'these levels', !!p && real.min !== real.max);
+    if (top._html !== html) { top.innerHTML = html; top._html = html; }
+  }
 }
 
 // ── Compare ──────────────────────────────────────────────────────────────

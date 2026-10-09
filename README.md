@@ -27,6 +27,12 @@ LostKit, or remove it and add it again. Your saved data stays either way.
   - Tiles show your goals once you set some: the goal in yellow, and the tile's bar becomes your
     progress toward it (since you set it) in place of the bar to the next level.
 - **Combat** shows only the combat skills and your combat level, worked out with the game's own formula.
+  - Its card starts with what gets the next combat level from the player's levels now, kind by kind,
+    laid out like a Combat level goal's plan (see Goals below): "To reach 88 from Name's levels now
+    (87.00), any one of these: Attack 64 or Strength 94 +4 · Defence 49 or Hitpoints 91 +4 · Prayer 50 +7".
+  - Under it, how the level is made up, and a calculator to try other levels. A level typed there
+    changes only the calculator; the top stays the player's. With no player looked up, the top goes by
+    the calculator's levels.
 - **Compare** puts up to 5 players side by side and highlights the leader of each skill.
 - **Gains** shows XP, levels and ranks gained since last time, a day, a week or a month ago.
   - **Show snapshots** lists the ones stored for that player. Delete any one of them (click twice), or
@@ -67,9 +73,9 @@ and the prices you set. Every skill has its planner: set a goal in any of them a
       and how it compares to the goal ("88: that's your goal of 88", "87: 1 short of your goal of 88").
     - The calculator's boxes start from your levels with your goals in Attack, Strength, Defence,
       Hitpoints, Ranged, Prayer and Magic reached: a Prayer goal of 52 puts 52 in the Prayer box. Type
-      over a level to try something else (Prayer 43, Defence 70): that changes none of your goals. It
-      sticks, kept with this goal even through a reload, and what the goal takes is then worked out
-      from those what-if levels. **Reset to your goals** puts your goals' values back.
+      over a level to try something else (Prayer 43, Defence 70): that changes none of your goals, and
+      what the goal takes, above it, stays as it is (from your levels now). It sticks, kept with this
+      goal even through a reload. **Reset to your goals** puts your goals' values back.
     - Narrowing the goals to one combat skill keeps your Combat level goal on screen with that skill's
       goals; a skill that has nothing to do with combat leaves it out.
     - Each combat skill's own plan has a one-line tip with what its goal adds to your combat level:
