@@ -1,10 +1,11 @@
-// Skills+ planner views: Goals, Bank and Prices.
+// Planner+ views: Goals, NPCs, Bank and Prices.
 //
 // Goals and the bank belong to one account (the "planning for" name), stored
-// per account so alts can have their own. The maths lives in planner.js; this
-// file only turns it into LostKit-style panels.
+// per account so alts can have their own. The maths lives in planner.js (and
+// loot.js for monsters); this file only turns it into LostKit-style panels.
+// The NPCs tab and Slayer goals are npc-ui.js's.
 
-import { SKILLS, SKILL_BY_KEY, SKILL_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels, combatFromProfile, combatLevel, combatBreakdown } from './skills.js';
+import { SKILLS, SKILL_BY_KEY, SKILL_IDS, SLAYER, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL, boundUnrankedLevels, combatFromProfile, combatLevel, combatBreakdown } from './skills.js';
 import { ITEMS, METHODS, BANK_GROUPS, SALE_GROUPS, PLACES, CHOICES, ICONS_PER_ROW, ICON_SIZE, ICON_SHEET, UNID_HERBS } from './gamedata.js';
 import { indexMethods, planGoal, goalTargetXp10, rankForTop, xp10ForLevel, levelForXp10, bankValue, minorLast, castsIn, xpEach, chanceUnits, sureLevel, averaged, WHOLE, MAX_XP10 } from './planner.js';
 import { store, players } from './store.js';
@@ -12,6 +13,7 @@ import { toSafeName, toDisplayName, checkName } from './api.js';
 import { topPercent, formatPercent } from './totals.js';
 import { sortable } from './sortable.js';
 import { LIVE_MARKET, highAlch } from './prices.js';
+import { createNpcUi, isSlayerGoal } from './npc-ui.js';
 
 // One method index per skill that has calculator data.
 const INDEX = {};
@@ -71,9 +73,12 @@ const PRICED = Object.fromEntries([...new Set(METHODS.map(m => m.skill))].map(ke
 // The skill buttons on the Bank and Prices tabs (after All, which each of them
 // starts with), in the hiscores' order like the skill buttons everywhere else
 // (a skill's id is its place on the hiscores).
-const inHiscoresOrder = keys => [...keys].sort((a, b) => SKILL_BY_KEY.get(a).id - SKILL_BY_KEY.get(b).id);
+// (Slayer, the home of monster plans, isn't one of the hiscores' skills yet: its place is 19, after Thieving)
+const skillOf = key => (key === SLAYER.key ? SLAYER : SKILL_BY_KEY.get(key));
+const inHiscoresOrder = keys => [...keys].sort((a, b) => skillOf(a).id - skillOf(b).id);
 const BANK_TABS = inHiscoresOrder(Object.keys(BANK_GROUPS));
-const PRICE_TABS = inHiscoresOrder(Object.keys(PRICED).filter(k => PRICED[k]));
+// (Slayer's: everything a monster drops)
+const PRICE_TABS = inHiscoresOrder([...Object.keys(PRICED).filter(k => PRICED[k]), ...(BANK_GROUPS[SLAYER.key] ? [SLAYER.key] : [])]);
 // An Agility Arena ticket's rows: what they're exchanged for is counted by a plan as a whole.
 const TICKETS = new Set(METHODS.filter(m => m.exchange).map(m => m.id));
 
@@ -120,8 +125,10 @@ const PLAN_LABEL = 'Plan (Calculator)';
 const COMBAT_PICK = 'combat';
 const isCombatGoal = goal => goal.skill === COMBAT_PICK;
 const MAX_COMBAT = 126;
-// Goals with a Plan (Calculator) button: a skill's with calculator data, and the combat level's.
-const hasPlan = goal => isCombatGoal(goal) || hasCalculator(goal.skill);
+// Goals with a Plan (Calculator) button: a skill's with calculator data, the combat level's, and a Slayer goal's (its kills).
+const hasPlan = goal => isCombatGoal(goal) || isSlayerGoal(goal) || hasCalculator(goal.skill);
+// A goal's skill can be one of the hiscores', the combat level (COMBAT_PICK) or Slayer.
+const pickable = key => SKILL_BY_KEY.has(key) || key === COMBAT_PICK || key === SLAYER.key;
 
 // Cheap supplies that shouldn't hold a plan back (still shown as needed).
 const DEFAULT_ASSUME = { herblore: ['vial_water'], crafting: ['thread'] };
@@ -183,6 +190,11 @@ export const searchHit = (name, cb, terms) => terms.every(t => (/^\d+$/.test(t) 
 // (the All view's order for a bank typed in by hand: it stays as it was when
 // the skill buttons went into the hiscores' order).
 const SKILL_ORDER = new Map([...new Set(Object.values(BANK_GROUPS).flatMap(gs => gs.flatMap(g => g.items)))].map((s, i) => [s, i]));
+// (v3) The skill an item first belongs to, for the All view by skill: the first
+// of the skills that list it, in the order the data has them. Slayer comes last,
+// so its own are what only monsters drop.
+const ORIGIN = new Map();
+for (const [key, groups] of Object.entries(BANK_GROUPS)) for (const g of groups) for (const slug of g.items) if (!ORIGIN.has(slug)) ORIGIN.set(slug, key);
 const TARGET_TTL = 30 * 60e3;          // re-check who holds a rank after this long
 const PROFILE_TTL = 5 * 60e3;
 
@@ -279,14 +291,14 @@ export function createPlanner(ctx) {
     loading: false,
     error: null,
     // (skill: one of the skills, or COMBAT_PICK for the combat level, which is a goal too)
-    newGoal: { skill: SKILL_BY_KEY.has(ui.newSkill) || ui.newSkill === COMBAT_PICK ? ui.newSkill : 'herblore', type: ['level', 'xp', 'rank', 'top'].includes(ui.newType) ? ui.newType : 'level' },
+    newGoal: { skill: pickable(ui.newSkill) ? ui.newSkill : 'herblore', type: ['level', 'xp', 'rank', 'top'].includes(ui.newType) ? ui.newType : 'level' },
     open: new Set(Array.isArray(ui.open) ? ui.open : []),
     sort: ['level', 'xp', 'cheap', 'net'].includes(ui.sort) ? ui.sort : 'level',
     show: ['all', 'active', 'done'].includes(ui.show) ? ui.show : 'all',     // goal filter: status
-    only: SKILL_BY_KEY.has(ui.only) || ui.only === COMBAT_PICK ? ui.only : null,   // goal filter: one skill (or the combat level)
+    only: pickable(ui.only) ? ui.only : null,                                  // goal filter: one skill (or the combat level, or Slayer)
     visible: [],                                                              // goal ids shown, in order
     bankView: ui.bankView === 'all' || BANK_GROUPS[ui.bankView] ? ui.bankView : 'all',   // Bank tab: everything, or one skill's items
-    allSort: ui.allSort === 'value' ? 'value' : 'yours',                     // Bank tab, All: your order or most valuable first
+    allSort: ['value', 'skill'].includes(ui.allSort) ? ui.allSort : 'yours',   // Bank tab, All: your order, most valuable first, or by skill (v3)
     // Prices tab: every item, or one skill's. (Kept under a name of its own since
     // v2.10.1, when All came in: it opens on All the first time, then on what you
     // last looked at.)
@@ -329,6 +341,22 @@ export function createPlanner(ctx) {
     const placed = new Set(mine);
     return [...mine, ...base.filter(s => !placed.has(s))];
   }
+
+  // ── The NPCs tab and Slayer goals (npc-ui.js) ───────────────────────────
+  // Made the first time they're asked for, once everything here is set up.
+  let npcUi = null;
+  const npc = () => npcUi || (npcUi = createNpcUi({
+    esc, fmt, gpShort, xpText, iconImg, itemIcon, itemName, marketLink, priceTip, prices, S, $,
+    parseAmount, searchTerms, searchHit, entered, LIKELIER_TWIN, PLAN_LABEL,
+    buryXp: item => BURY_XP[item] || 0,
+    goals, saveGoals, updateGoal, bank, saveBank, currentOf, saveUi,
+    account: () => S.account,
+    renderAccount, renderGoals, showMsg,
+    goTab: tab => ctx.goTab(tab),
+    routeChanged: () => ctx.routeChanged?.(),
+    getReader, pixelsOf,
+    pickFiles: () => pickFiles('loot-file'),
+  }));
 
   // ── Storage per account ─────────────────────────────────────────────────
   const safe = () => (S.account ? toSafeName(S.account) : '');
@@ -733,13 +761,20 @@ export function createPlanner(ctx) {
   // sells as one item (a set of dragonhide armour), or for a skill with no bank
   // (Woodcutting) what it makes. All: every item a skill's tab lists, once each,
   // A to Z (skills share so many that their own lists would repeat each other).
+  // (v3) All: every item once, in a table for the skill it first belongs to,
+  // A to Z: the skills with a bank in the order the data has them (Herblore's
+  // vials stay Herblore's), then the others; Slayer's table is what only
+  // monsters drop. (Up to v2.10 All was one table of every item, A to Z.)
   let everyPriced = null;
   function priceGroups(key) {
     if (key === 'all') {
       if (!everyPriced) {
-        const items = new Set(PRICE_TABS.flatMap(k => priceGroups(k).flatMap(g => priceItems(g.items))));
+        const first = [...Object.keys(BANK_GROUPS).filter(k => k !== SLAYER.key && PRICE_TABS.includes(k)), ...PRICE_TABS.filter(k => !BANK_GROUPS[k]), ...(PRICE_TABS.includes(SLAYER.key) ? [SLAYER.key] : [])];
+        const home = new Map();
+        for (const k of first) for (const g of priceGroups(k)) for (const slug of priceItems(g.items)) if (!home.has(slug)) home.set(slug, k);
         const name = slug => ITEMS[slug].name;
-        everyPriced = [{ name: 'Every item', items: [...items].sort((a, b) => name(a).localeCompare(name(b), 'en', { numeric: true, sensitivity: 'base' }) || (a < b ? -1 : 1)) }];
+        const az = list => list.sort((a, b) => name(a).localeCompare(name(b), 'en', { numeric: true, sensitivity: 'base' }) || (a < b ? -1 : 1));
+        everyPriced = PRICE_TABS.map(k => ({ name: skillOf(k).name, key: k, items: az([...home].filter(([, h]) => h === k).map(([slug]) => slug)) })).filter(g => g.items.length);
       }
       return everyPriced;
     }
@@ -879,7 +914,7 @@ export function createPlanner(ctx) {
     // A goal set before your XP had loaded starts counting from the first XP seen
     // (a Combat level goal: from the combat level as it was then).
     const real = combatReal();
-    const unset = g => (isCombatGoal(g) ? g.startCb == null && !!real : g.startXp10 == null && !!currentOf(g.skill));
+    const unset = g => (isCombatGoal(g) ? g.startCb == null && !!real : !isSlayerGoal(g) && g.startXp10 == null && !!currentOf(g.skill));
     if (S.profile && list.some(unset)) {
       for (const g of list) {
         if (!unset(g)) continue;
@@ -890,6 +925,7 @@ export function createPlanner(ctx) {
     // Filter: by status and/or one skill. The order is yours (move goals up and down).
     const done = g => {
       if (isCombatGoal(g)) return !!real && real.min >= g.value;
+      if (isSlayerGoal(g)) return npc().reached(g);              // (its kills done)
       const cur = currentOf(g.skill);
       const t = cur && targetOf(g, cur);
       return !!(t && !t.pending && (t.reached || t.xp10 <= cur.xp10));
@@ -907,7 +943,7 @@ export function createPlanner(ctx) {
     const sBtn = (k, label) => `<button type="button" class="${S.show === k ? 'on' : ''}" data-gshow="${k}">${label} <span class="c-faint">${count(k)}</span></button>`;
     const anyOpen = shown.some(g => S.open.has(g.id) && hasPlan(g));
     // (the tables of the plans that are open: all hidden or shown at once)
-    const tablesOpen = shown.filter(g => S.open.has(g.id) && hasCalculator(g.skill));
+    const tablesOpen = shown.filter(g => S.open.has(g.id) && (hasCalculator(g.skill) || isSlayerGoal(g)));
     const tablesOn = tablesOpen.some(g => !S.tableOff.has(g.id));
     // (Hide all plans and Hide all tables: on a line of their own under the filter, side by side)
     const links = [
@@ -918,7 +954,7 @@ export function createPlanner(ctx) {
         <span class="c-muted small-note">Show</span>
         <div class="seg" role="group" aria-label="Show goals">${sBtn('all', 'All')}${sBtn('active', 'In progress')}${sBtn('done', 'Reached')}</div>
         ${skills.length > 1 ? `<div class="skill-picker mini" role="group" aria-label="Only one skill">${skills.map(k => {
-          const sk = k === COMBAT_PICK ? combatCard.icon : SKILL_BY_KEY.get(k);
+          const sk = k === COMBAT_PICK ? combatCard.icon : skillOf(k);
           const on = S.only === k;
           // (a combat skill's goals come with your Combat level goal)
           const too = COMBAT_KEYS.includes(k) && skills.includes(COMBAT_PICK) ? ', with your Combat level goal' : '';
@@ -928,7 +964,7 @@ export function createPlanner(ctx) {
     // (a "Remove?" waiting for its second click stays that way through a redraw)
     const armed = box.querySelector('[data-act="remove-goal"][data-armed]')?.closest('[data-goal]')?.dataset.goal;
     box.innerHTML = title + bar + (shown.length
-      ? shown.map((g, i) => (isCombatGoal(g) ? combatGoalCard : goalCard)(g, i === 0, i === shown.length - 1)).join('')
+      ? shown.map((g, i) => (isCombatGoal(g) ? combatGoalCard : isSlayerGoal(g) ? npc().goalCard : goalCard)(g, i === 0, i === shown.length - 1)).join('')
       : `<div class="empty">No goals match. <button type="button" class="linkish" data-act="show-all-goals">Show all goals</button></div>`);
     const again = armed && [...box.querySelectorAll('[data-goal]')].find(c => c.dataset.goal === armed)?.querySelector('[data-act="remove-goal"]');
     if (again) arm(again);
@@ -969,11 +1005,13 @@ export function createPlanner(ctx) {
     const pick = (key, name, icon) => `<button type="button" class="skill-btn${key === g.skill ? ' on' : ''}" data-nskill="${key}" title="${esc(name)}" aria-label="${esc(name)}" aria-pressed="${key === g.skill}">${icon}</button>`;
     // Combat level first, before Attack, then the skills in the hiscores' order.
     // (under a title: these buttons set a goal; the ones under "Your goals" are for the goals you've set)
+    // (Slayer in its hiscores place, after Thieving: the home of monster plans until the skill comes)
     const picker = `<h4 class="row-title">Set a goal <span class="c-faint small-note">Pick a skill or your combat level, then what to reach. Each goal gets its own Plan (Calculator).</span></h4>
-      <div class="skill-picker">${pick(COMBAT_PICK, 'Combat level', iconImg(combatCard.icon))}${SKILL_IDS.map(id => {
-      const s = SKILLS.find(x => x.id === id);
-      return pick(s.key, s.name, iconImg(s));
+      <div class="skill-picker">${pick(COMBAT_PICK, 'Combat level', iconImg(combatCard.icon))}${[...SKILL_IDS, SLAYER.id].sort((a, b) => a - b).map(id => {
+      const s = id === SLAYER.id ? SLAYER : SKILLS.find(x => x.id === id);
+      return pick(s.key, id === SLAYER.id ? 'Slayer: a plan of kills, their XP and loot' : s.name, iconImg(s));
     }).join('')}</div>`;
+    if (g.skill === SLAYER.key) { el.innerHTML = npc().newGoalHtml(picker); return; }
     // (Combat level: a level to reach, the only kind of goal it has)
     if (g.skill === COMBAT_PICK) {
       const c = combatNow();
@@ -1465,7 +1503,7 @@ export function createPlanner(ctx) {
       const lock = st.locked ? ` <span class="c-lose small-note" title="Made in level order, you'd only be level ${st.levelAt} when you get to these">needs level ${m.level}</span>` : '';
       const subs = subsOf(ix, st.sub, st);
       return `<div class="step">${methodIcon(m)}<div class="step-main">
-          <div>${actionText(m, st.runs, st.made)} <span class="c-level">+${xpText(st.xp10)} XP</span>${priced ? ` <span class="c-faint">·</span> net ${gp(st.gain)} gp` : ''}${lock}</div>
+          <div>${actionText(m, st.runs, st.made)} <span class="c-level">+${xpText(st.xp10)} XP</span>${priced ? ` <span class="c-faint">·</span> net ${gp(st.gain)} gp` : ''}${lock}${textFor(goal.skill).kills ? npc().planLootButton(goal, st.id, st.runs) : ''}</div>
           ${subs.length ? `<div class="c-faint small-note">incl. ${subs.join(', ')}</div>` : ''}
         </div></div>`;
     }).join('');
@@ -1505,7 +1543,7 @@ export function createPlanner(ctx) {
       const lead = f.segments.length > 1 ? (i === 0 ? 'First ' : 'Then ') : '';
       // (your own bars, made on the way: their XP is part of the stretch's)
       const subs = subsOf(ix, s.sub, s);
-      return `<div class="step">${methodIcon(m)}<div class="step-main"><div>${lead}${actionText(m, s.runs, s.made)} <span class="c-level">+${xpText(s.xp10)} XP</span>${s.bridge && s.toLevel ? ` <span class="c-faint">to reach level ${s.toLevel}</span>` : ''}</div>
+      return `<div class="step">${methodIcon(m)}<div class="step-main"><div>${lead}${actionText(m, s.runs, s.made)} <span class="c-level">+${xpText(s.xp10)} XP</span>${s.bridge && s.toLevel ? ` <span class="c-faint">to reach level ${s.toLevel}</span>` : ''}${kills ? npc().planLootButton(goal, s.id, s.runs) : ''}</div>
         ${subs.length ? `<div class="c-faint small-note">incl. ${subs.join(', ')}</div>` : ''}</div></div>`;
     }).join('');
     // Money: buying what's missing, and what the made items are worth.
@@ -1883,7 +1921,7 @@ export function createPlanner(ctx) {
     const worth = k => (values?.[k] ? ` <span class="sw-v">${gpShort(values[k])}</span>` : '');
     const tab = (k, label) => `<button type="button" class="tab skill-tab${k === 'all' ? ' all-tab' : ''}${k === current ? ' active' : ''}" data-bskill="${k}" aria-pressed="${k === current}">${label}${worth(k)}</button>`;
     return `<div class="skill-switch" role="group" aria-label="Skill">${all ? tab('all', 'All') : ''}${keys.map(k => {
-      const sk = SKILL_BY_KEY.get(k);
+      const sk = skillOf(k);
       return tab(k, `${iconImg(sk)} ${esc(sk.name)}`);
     }).join('')}</div>`;
   }
@@ -1915,7 +1953,10 @@ export function createPlanner(ctx) {
   // does), it opens in the folder you last picked from, which is remembered in
   // IndexedDB; the first time, in Pictures, where LostKit Screenshots is. Pages
   // can't name a folder themselves. Elsewhere it's the plain file button.
-  async function pickScreenshots() {
+  // (the files picked; 'input' when it's the plain file button, whose change
+  // event reads them; null when none were picked. Loot for a Slayer goal is
+  // picked the same way, with a file button of its own.)
+  async function pickFiles(inputId) {
     if (typeof window.showOpenFilePicker === 'function') {
       const last = await idb.get('shotsFile');
       try {
@@ -1923,16 +1964,20 @@ export function createPlanner(ctx) {
           id: 'lostkit-screenshots', multiple: true, startIn: last || 'pictures',
           types: [{ description: 'Screenshots', accept: { 'image/png': ['.png'] } }],
         });
-        if (!handles.length) return;
+        if (!handles.length) return null;
         idb.set('shotsFile', handles[0]);
-        readShots(await Promise.all(handles.map(h => h.getFile())));
-        return;
+        return await Promise.all(handles.map(h => h.getFile()));
       } catch (e) {
-        if (e?.name === 'AbortError') return;          // closed without picking
+        if (e?.name === 'AbortError') return null;     // closed without picking
         if (last) idb.set('shotsFile', null);           // forget a folder that's gone
       }
     }
-    $('shots-file')?.click();
+    $(inputId)?.click();
+    return 'input';
+  }
+  async function pickScreenshots() {
+    const files = await pickFiles('shots-file');
+    if (Array.isArray(files) && files.length) readShots(files);
   }
 
   // files: screenshots (File or Blob). Results wait in S.shots for you to apply.
@@ -2128,22 +2173,30 @@ export function createPlanner(ctx) {
       const b = bank();
       const have = bankSubset(b.items, 'all');
       const worth = slug => { const p = prices.gp(slug); return p == null ? -1 : p * have[slug]; };
-      const byValue = S.allSort === 'value';
+      const byValue = S.allSort === 'value', bySkill = S.allSort === 'skill';
       const list = byValue
         ? Object.keys(have).sort((x, y) => worth(y) - worth(x) || itemName(x).localeCompare(itemName(y)))
         : allOrder(b, Object.keys(have));
       const own = Array.isArray(b.order), inGame = list.some(slug => b.slots?.[slug] != null);
-      const note = byValue ? 'Drag an item to make this your own order.'
+      const note = bySkill ? 'Each item once, under the skill it first belongs to; Slayer has what only monsters drop.'
+        : byValue ? 'Drag an item to make this your own order.'
         : own ? 'Your own order. Drag items to move them.'
         : inGame ? 'In the order they have in your bank, from your screenshots. Drag items to move them.'
         : 'Drag items to move them. Reading your bank from screenshots puts them in the order they have in-game.';
       const oBtn = (k, label) => `<button type="button" class="${S.allSort === k ? 'on' : ''}" data-allsort="${k}" aria-pressed="${S.allSort === k}">${label}</button>`;
-      const reset = own && !byValue ? `<button type="button" class="linkish" data-act="bank-order-reset">${inGame ? 'Back to your bank\'s order' : 'Reset order'}</button>` : '';
+      const reset = own && !byValue && !bySkill ? `<button type="button" class="linkish" data-act="bank-order-reset">${inGame ? 'Back to your bank\'s order' : 'Reset order'}</button>` : '';
+      // By skill: a section a skill, in the tabs' order, the items as its tab lists them
+      const sections = !bySkill ? '' : [...BANK_TABS, null].map(k => {
+        const mine = list.filter(slug => (ORIGIN.get(slug) ?? null) === k).sort((x, y) => (SKILL_ORDER.get(x) ?? Infinity) - (SKILL_ORDER.get(y) ?? Infinity));
+        if (!mine.length) return '';
+        const sk = k && skillOf(k);
+        return `<div class="bank-sec"><h5>${sk ? `${iconImg(sk)} ${esc(sk.name)}` : 'Other'}</h5><div class="bank-grid">${mine.map(bankCell).join('')}</div></div>`;
+      }).join('');
       body.innerHTML = list.length
         ? `<div class="card bank-group"><div class="bank-all-head"><h4>Everything you have</h4>
-            <div class="seg" role="group" aria-label="Order">${oBtn('yours', 'Your order')}${oBtn('value', 'Most valuable')}</div>
+            <div class="seg" role="group" aria-label="Order">${oBtn('yours', 'Your order')}${oBtn('value', 'Most valuable')}${oBtn('skill', 'By skill')}</div>
             <span class="c-faint small-note">${note}</span>${reset}</div>
-            <div class="bank-grid movable" id="bank-all-grid">${list.map(bankCell).join('')}</div></div>`
+            ${bySkill ? sections : `<div class="bank-grid movable" id="bank-all-grid">${list.map(bankCell).join('')}</div>`}</div>`
         : `<div class="empty">Nothing in your bank yet. Read it from screenshots above, or pick a skill to type in what you have.</div>`;
     } else {
       const groups = BANK_GROUPS[S.bankView] || [];
@@ -2164,7 +2217,7 @@ export function createPlanner(ctx) {
       const v = bankValue(bankSubset(b.items, k), prices.priceOf).total;
       if (v > 0) values[k] = v;
     }
-    const skillName = view === 'all' ? '' : SKILL_BY_KEY.get(view).name;
+    const skillName = view === 'all' ? '' : skillOf(view).name;
     const hint = {
       all: 'Showing everything you have. Pick a skill to see just its items and their value, and to type in ones you don\'t have yet. Items used by two skills (logs) count toward both.',
       herblore: 'Unid herbs are one entry: every "Herb" in your bank, whatever it turns out to be.',
@@ -2173,6 +2226,7 @@ export function createPlanner(ctx) {
       fletching: 'Unstrung bows are marked (u); in-game they have the same name as the strung bow. Feathers count for both arrows and darts.',
       cooking: 'Raw fish and meat cook into food; a pie, a pizza, a cake, a stew or a wine is put together first, and anything on the way counts (flour and water, dough, a pie shell). Burnt food is counted on a Cooking goal, where you also say what you cook on. Dough takes a bucket of water here; in the game a jug does too. Cooked meat and anchovies are food and a filling or topping: one entry each. Your raw fish are the ones Fishing catches (it\'s one bank).',
       magic: 'A Magic goal casts your runes as the best teleport and combat spell they allow. Jewellery and orbs can be entered as what they\'re made of (gold bars, gems, molten glass): a goal makes them on the way, where your Crafting level allows. Those are shared with Crafting, and ore with Smithing (it\'s one bank).',
+      slayer: 'Everything a monster drops, by kind: a Slayer goal\'s "Add to my bank" puts what you got here. Items a skill uses too (herbs, ore, bars, bones, runes) are on that skill\'s tab as well: it\'s one bank. All, by skill, has each item once, under the skill it first belongs to.',
       crafting: 'Hides are tanned before they\'re worked: type in hides or leather, and both are used. The tanner\'s fee is counted (pick the tanner on a Crafting goal). Key halves and crystal keys count as the uncut dragonstone the crystal chest always gives (its other loot is luck, and isn\'t counted). Dragonhide\'s colour is added in brackets, the two key halves are told apart as tooth and loop, and unstrung amulets are marked (u), since in-game those share a name. Dragonhide sets are priced on the Prices tab: in a bank they\'re their three pieces. Bow strings, vials and runes are shared with other skills (it\'s one bank).',
     }[view] || '';
     $('bank-head').innerHTML = `${skillSwitch(BANK_TABS, view, { all: true, values })}<div class="bank-sum">
@@ -2201,7 +2255,8 @@ export function createPlanner(ctx) {
   // Each item uses the price you pick for it, and keeps it: the market's (the
   // default), high alch, or yours (typing one in picks it). A whole list or
   // skill can be switched at once; that leaves prices you typed in be.
-  function priceItems(list) { return list.filter(s => ITEMS[s] && !ITEMS[s].untradeable); }
+  // (not coins, worth what they are: a Slayer goal's loot has them from v3)
+  function priceItems(list) { return list.filter(s => ITEMS[s] && !ITEMS[s].untradeable && ITEMS[s].gp == null); }
   function renderPrices() {
     const st = prices.status();
     const head = $('prices-head');
@@ -2209,7 +2264,7 @@ export function createPlanner(ctx) {
     const all = S.priceView === 'all';
     const groups = priceGroups(S.priceView);
     // ("Every Herblore item", or on All "Every item")
-    const every = all ? 'item' : `${esc(SKILL_BY_KEY.get(S.priceView).name)} item`;
+    const every = all ? 'item' : `${esc(skillOf(S.priceView).name)} item`;
     head.innerHTML = `${skillSwitch(PRICE_TABS, S.priceView, { all: true })}<div class="card">
       <div class="bar wrap">
         <button type="button" class="btn small" data-act="prices-refresh"${running ? ' disabled' : ''}>Check prices now</button>
@@ -2224,7 +2279,7 @@ export function createPlanner(ctx) {
         Market prices are the median of recent sales on <a href="https://markets.lostcity.rs" target="_blank" rel="noopener">markets.lostcity.rs</a>, otherwise of open offers, and high alch for items nobody trades.
         ${ctx.fullMarket ? '' : 'In a normal browser only open offers can be read; LostKit also sees the sales. '}They're checked one at a time and kept for 12 hours.
         Click an item to open it on the market${ctx.inLostKit ? ' (LostKit\'s ◀ button brings you back here)' : ''}.
-        ${all ? `<b>All</b> is every item the planner prices, ${fmt(groups[0].items.length)} of them, A to Z. Opening it checks nothing (a skill's tab checks its own, and your goals and bank what they use): <b>Check prices now</b> goes through them all, which takes a while; Stop ends it.` : ''}</p>
+        ${all ? `<b>All</b> is every item the planner prices, ${fmt(groups.reduce((n, g) => n + g.items.length, 0))} of them, each once: under the skill it first belongs to, A to Z (Slayer has what only monsters drop). Opening it checks nothing (a skill's tab checks its own, and your goals and bank what they use): <b>Check prices now</b> goes through them all, which takes a while; Stop ends it.` : ''}</p>
     </div>`;
     const allBtn = (use, gi, what) => `<button type="button" class="linkish th-all" data-pall="${use}" data-pgroup="${gi}" title="Use ${what} for every item in this list (prices you typed in stay)">all</button>`;
     $('prices-body').innerHTML = groups.map((g, gi) => `<div class="table-wrap price-wrap"><table class="grid prices-t">
@@ -2258,7 +2313,9 @@ export function createPlanner(ctx) {
   // in is found again afterwards, with its text and caret where they were.
   function fieldKey(el) {
     if (el.dataset?.psrc) return `[data-psrc="${el.dataset.psrc}"][value="${el.value}"]`;
-    for (const a of ['bank', 'price', 'gopt', 'use', 'mix', 'shot', 'search', 'gcalc']) if (el.dataset?.[a]) return `[data-${a}="${el.dataset[a]}"]`;
+    for (const a of ['bank', 'price', 'gopt', 'use', 'mix', 'shot', 'search', 'gcalc', 'got', 'done', 'sopt', 'dryKills', 'dryItem', 'npcSearch', 'npcKills', 'npcStyle', 'npcOpt']) {
+      if (el.dataset?.[a]) return `[data-${a.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}="${el.dataset[a]}"]`;
+    }
     if (el.dataset?.shotAs) return `[data-shot-as="${el.dataset.shotAs}"]`;
     const form = el.closest('[data-form]');
     if (form && el.name) return `[data-form="${form.dataset.form}"] [name="${el.name}"]`;
@@ -2272,6 +2329,7 @@ export function createPlanner(ctx) {
     const goal = key && a.closest('[data-goal]')?.dataset.goal;
     const keep = key && { value: a.value, start: a.selectionStart, end: a.selectionEnd };
     if (tab === 'goals') renderGoals();
+    if (tab === 'npcs') npc().renderNpcs();
     if (tab === 'bank') renderBank();
     if (tab === 'prices') renderPrices();
     if (!keep) return;
@@ -2321,7 +2379,7 @@ export function createPlanner(ctx) {
 
   function show(tab) {
     render(tab);
-    if (S.account && (tab === 'goals' || tab === 'bank')) loadProfile();
+    if (S.account && (tab === 'goals' || tab === 'bank' || tab === 'npcs')) loadProfile();
     // (shows the market's price beside the others. All checks nothing by itself: that's every item there is)
     if (tab === 'prices' && S.priceView !== 'all') wantPrices([S.priceView], { all: true });
   }
@@ -2335,7 +2393,7 @@ export function createPlanner(ctx) {
 
   // ── Events ──────────────────────────────────────────────────────────────
   function wire() {
-    for (const id of ['view-goals', 'view-bank', 'view-prices']) {
+    for (const id of ['view-goals', 'view-npcs', 'view-bank', 'view-prices']) {
       const root = $(id);
       root.addEventListener('submit', onSubmit);
       root.addEventListener('click', onClick);
@@ -2343,7 +2401,7 @@ export function createPlanner(ctx) {
       root.addEventListener('input', onInput);
       // (an amount or a price being typed, for rerender: from its first key until it's entered or left
       // for something else on the page. Another window in front isn't leaving it.)
-      root.addEventListener('input', e => { const d = e.target.dataset; if (d?.mix || d?.price || d?.bank || d?.gcalc) typing = e.target; });
+      root.addEventListener('input', e => { const d = e.target.dataset; if (d?.mix || d?.price || d?.bank || d?.gcalc || d?.got || d?.done || d?.dryKills || d?.npcKills) typing = e.target; });
       root.addEventListener('change', e => { if (e.target === typing) typing = null; }, true);
       root.addEventListener('focusout', e => { if (e.target === typing && document.hasFocus()) typing = null; });
     }
@@ -2352,6 +2410,9 @@ export function createPlanner(ctx) {
     // left the files you then picked with a button that was no longer there.
     $('view-bank').appendChild(Object.assign(document.createElement('input'),
       { type: 'file', id: 'shots-file', accept: 'image/png,image/*', multiple: true, hidden: true }));
+    // (and a Slayer goal's loot)
+    $('view-goals').appendChild(Object.assign(document.createElement('input'),
+      { type: 'file', id: 'loot-file', accept: 'image/png,image/*', multiple: true, hidden: true }));
     bankDrag = sortable({
       root: $('view-bank'),
       item: '#bank-all-grid .bank-cell',
@@ -2382,19 +2443,31 @@ export function createPlanner(ctx) {
     // on the page is ignored rather than opened in place of the tool.
     const onBank = () => S.tab === 'bank' && !$('view-bank')?.hidden && S.account;
     const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+    // (a Slayer goal's card on the Goals tab takes screenshots of loot)
+    const lootCard = e => (S.tab === 'goals' && !$('view-goals')?.hidden ? e.target.closest?.('.slayer-goal') : null);
     document.addEventListener('dragover', e => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       const zone = onBank() && e.target.closest?.('#view-bank');
-      e.dataTransfer.dropEffect = zone ? 'copy' : 'none';
+      const card = lootCard(e);
+      e.dataTransfer.dropEffect = zone || card ? 'copy' : 'none';
       $('bank-shots')?.firstElementChild?.classList.toggle('drag', !!zone);
+      for (const c of document.querySelectorAll('.slayer-goal.drag')) if (c !== card) c.classList.remove('drag');
+      card?.classList.add('drag');
     });
-    document.addEventListener('dragleave', e => { if (!e.relatedTarget) $('bank-shots')?.firstElementChild?.classList.remove('drag'); });
+    document.addEventListener('dragleave', e => {
+      if (e.relatedTarget) return;
+      $('bank-shots')?.firstElementChild?.classList.remove('drag');
+      for (const c of document.querySelectorAll('.slayer-goal.drag')) c.classList.remove('drag');
+    });
     document.addEventListener('drop', e => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       $('bank-shots')?.firstElementChild?.classList.remove('drag');
+      for (const c of document.querySelectorAll('.slayer-goal.drag')) c.classList.remove('drag');
       if (onBank() && e.target.closest?.('#view-bank')) readShots(e.dataTransfer.files);
+      const card = lootCard(e);
+      if (card) npc().readLoot(card.dataset.goal, e.dataTransfer.files);
     });
     document.addEventListener('paste', e => {
       if (!onBank() || e.target.closest?.('input, textarea')) return;
@@ -2408,12 +2481,26 @@ export function createPlanner(ctx) {
     if (!form) return;
     e.preventDefault();
     if (form.dataset.form === 'account') { if (setAccount(form.account.value)) render(S.tab); }
-    if (form.dataset.form === 'goal') addGoal(form.value.value);
-    if (form.dataset.form === 'edit-goal') saveGoalEdit(form.closest('[data-goal]')?.dataset.goal, form.value.value);
+    if (form.dataset.form === 'goal') {
+      // (Slayer: a monster and its kills)
+      if (S.newGoal.skill === SLAYER.key) {
+        const r = npc().addFromForm(form);
+        if (r.problem) showMsg('goals-msg', r.problem, 'error');
+        else { showMsg('goals-msg', ''); renderGoals(); }
+      } else addGoal(form.value.value);
+    }
+    if (form.dataset.form === 'edit-goal') {
+      const id = form.closest('[data-goal]')?.dataset.goal;
+      const goal = goals().find(g => g.id === id);
+      if (isSlayerGoal(goal)) { npc().saveEdit(goal, form); renderGoals(); } else saveGoalEdit(id, form.value.value);
+    }
+    npc().onSubmit(form);
   }
 
   function onClick(e) {
     const t = e.target;
+    // (the NPCs tab, and a Slayer goal's own buttons)
+    if (npc().onClick(e, t.closest('[data-act]'))) return;
     const nskill = t.closest('[data-nskill]');
     if (nskill) { S.newGoal.skill = nskill.dataset.nskill; saveUi(); showMsg('goals-msg', ''); renderNewGoal(); return; }
     const ntype = t.closest('[data-ntype]');
@@ -2428,7 +2515,7 @@ export function createPlanner(ctx) {
       return;
     }
     const allsort = t.closest('[data-allsort]');
-    if (allsort) { S.allSort = allsort.dataset.allsort === 'value' ? 'value' : 'yours'; saveUi(); renderBank(); return; }
+    if (allsort) { S.allSort = ['value', 'skill'].includes(allsort.dataset.allsort) ? allsort.dataset.allsort : 'yours'; saveUi(); renderBank(); return; }
     const pall = t.closest('[data-pall]');
     if (pall) {
       const groups = priceGroups(S.priceView);
@@ -2569,6 +2656,8 @@ export function createPlanner(ctx) {
   function onChange(e) {
     const t = e.target;
     if (t.id === 'shots-file') { if (t.files?.length) readShots(t.files); t.value = ''; return; }      // (emptied: the same file can be picked again)
+    if (t.id === 'loot-file') { if (t.files?.length) npc().onLootFiles(t.files); t.value = ''; return; }
+    if (npc().onChange(e)) return;
     // The screenshot review: what's ticked, and which look-alike a line is.
     if (S.shots?.rows) {
       if (t.id === 'shots-clear') { S.shots.clear = t.checked; return; }
@@ -2666,6 +2755,7 @@ export function createPlanner(ctx) {
   // Live value next to a bank amount while typing.
   function onInput(e) {
     const t = e.target;
+    if (npc().onInput(e)) return;
     // (what's typed into a goal being changed survives a redraw)
     if (S.editing && t.name === 'value' && t.closest('[data-form="edit-goal"]')) { S.editing.draft = t.value; return; }
     if (t.dataset.search) {
@@ -2749,5 +2839,8 @@ export function createPlanner(ctx) {
     get account() { return S.account; },
     setAccount,
     reset() { S.account = null; S.profile = null; S.open.clear(); },
+    // (the NPCs tab's address: #npcs, or #npcs/<monster>)
+    get npcOpen() { return npc().open; },
+    openNpc(id) { npc().showNpc(id); },
   };
 }

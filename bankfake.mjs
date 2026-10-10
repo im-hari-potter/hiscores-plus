@@ -58,6 +58,43 @@ export function fakeBank({ items, scroll = 0, width = 765, height = 503, viewX =
   return img;
 }
 
+// A pretend screenshot with things in the inventory (and the bank open too, with
+// bank: [...] as fakeBank's items). items: [{ slot (0 to 27), icon, count, stack }].
+// x, y: where the first slot is (the game canvas has it at 569, 213).
+export function fakeInventory({ items, bank = null, width = 765, height = 503, x = 569, y = 213, brightness = 1 }) {
+  const img = bank ? fakeBank({ items: bank, width, height, brightness }) : { width, height, data: Buffer.alloc(width * height * 4) };
+  const set = (px, py, c) => {
+    if (px < 0 || py < 0 || px >= width || py >= height) return;
+    const p = (py * width + px) * 4;
+    img.data[p] = c >> 16; img.data[p + 1] = (c >> 8) & 255; img.data[p + 2] = c & 255; img.data[p + 3] = 255;
+  };
+  // the side panel's stone, a little uneven (and the rest of the canvas, when there's no bank)
+  if (!bank) for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) set(px, py, (px * 3 + py) % 11 ? 0x3e3529 : 0x4a4035);
+  for (let py = y - 8; py < y + 6 * 36 + 32 + 8; py++) for (let px = x - 16; px < x + 3 * 42 + 32 + 16; px++) set(px, py, (px + 2 * py) % 9 ? 0x3e3529 : 0x2f281f);
+  const curve = c => (brightness === 1 ? c : Math.round(256 * Math.pow(c / 256, brightness)));
+  for (const it of items) {
+    const n = BANK_ICONS.findIndex(e => e.slug === it.icon);
+    if (n < 0) throw new Error(`no icon ${it.icon}`);
+    const sx = x + (it.slot % 4) * 42, sy = y + Math.floor(it.slot / 4) * 36;
+    const ox = (n % BANK_ICONS_PER_ROW) * 32, oy = Math.floor(n / BANK_ICONS_PER_ROW) * 32;
+    for (let j = 0; j < 32; j++) {
+      for (let i = 0; i < 32; i++) {
+        const p = ((oy + j) * atlas.width + ox + i) * 4;
+        if (!atlas.data[p + 3]) continue;
+        let c = (atlas.data[p] << 16) | (atlas.data[p + 1] << 8) | atlas.data[p + 2];
+        if (c !== 1 && c !== 0x302020) c = (curve(c >> 16) << 16) | (curve((c >> 8) & 255) << 8) | curve(c & 255);
+        set(sx + i, sy + j, c);
+      }
+    }
+    if (it.count !== 1 || it.stack) {
+      const text = it.count < 100000 ? String(it.count) : it.count < 10000000 ? Math.floor(it.count / 1000) + 'K' : Math.floor(it.count / 1000000) + 'M';
+      drawString(text, sx + 1, sy + 10, 0x000000, set, null);
+      drawString(text, sx, sy + 9, 0xffff00, set, null);
+    }
+  }
+  return img;
+}
+
 function drawString(text, x, y, colour, set, clip) {
   y -= STACK_FONT.height;
   for (const ch of text) {

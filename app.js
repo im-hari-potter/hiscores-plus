@@ -1,8 +1,9 @@
-// Skills+ (formerly Hiscores+) — the page. Views: Lookup, Compare, Gains, Leaderboard,
-// and the planner: Goals, Bank, Prices (planner-ui.js).
+// Planner+ (formerly Skills+, and before that Hiscores+) — the page. Views:
+// Lookup, Compare, Gains, Leaderboard, and the planner: Goals, NPCs, Bank,
+// Prices (planner-ui.js; the NPCs tab and Slayer goals are npc-ui.js's).
 
 import {
-  SKILLS, SKILL_BY_ID, SKILL_IDS, COMBAT_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL,
+  SKILLS, SKILL_BY_ID, SKILL_IDS, COMBAT_IDS, COMBAT_KEYS, MIN_RANKED_LEVEL, MAX_LEVEL, SLAYER,
   levelProgress, combatFromProfile, combatBreakdown, combatNeeds, combatLevel, boundUnrankedLevels,
 } from './skills.js';
 import { HiscoresApi, LIVE_API, isElectron, toSafeName, toDisplayName, checkName } from './api.js';
@@ -13,7 +14,7 @@ import { Prices, LIVE_MARKET } from './prices.js';
 import { createPlanner } from './planner-ui.js';
 import { sortable } from './sortable.js';
 
-const VERSION = '2.10.5';
+const VERSION = '3.0.0';
 const MAX_COMPARE = 5;
 
 // How to reach the API:
@@ -34,8 +35,8 @@ const prices = new Prices(LOCAL
   ? { origin: new URL('market', location.href).href, routes: ['page', 'api'], gapMs: 50 }
   : { origin: LIVE_MARKET, routes: isElectron() ? ['page', 'api'] : ['api'] });
 if (LOCAL) window.__skills = { prices };                   // for the test scripts
-const TABS = ['lookup', 'compare', 'gains', 'leaders', 'goals', 'bank', 'prices'];
-const PLAN_TABS = ['goals', 'bank', 'prices'];
+const TABS = ['lookup', 'compare', 'gains', 'leaders', 'goals', 'npcs', 'bank', 'prices'];
+const PLAN_TABS = ['goals', 'npcs', 'bank', 'prices'];
 
 // ── State ────────────────────────────────────────────────────────────────
 const prefs = store.get('prefs', {});
@@ -103,7 +104,7 @@ const iconImg = (skill, cls = '') => `<span class="ico ico-${skill.icon} ${cls}"
 // Crossed swords for the combat level (its own icon, not the Attack sword).
 const COMBAT = { name: 'Combat level', icon: 'combat' };
 // Keep every icon decoded in memory, so views that re-render don't flicker.
-const ICON_CACHE = [...SKILLS, COMBAT].map(s => Object.assign(new Image(), { src: iconSrc(s), decoding: 'sync' }));
+const ICON_CACHE = [...SKILLS, COMBAT, SLAYER].map(s => Object.assign(new Image(), { src: iconSrc(s), decoding: 'sync' }));
 const visibleIds = (withOverall = true) => (state.filter === 'combat' ? COMBAT_IDS : withOverall ? [0, ...SKILL_IDS] : SKILL_IDS);
 
 function ago(t) {
@@ -194,6 +195,8 @@ const planner = createPlanner({
   onProfile: profile => { snapshots.add(profile); players.pushRecent(profile.name); },
   onChange: () => { if (state.tab === 'lookup') renderTiles(); },
   goTab: tab => setTab(tab),
+  // (the NPCs tab opened a monster, or went back to the list: the address says which)
+  routeChanged: () => updateHash(),
 });
 
 // ── Rendering: shared bits ───────────────────────────────────────────────
@@ -1082,6 +1085,7 @@ function updateHash() {
   else if (state.tab === 'compare' && state.compare.names.length) h = `compare/${state.compare.names.map(toSafeName).join(',')}`;
   else if (state.tab === 'gains' && state.gains.player) h = `gains/${toSafeName(state.gains.player)}`;
   else if (state.tab === 'leaders') h = `leaders/${state.leaders.type}/${state.leaders.page}`;
+  else if (state.tab === 'npcs' && planner.npcOpen) h = `npcs/${planner.npcOpen}`;
   else h = state.tab;                                         // goals, bank, prices and empty views
   const want = '#' + h;
   if (location.hash !== want) history.replaceState(null, '', want);
@@ -1102,6 +1106,8 @@ function applyHash() {
     if (Number(b) > 0) state.leaders.page = Math.floor(Number(b));
     return true;
   }
+  // (#npcs/<monster>: that monster's page; #npcs: the list)
+  if (tab === 'npcs') { state.tab = 'npcs'; planner.openNpc(a || null); return true; }
   if (TABS.includes(tab)) { state.tab = tab; return true; }
   return false;
 }
@@ -1306,7 +1312,7 @@ function wire() {
     const blob = new Blob([exportBackup()], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `skills-plus-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `planner-plus-backup-${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   });

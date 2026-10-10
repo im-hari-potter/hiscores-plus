@@ -128,7 +128,8 @@ const paged = (data, name = 'page') => ({ data, links: [], meta: { current_page:
 function marketRoute(req, url, res) {
   counters.market++;
   const json = (status, body, headers = {}) => send(res, status, JSON.stringify(body), { 'Content-Type': 'application/json', ...headers });
-  const path = url.pathname.replace(/^\/market/, '');
+  // (decoded: a slug can hold a '+', sent as %2B, like the Blamish snail shells' 'shellround_red+black')
+  const path = (() => { try { return decodeURIComponent(url.pathname.replace(/^\/market/, '')); } catch { return ''; } })();
   if (path === '/api/items') {
     const q = (url.searchParams.get('q') || '').toLowerCase();
     if (!q) return json(200, []);
@@ -143,7 +144,7 @@ function marketRoute(req, url, res) {
     const side = url.searchParams.get('type') === 'sell' ? 'sell' : 'buy';
     return json(200, paged(marketListings(it.slug)[side]));
   }
-  m = path.match(/^\/items\/([a-z0-9_]+)$/);
+  m = path.match(/^\/items\/([a-z0-9_+]+)$/);
   if (m) {
     const it = marketBySlug.get(m[1]);
     const inertia = req.headers['x-inertia'] === 'true';

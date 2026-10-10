@@ -1,4 +1,4 @@
-/* Skills+ (formerly Hiscores+) — styled to sit next to LostKit's own panels. */
+/* Planner+ (formerly Skills+ and Hiscores+) — styled to sit next to LostKit's own panels. */
 
 @font-face { font-family: 'RS-Bold'; src: url('RuneScape-Bold-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
 @font-face { font-family: 'RS-Plain'; src: url('RuneScape-Plain-12.otf') format('opentype'); font-weight: normal; font-style: normal; }
@@ -303,6 +303,8 @@ form.inline { display: inline-flex; gap: 4px; }
 .ico-thieving { background-image: url('thieving.webp'); }
 .ico-runecraft { background-image: url('runecraft.webp'); }
 .ico-combat { background-image: url('combat.webp'); }
+/* Slayer: Planner+'s own skull (the skill isn't in this version of the game yet) */
+.ico-slayer { background-image: url('slayer.webp'); }
 .tile .ico { margin-bottom: 1px; }
 .tile .v { white-space: nowrap; }
 .tile .top-line { color: var(--top); white-space: normal; }
@@ -707,3 +709,49 @@ a.it-chip.mk:hover b { text-decoration: underline; }
 @media (min-width: 600px) { .shot-row.twin { grid-column: span 2; } }
 .skill-tab .sw-v { font-family: var(--small); font-size: 12px; color: var(--gold-hi); font-weight: normal; }
 .skill-tab.all-tab { padding-left: 10px; }
+
+/* ── NPCs: the monster database, and Slayer goals (v3) ─────────────────── */
+.npc-db .note { margin: 2px 0 8px; }
+table.npc-t td, table.npc-t th { padding: 3px 6px; }
+table.npc-t tbody tr[data-npc] { cursor: pointer; }
+table.npc-t tr.grp td { background: #241e10 !important; color: var(--gold-hi); font-size: 13px; text-align: left; padding: 3px 8px; }
+table.npc-t .catch { color: var(--gold-hi); cursor: help; }
+table.npc-t .npc-name { color: var(--text); text-align: left; }
+table.npc-t .npc-name:hover { color: #fff; }
+table.npc-t td.npc-best { white-space: nowrap; }
+table.npc-t td.npc-best .item.sm { margin-right: 2px; }
+.npc-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 4px; }
+.npc-head h3 { margin: 0; font-weight: normal; font-size: 19px; color: #fff; }
+.npc-head h3 .c-faint { font-size: 15px; }
+/* a monster's numbers: its six stats, then how it fights */
+.nf { margin: 4px 0 2px; }
+.nf-stats { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 3px; }
+.nf-stat { display: inline-flex; align-items: center; gap: 4px; }
+.nf-stat .ico { width: 22px; height: 22px; }
+.nf-stat b { color: #fff; font-weight: normal; }
+.nf-examine { font-style: italic; margin-top: 2px; }
+table.xp-t { width: auto; }
+table.xp-t td { padding: 3px 10px 3px 6px; }
+table.loot-t td, table.loot-t th { padding: 3px 6px; }
+table.loot-t .sep-l { border-left: 1px solid #000; }
+table.loot-t td.got { white-space: nowrap; }
+.got-box { display: inline-flex; align-items: center; gap: 2px; }
+.got-box .input.num { width: 72px; text-align: right; }
+.got-box .mv { width: 20px; height: 22px; }
+.kills-bar .got-box .input.num { width: 96px; }
+.slayer-plan .nf { padding: 4px 0 6px; border-bottom: 1px solid var(--line); }
+.slayer-goal .plan-loot { margin-left: 6px; }
+.step .plan-loot { margin-left: 6px; }
+.slayer-goal.drag { border-color: var(--gold-hi); box-shadow: inset 0 0 0 400px rgba(240, 196, 25, 0.05); }
+.loot-shots { margin-top: 8px; }
+.dry .input.num { width: 96px; }
+.dry-out { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; font-size: 14px; color: var(--text); }
+.npc-in { width: 250px; max-width: 100%; }
+/* the bank's All view by skill: a section a skill */
+.bank-sec { margin-top: 8px; }
+.bank-sec:first-of-type { margin-top: 2px; }
+.bank-sec h5 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-weight: normal; font-size: 14px; color: var(--muted); }
+.bank-sec h5 .ico { width: 22px; height: 22px; }
+/* (narrow windows: a list of drops or styles never makes the page wider) */
+.slayer-plan select, .npc-db select, .npc-page select { max-width: 100%; min-width: 0; }
+.dry-out { overflow-wrap: anywhere; }

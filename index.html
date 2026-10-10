@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; connect-src 'self' https://2004.lostcity.rs https://markets.lostcity.rs; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; base-uri 'self'; form-action 'none'; object-src 'none'">
-  <title>Skills+</title>
-  <meta name="description" content="Lost City (2004scape) hiscores with percentiles, compare, gains and leaderboards, plus goals with skill calculators, your bank and live market prices. Built to run as a LostKit tool.">
+  <title>Planner+</title>
+  <meta name="description" content="Lost City (2004scape) planner: goals with skill calculators, an NPC database with drop tables and loot planning, your bank and live market prices, plus hiscores with percentiles, compare, gains and leaderboards. Built to run as a LostKit tool.">
   <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
@@ -14,7 +14,7 @@
 <body>
   <div id="app">
     <header class="top">
-      <div class="brand"><img src="favicon.png" alt="" width="20" height="20"><span>Skills+</span></div>
+      <div class="brand"><img src="favicon.png" alt="" width="20" height="20"><span>Planner+</span></div>
       <nav class="tabs" aria-label="Views">
         <button class="tab" data-tab="lookup" type="button">Lookup</button>
         <button class="tab" data-tab="compare" type="button">Compare</button>
@@ -22,6 +22,7 @@
         <button class="tab" data-tab="leaders" type="button">Leaderboard</button>
         <span class="tab-sep" aria-hidden="true"></span>
         <button class="tab plan-tab" data-tab="goals" type="button">Goals</button>
+        <button class="tab plan-tab" data-tab="npcs" type="button" title="The NPC database: every monster's stats, XP and drops, and plans of kills">NPCs</button>
         <button class="tab plan-tab" data-tab="bank" type="button">Bank</button>
         <button class="tab plan-tab" data-tab="prices" type="button">Prices</button>
       </nav>
@@ -115,6 +116,13 @@
         <div id="goals-list"></div>
       </section>
 
+      <!-- NPCs: the monster database -->
+      <section class="view" id="view-npcs" hidden>
+        <div id="npcs-account"></div>
+        <div class="msg" id="npcs-msg" hidden></div>
+        <div id="npcs-body"></div>
+      </section>
+
       <!-- Bank -->
       <section class="view" id="view-bank" hidden>
         <div id="bank-account"></div>
@@ -170,13 +178,14 @@
       <div class="msg" id="settings-msg" hidden></div>
 
       <h3>About</h3>
-      <p class="note">Skills+ (formerly Hiscores+) reads the <a href="https://2004.lostcity.rs/hiscores" target="_blank" rel="noopener">Lost City hiscores</a> API,
+      <p class="note">Planner+ (formerly Skills+, and before that Hiscores+) reads the <a href="https://2004.lostcity.rs/hiscores" target="_blank" rel="noopener">Lost City hiscores</a> API,
         which allows one request every two seconds, so lookups queue up politely.
         Hiscores update when a player logs out.</p>
-      <p class="note">The planner's levels and XP, and its monsters, come from Lost City's own server content (rev 274); item names and icons, the rows of the Crafting, Mining, Smithing, Fishing, Cooking, Thieving, Agility, Prayer and Magic calculators, and what monsters drop, from
+      <p class="note">The planner's levels and XP, and its monsters with their stats and what they drop, come from Lost City's own server content (rev 274: drop tables read from its scripts, checked against
+        <a href="https://2004.losthq.rs/?p=npcdb" target="_blank" rel="noopener">LostHQ's NPC database</a>); item names and icons, and the rows of the Crafting, Mining, Smithing, Fishing, Cooking, Thieving, Agility, Prayer and Magic calculators, from
         <a href="https://2004.losthq.rs" target="_blank" rel="noopener">LostHQ</a> (GPL-3.0); prices from player listings on
         <a href="https://markets.lostcity.rs" target="_blank" rel="noopener">markets.lostcity.rs</a>. Skill icons and fonts come from
-        <a href="https://github.com/LostHQ/LostKit-Electron" target="_blank" rel="noopener">LostKit</a> (GPL-3.0); RuneScape is © Jagex.</p>
+        <a href="https://github.com/LostHQ/LostKit-Electron" target="_blank" rel="noopener">LostKit</a> (GPL-3.0); the Slayer skull is Planner+'s own; RuneScape is © Jagex.</p>
       <p class="note" id="about-version"></p>
     </div>
   </dialog>

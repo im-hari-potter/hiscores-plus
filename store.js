@@ -172,9 +172,9 @@ export function exportBackup() {
 // Merges a backup into what is already here. Returns a short summary.
 export function importBackup(text) {
   const parsed = JSON.parse(text);
-  // Skills+ keeps the Hiscores+ backup format, so old backups restore as they are.
+  // Planner+ keeps the Hiscores+ backup format (Skills+ did too), so old backups restore as they are.
   if (!parsed || parsed.app !== 'lc-hiscores-plus' || typeof parsed.data !== 'object') {
-    throw new Error('That does not look like a Skills+ (or Hiscores+) backup.');
+    throw new Error('That does not look like a Planner+ backup (or one from Skills+ or Hiscores+).');
   }
   let snaps = 0, playersAdded = 0, goals = 0, banks = 0;
   for (const [key, value] of Object.entries(parsed.data)) {

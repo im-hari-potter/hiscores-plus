@@ -3,7 +3,7 @@
 import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright'); // resolved from NODE_PATH / global install
 import assert from 'node:assert/strict';
-import { fakeBank } from './bankfake.mjs';
+import { fakeBank, fakeInventory } from './bankfake.mjs';
 import { encodePng } from './testpng.mjs';
 // (the addresses of the icon sheets this build names, and the XP table, to check what the page shows)
 import { ICON_SHEET } from './gamedata.js';
@@ -33,6 +33,8 @@ const page = await ctx.newPage();
 const problems = [];
 page.on('pageerror', e => problems.push(`pageerror: ${e.message} (during "${running}")${(e.stack || '').split('\n').slice(1, 7).map(l => `\n      ${l.trim()}`).join('')}`));
 page.on('console', m => { if (m.type() === 'error') problems.push('console: ' + m.text()); });
+// (and which address a "Failed to load resource" was)
+page.on('response', r => { if (r.status() === 404) problems.push(`404: ${r.url()} (during "${running}")`); });
 const requested = [];                         // every address the page asks for
 page.on('request', r => requested.push(r.url()));
 
@@ -484,9 +486,9 @@ await check('bank: All shows everything you have; a skill tab shows only its ite
   await page.waitForSelector('#bank-head [data-bskill="all"].active');
   assert.match(await text('#bank-head'), /3 kinds of item/);
   assert.deepEqual((await page.$$eval('#bank-body [data-bank]', els => els.map(e => e.dataset.bank))).sort(), ['naturerune', 'ranarr_weed', 'snape_grass']);
-  // the skill buttons go in the hiscores' order, like the ones a new goal is picked with (v2.10.1)
+  // the skill buttons go in the hiscores' order, like the ones a new goal is picked with (v2.10.1; v3: Slayer, everything a monster drops)
   assert.deepEqual(await page.$$eval('#bank-head [data-bskill]', els => els.map(e => e.dataset.bskill)),
-    ['all', 'prayer', 'magic', 'cooking', 'fletching', 'firemaking', 'crafting', 'smithing', 'herblore', 'runecraft']);
+    ['all', 'prayer', 'magic', 'cooking', 'fletching', 'firemaking', 'crafting', 'smithing', 'herblore', 'slayer', 'runecraft']);
   // each tab shows what its items are worth, once prices are in
   await page.click('[data-act="bank-prices"]');
   await page.waitForFunction(() => document.querySelectorAll('#bank-head .skill-tab .sw-v').length >= 3, null, { timeout: 30000 });
@@ -655,17 +657,23 @@ await check('goals: Round up my supplies, per potion (605 kwuarm and 518 limpwur
 await check('prices: sales medians, placeholder prices fixed from notes, 4-dose fallback and your own price', async () => {
   const flat = t => t.replace(/\s+/g, ' ').trim();
   await page.click('.tab[data-tab="prices"]');
-  // the very first time it opens on All: every item the planner prices, once each, A to Z (v2.10.1)
+  // the very first time it opens on All: every item the planner prices, once each (v2.10.1). From v3 in a table
+  // for the skill it first belongs to, A to Z in each, the tables in the tabs' order: Slayer's is what only monsters drop
   await page.waitForSelector('#prices-head [data-bskill="all"].active');
-  assert.equal(await page.locator('#prices-body table').count(), 1);
-  assert.match(flat(await page.locator('#prices-body thead').innerText()), /^Every item Market all High alch all Your price$/);
-  const listed = await page.$$eval('#prices-body [data-price]', els => els.map(e => [e.dataset.price, e.closest('tr').querySelector('a.mk').innerText.trim()]));
-  assert.ok(listed.length > 500, `${listed.length} items`);
-  assert.equal(new Set(listed.map(([slug]) => slug)).size, listed.length, 'each item once, though skills share them (logs, runes, ore)');
-  const names = listed.map(([, name]) => name);
-  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' })), 'A to Z');
-  for (const slug of ['ranarr_weed', 'magic_logs', 'dragon_bones', 'naturerune', 'raw_shark', 'runite_ore', 'air_battlestaff']) assert.ok(listed.some(([s]) => s === slug), slug);
-  assert.match(flat(await page.locator('#prices-head .note').innerText()), new RegExp(`All is every item the planner prices, ${listed.length} of them, A to Z\\. Opening it checks nothing`));
+  assert.deepEqual((await page.locator('#prices-body thead th:first-child').allInnerTexts()).map(flat),
+    ['Prayer', 'Magic', 'Cooking', 'Woodcutting', 'Fletching', 'Fishing', 'Firemaking', 'Crafting', 'Smithing', 'Mining', 'Herblore', 'Thieving', 'Slayer', 'Runecraft']);
+  assert.match(flat(await page.locator('#prices-body thead').first().innerText()), /^Prayer Market all High alch all Your price$/);
+  const listed = await page.$$eval('#prices-body [data-price]', els => els.map(e => [e.dataset.price, e.closest('tr').querySelector('a.mk').innerText.trim(), e.closest('table').querySelector('th').innerText.trim()]));
+  assert.ok(listed.length > 600, `${listed.length} items`);
+  assert.equal(new Set(listed.map(([slug]) => slug)).size, listed.length, 'each item once, though skills share them (logs, runes, ore, and what monsters drop)');
+  for (const table of new Set(listed.map(x => x[2]))) {
+    const names = listed.filter(x => x[2] === table).map(([, name]) => name);
+    assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' })), `${table}: A to Z`);
+  }
+  const home = slug => listed.find(([s]) => s === slug)?.[2];
+  assert.deepEqual(['ranarr_weed', 'magic_logs', 'dragon_bones', 'naturerune', 'raw_shark', 'runite_ore', 'air_battlestaff', 'rune_scimitar', 'dragon_spear', 'coins'].map(home),
+    ['Herblore', 'Firemaking', 'Prayer', 'Runecraft', 'Cooking', 'Smithing', 'Crafting', 'Smithing', 'Slayer', undefined], 'where an item first belongs (coins are worth what they are: not priced)');
+  assert.match(flat(await page.locator('#prices-head .note').innerText()), new RegExp(`All is every item the planner prices, ${listed.length.toLocaleString('en-US')} of them, each once: under the skill it first belongs to, A to Z \\(Slayer has what only monsters drop\\)\\. Opening it checks nothing`));
   assert.equal(flat(await page.locator('#prices-head .bulk').innerText()), 'Every item: Market High alch');
   // a skill's tab is that skill's lists, and it's the one remembered
   await page.click('#prices-head [data-bskill="herblore"]');
@@ -690,7 +698,8 @@ await check('prices: each item uses the price you pick (market, high alch or you
   await page.click('#prices-head [data-bskill="herblore"]');
   // the skill buttons go in the hiscores' order here too, after All: the skills a new goal is picked from, less those with nothing to price (v2.10.1)
   const tabs = await page.$$eval('#prices-head [data-bskill]', els => els.map(e => e.dataset.bskill));
-  assert.deepEqual(tabs, ['all', 'prayer', 'magic', 'cooking', 'woodcutting', 'fletching', 'fishing', 'firemaking', 'crafting', 'smithing', 'mining', 'herblore', 'thieving', 'runecraft']);
+  // (v3: Slayer, with everything a monster drops, in its hiscores place)
+  assert.deepEqual(tabs, ['all', 'prayer', 'magic', 'cooking', 'woodcutting', 'fletching', 'fishing', 'firemaking', 'crafting', 'smithing', 'mining', 'herblore', 'thieving', 'slayer', 'runecraft']);
   assert.deepEqual(tabs.slice(1), (await page.$$eval('#goal-new [data-nskill]', els => els.map(e => e.dataset.nskill))).filter(k => tabs.includes(k)), "the new goal's order");
   assert.equal(await page.locator('#prices-head [data-bskill="herblore"].active').count(), 1);
   const row = slug => page.locator(`#prices-body tr:has([data-psrc="${slug}"])`);
@@ -2620,7 +2629,8 @@ await check('combat: Attack is trained on monsters: kills to the goal, the usual
     const plan = card.locator('.plan-sec', { hasText: 'To reach your goal' });
     const fill = card.locator('select[data-gopt="fill"]');
     assert.equal(await fill.inputValue(), 'at_rock_crab_13');
-    assert.equal(flat(await plan.locator('.step').innerText()), '809 × Rock Crab (level 13) +161,800 XP');
+    // (v3: a monster's line ends with Plan the loot, a Slayer goal of those kills: see the slayer checks)
+    assert.equal(flat(await plan.locator('.step').innerText()), '809 × Rock Crab (level 13) +161,800 XP Plan the loot');
     assert.equal(flat(await plan.locator('.bar .small-note').innerText()), 'Not your pick yet: the most XP a kill among monsters no more than half your combat level (67). Pick yours here, or find it in the table below.');
     assert.equal((await goalOf('old_badger', 'attack')).fillId, undefined, 'nothing is kept until you pick');
     assert.equal(await plan.locator('.step .item.blank .ico-attack').count(), 1, "no item to show: the skill's icon in its place");
@@ -2641,7 +2651,7 @@ await check('combat: Attack is trained on monsters: kills to the goal, the usual
     assert.match(await card.locator('label:has(select[data-opt="style"])').getAttribute('title'), /^Every point of damage gives XP by the style you fight in\. Accurate: 4 Attack XP\. Controlled: 1\.33 XP each to Attack, Strength and Defence\. Whatever the style, a point of damage is 1\.33 Hitpoints XP as well\./);
     await style.selectOption('controlled');
     await plan.locator('.step', { hasText: '2,432' }).waitFor();
-    assert.equal(flat(await plan.locator('.step').innerText()), '2,432 × Rock Crab (level 13) +161,728 XP');
+    assert.equal(flat(await plan.locator('.step').innerText()), '2,432 × Rock Crab (level 13) +161,728 XP Plan the loot');
     assert.equal(flat(await fill.locator('option:checked').innerText()), 'Rock Crab (level 13, 50 HP, 66.5 XP)');
     assert.equal(flat(await also.innerText()), 'Also from these kills: +161,728 Strength XP (level 53 → 60), +161,728 Defence XP (level 52 → 60) and +161,728 Hitpoints XP (level 54 → 61).');
     assert.deepEqual((await goalOf('old_badger', 'attack')).opts, { style: 'controlled' });
@@ -2727,7 +2737,7 @@ await check('combat: a monster is found by its name or its combat level, or brow
     // click the monster found to train on it: the plan is in fire giants (111 hitpoints, 444 XP a kill), and it's your pick now
     await card.locator('tr[data-method="at_fire_giant_86"] td:nth-child(2)').click();
     await plan.locator('.step', { hasText: 'Fire giant' }).waitFor();
-    assert.equal(flat(await plan.locator('.step').innerText()), '365 × Fire giant (level 86) +162,060 XP');
+    assert.equal(flat(await plan.locator('.step').innerText()), '365 × Fire giant (level 86) +162,060 XP Plan the loot');
     assert.equal((await goalOf('old_badger', 'attack')).fillId, 'at_fire_giant_86');
     assert.equal(await plan.locator('.bar .small-note').count(), 0, 'your pick: nothing to say about how it was come by');
     assert.deepEqual([await search.inputValue(), await shown()], ['fire g', ['Fire giant 86']], 'the search stays as it was');
@@ -2748,7 +2758,7 @@ await check('combat: a monster is found by its name or its combat level, or brow
     // picked from the list under Train with, too
     await card.locator('select[data-gopt="fill"]').selectOption('at_ice_giant_49');
     await plan.locator('.step', { hasText: 'Ice giant' }).waitFor();
-    assert.equal(flat(await plan.locator('.step').innerText()), '578 × Ice giant (level 49) +161,840 XP');
+    assert.equal(flat(await plan.locator('.step').innerText()), '578 × Ice giant (level 49) +161,840 XP Plan the loot');
     // what those kills give besides, and the bones they leave
     assert.equal(flat(await plan.locator('.tip.kills').innerText()), 'Also from these kills: +53,811.8 Hitpoints XP (level 54 → 57). They leave 578 Big bones: +8,670 Prayer XP if you bury them.');
     // a mix of monsters, typed under Plan to kill: 200 fire giants first, the rest on ice giants
@@ -2760,10 +2770,10 @@ await check('combat: a monster is found by its name or its combat level, or brow
     await box.press('Enter');
     const mix = card.locator('.plan-sec', { hasText: 'Your mix +88,800 XP' });
     await mix.waitFor();
-    assert.equal(flat(await mix.locator('.step').innerText()), '200 × Fire giant (level 86) +88,800 XP');
+    assert.equal(flat(await mix.locator('.step').innerText()), '200 × Fire giant (level 86) +88,800 XP Plan the loot');
     assert.equal(flat(await mix.locator('.tip.kills').innerText()), 'Also from these kills: +29,520 Hitpoints XP (level 54 → 55). They leave 200 Big bones: +3,000 Prayer XP if you bury them.');
     assert.match(flat(await plan.locator('h4').innerText()), /^Then, to reach your goal: 72,897 XP$/);
-    assert.equal(flat(await plan.locator('.step').innerText()), '261 × Ice giant (level 49) +73,080 XP');
+    assert.equal(flat(await plan.locator('.step').innerText()), '261 × Ice giant (level 49) +73,080 XP Plan the loot');
     assert.deepEqual((await card.locator('.plan-t thead th').allInnerTexts()).map(flat), ['Lvl', 'Monster', 'HP', 'XP', 'To goal', 'Plan to kill', 'Still needed to goal']);
     assert.deepEqual([await search.inputValue(), await shown()], ['fire giant', ['Fire giant 86']], 'still searching after the redraw');
     await card.locator('[data-act="mix-clear"]').click();
@@ -2796,10 +2806,10 @@ await check('combat: Strength, Defence, Hitpoints and Ranged, each with its own 
     assert.deepEqual((await style.locator('option').allInnerTexts()).map(flat), ['Defensive', 'Controlled', 'Longrange (Ranged)']);
     const then = card.locator('.plan-sec', { hasText: 'To reach your goal' });
     assert.match(flat(await then.locator('h4').innerText()), /^To reach your goal: 149,982 XP$/);
-    assert.equal(flat(await then.locator('.step').innerText()), '750 × Rock Crab (level 13) +150,000 XP');
+    assert.equal(flat(await then.locator('.step').innerText()), '750 × Rock Crab (level 13) +150,000 XP Plan the loot');
     await style.selectOption('longrange');
     await then.locator('.step', { hasText: '1,500' }).waitFor();
-    assert.equal(flat(await then.locator('.step').innerText()), '1,500 × Rock Crab (level 13) +150,000 XP');
+    assert.equal(flat(await then.locator('.step').innerText()), '1,500 × Rock Crab (level 13) +150,000 XP Plan the loot');
     assert.equal(flat(await then.locator('.tip.kills').innerText()), 'Also from these kills: +150,000 Ranged XP (level 55 → 61) and +99,750 Hitpoints XP (level 54 → 59).');
     assert.match(flat(await card.locator('.plan-opts').innerText()), /Food, gear, ammunition and drops aren't counted/);
     assert.equal(await card.locator('tr[data-method="df_rock_crab_13"]').getAttribute('title'), 'Rock Crab (level 13): 50 hitpoints, 100 Defence XP a kill\nA kill also gives 100 Ranged XP and 66.5 Hitpoints XP\nLeaves nothing to bury\n34 in the world.');
@@ -2825,11 +2835,11 @@ await check('combat: Strength, Defence, Hitpoints and Ranged, each with its own 
     assert.equal(await card.locator('tr[data-method]').count(), 315);
     const hp = card.locator('.plan-sec', { hasText: 'To reach your goal' });
     assert.match(flat(await hp.locator('h4').innerText()), /^To reach your goal: 122,770 XP$/);
-    assert.equal(flat(await hp.locator('.step').innerText()), '1,847 × Rock Crab (level 13) +122,825.5 XP');
+    assert.equal(flat(await hp.locator('.step').innerText()), '1,847 × Rock Crab (level 13) +122,825.5 XP Plan the loot');
     assert.equal(await hp.locator('.tip.kills').count(), 0, 'no other skill is said to gain (that depends on how you fight), and a rock crab leaves nothing');
     await card.locator('select[data-gopt="fill"]').selectOption('hp_moss_giant_42');
     await hp.locator('.step', { hasText: 'Moss giant' }).waitFor();
-    assert.equal(flat(await hp.locator('.step').innerText()), '1,539 × Moss giant (level 42) +122,812.2 XP');
+    assert.equal(flat(await hp.locator('.step').innerText()), '1,539 × Moss giant (level 42) +122,812.2 XP Plan the loot');
     assert.equal(flat(await hp.locator('.tip.kills').innerText()), 'These kills leave 1,539 Big bones: +23,085 Prayer XP if you bury them.');
     await card.locator('[data-search]').fill('battle');
     assert.deepEqual(await card.locator('tr[data-method]:not([hidden])').evaluateAll(trs => trs.map(tr => [...tr.cells].slice(0, 4).map(td => td.innerText.replace(/\s+/g, ' ').trim()))), [['54', 'Battle mage *', '120', '159.6']]);
@@ -3184,11 +3194,11 @@ await check('goals: every skill has its planner: no dot on the skill picker, and
   assert.equal(await page.locator('.calc-dot').count(), 0);
   // every skill's button is its name, and its goal gets a plan
   const picker = await page.locator('#goal-new [data-nskill]').evaluateAll(els => els.map(el => [el.dataset.nskill, el.title, el.getAttribute('aria-label'), el.children.length]));
-  // (the combat level first, which is a goal too, then the 19 skills)
-  assert.equal(picker.length, 20);
+  // (the combat level first, which is a goal too, then the 19 skills; from v3 Slayer too, in its hiscores place after Thieving: the home of monster plans)
+  assert.equal(picker.length, 21);
   for (const [key, title, label, kids] of picker) assert.deepEqual([title, kids, /\(planner\)/.test(title)], [label, 1, false], key);
   assert.deepEqual(picker.map(p => p[1]), ['Combat level', 'Attack', 'Defence', 'Strength', 'Hitpoints', 'Ranged', 'Prayer', 'Magic', 'Cooking', 'Woodcutting', 'Fletching', 'Fishing', 'Firemaking', 'Crafting', 'Smithing', 'Mining',
-    'Herblore', 'Agility', 'Thieving', 'Runecraft']);
+    'Herblore', 'Agility', 'Thieving', 'Slayer: a plan of kills, their XP and loot', 'Runecraft']);
   const mod = await page.evaluate(async () => { const m = await import('./planner-ui.js'); const s = await import('./skills.js'); return s.SKILLS.filter(x => x.id).map(x => [x.key, m.hasCalculator(x.key)]); });
   assert.ok(mod.length === 19 && mod.every(([, has]) => has), JSON.stringify(mod.filter(([, has]) => !has)));
   // an account with no goals: how to start, and no list of skills that have a planner or of those still to come
@@ -3847,9 +3857,311 @@ await check('bank: All is in the order your bank has in-game, drags into your ow
   await page.screenshot({ path: `${SHOTS}/9b-bank-all.png`, fullPage: true });
 });
 
+// ── v3: the NPCs tab, Slayer goals and loot ───────────────────────────────
+// (an NPC's numbers are the server's: its configs and its drop scripts, read by build-data.mjs)
+const slayerCard = () => page.locator('.slayer-goal');
+async function addSlayer(npc, kills) {
+  await page.click('.tab[data-tab="goals"]');
+  await page.click('[data-nskill="slayer"]');
+  await page.fill('#goal-new input[name=npc]', npc);
+  await page.fill('#goal-new input[name=value]', String(kills));
+  await page.click('#goal-new button[type=submit]');
+}
+async function removeSlayers() {
+  await page.click('.tab[data-tab="goals"]');
+  while (await slayerCard().count()) {
+    const x = slayerCard().first().locator('[data-act="remove-goal"]');
+    await x.click(); await x.click();
+  }
+}
+
+await check("npcs: the database: every monster with the XP and loot of a kill; search, bands and sort; a monster's page with its stats, the XP of each style and every drop; the address follows (v3)", async () => {
+  await page.click('.tab[data-tab="npcs"]');
+  await page.waitForSelector('#view-npcs:not([hidden]) table.npc-t');
+  const rows = '#npcs-body tr[data-npc]';
+  assert.equal(await page.locator(rows).count(), 315, 'every monster the combat skills train on');
+  await page.click('#npcs-body [data-npc-band="all"]');
+  assert.equal(await page.locator(`${rows}:not([hidden])`).count(), 315);
+  // a band of combat levels
+  await page.click('#npcs-body [data-npc-band="Level 81–110"]');
+  const band = await page.locator(`${rows}:not([hidden])`).evaluateAll(trs => trs.map(t => Number(t.dataset.cb)));
+  assert.ok(band.length === 30 && band.every(cb => cb >= 81 && cb <= 110), JSON.stringify(band));
+  // a search looks through every band
+  await page.fill('[data-npc-search]', 'fire giant');
+  assert.deepEqual(await page.locator(`${rows}:not([hidden])`).evaluateAll(trs => trs.map(t => t.dataset.npc)), ['fire_giant_86']);
+  assert.equal(flat(await text('[data-npc-found]')), '1 found, whatever their level');
+  const row = page.locator(`${rows}[data-npc="fire_giant_86"]`);
+  const cells = async () => (await row.locator('td').allInnerTexts()).map(flat);
+  assert.deepEqual((await cells()).slice(0, 4), ['86', 'Fire giant', '111', '+444 Attack, +147.6 Hitpoints']);
+  assert.match((await cells())[4], /^≈?[\d.,]+[KM]?$/, 'the loot of a kill');
+  // the XP of another style
+  await page.selectOption('[data-npc-style]', 'controlled');
+  assert.equal((await cells())[3], '+147.6 Attack, +147.6 Strength, +147.6 Defence, +147.6 Hitpoints');
+  await page.selectOption('[data-npc-style]', 'accurate');
+  // sorted by the XP of a kill: the Kalphite Queen first (255 hitpoints), then the King Black Dragon
+  await page.fill('[data-npc-search]', '');
+  await page.click('#npcs-body [data-npc-band="all"]');
+  await page.click('[data-npc-sort="xp"]');
+  assert.deepEqual((await page.locator(`${rows}:not([hidden])`).evaluateAll(trs => trs.map(t => t.dataset.npc))).slice(0, 2), ['kalphite_queen_333', 'king_black_dragon_276']);
+  await page.click('[data-npc-sort="level"]');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lchs.npcUi')).sort), 'level', 'the sort sticks');
+  // a monster's page
+  await page.fill('[data-npc-search]', 'fire giant');
+  await row.locator('.npc-name').click();
+  await page.waitForSelector('.npc-page');
+  assert.equal(await page.evaluate(() => location.hash), '#npcs/fire_giant_86');
+  const pg = page.locator('.npc-page');
+  assert.equal(flat(await pg.locator('.npc-head').innerText()), '‹ All monsters Fire giant level 86 111 hitpoints');
+  assert.equal(flat(await pg.locator('.nf').innerText()), '65 65 65 111 1 1 Attacks with slash · every 5 ticks (3 s) · back 60 ticks (36 s) after a kill · 2 by 2 squares · 15 in the world, most of them under ground · Leaves Big bones Bonuses: Attack +29, Strength +31, Slash defence +3, Crush defence +2 “A very large elemental adversary.”');
+  assert.deepEqual((await pg.locator('table.xp-t tbody tr').allInnerTexts()).map(flat), [
+    'Accurate (Attack) +444 Attack, +147.6 Hitpoints', 'Aggressive (Strength) +444 Strength, +147.6 Hitpoints', 'Defensive (Defence) +444 Defence, +147.6 Hitpoints',
+    'Controlled (Attack, Strength, Defence) +147.6 Attack, +147.6 Strength, +147.6 Defence, +147.6 Hitpoints', 'Ranged: Accurate or Rapid +444 Ranged, +147.6 Hitpoints',
+    'Ranged: Longrange (Ranged, Defence) +222 Ranged, +222 Defence, +147.6 Hitpoints', 'Magic (damage XP only) +222 Magic, +147.6 Hitpoints']);
+  // every drop: its chance a kill as the table has it, how many a drop is, the average, and the kills for an even chance and for 9 in 10
+  const drop = async slug => (await pg.locator(`table.loot-t tr:has-text("${slug}")`).first().locator('td').allInnerTexts()).map(flat);
+  assert.deepEqual((await drop('Rune scimitar')).slice(0, 5), ['Rune scimitar', '1/128', '1', '0.008', '89 / 294']);
+  assert.deepEqual((await drop('Big bones')).slice(0, 5), ['Big bones', 'Always', '1', '1', '1']);
+  assert.deepEqual((await drop('Fire rune')).slice(0, 4), ['Fire rune', '11/128', '150 or 37', '12']);
+  assert.deepEqual((await drop('Coins')).slice(0, 3), ['Coins', '7,189/16,384', '15–3,000']);
+  // a ring of wealth: more of the gem table's rolls are a gem
+  const sapphire = async () => (await drop('Uncut sapphire'))[1];
+  assert.equal(await sapphire(), '357/16,384');
+  await pg.locator('[data-npc-opt="ring"]').check();
+  assert.notEqual(await sapphire(), '357/16,384');
+  await page.locator('.npc-page [data-npc-opt="ring"]').uncheck();
+  // the address opens it again
+  await page.reload();
+  await page.waitForSelector('.npc-page');
+  assert.equal(flat(await page.locator('.npc-page h3').innerText()), 'Fire giant level 86');
+  await page.click('[data-act="npc-back"]');
+  await page.waitForSelector('table.npc-t');
+  assert.equal(await page.evaluate(() => location.hash), '#npcs');
+});
+
+await check('slayer: a goal of kills, picked between Thieving and Runecraft: the XP and the levels it takes you to, the loot to expect and the chance of at least one of each drop; kills done and what you got, a drop at a time; how lucky, and how dry (v3)', async () => {
+  await planAs('old badger', 'Old Badger');
+  await page.click('[data-nskill="slayer"]');
+  const keys = await page.locator('#goal-new [data-nskill]').evaluateAll(els => els.map(e => e.dataset.nskill));
+  assert.deepEqual(keys.slice(keys.indexOf('thieving'), keys.indexOf('thieving') + 3), ['thieving', 'slayer', 'runecraft']);
+  assert.match(flat(await text('#goal-new')), /Slayer Add goal A plan of kills: the XP they give, the loot to expect and the chance of each drop, then what you get\. Slayer isn't in this version of the game yet/);
+  // a monster it can't tell from what's typed: it asks which. (A name that's a monster's whole name is that one: "giant" is the Giant, level 28.)
+  await addSlayer('skeleton', 100);
+  assert.match(flat(await text('#goals-msg')), /^Which one\? Skeleton \(level \d+\), .*Pick it from the list, or add its level\.$/);
+  assert.equal(await slayerCard().count(), 0);
+  await addSlayer('Fire giant (level 86)', '1.5k');
+  const card = slayerCard();
+  await card.locator('.plan').waitFor();
+  try {
+    assert.equal(flat(await card.locator('.goal-title').innerText()), 'Fire giant (level 86) · 0 / 1,500 kills');
+    assert.match(flat(await card.locator('.goal-sub').innerText()), /^1,500 kills to go · \+666,000 Attack XP, \+221,400 Hitpoints XP · loot about ≈?[\d.,]+[KM]? gp$/);
+    const g = await goalOf('old_badger', 'slayer');
+    assert.deepEqual([g.type, g.value, g.npc, g.style], ['kills', 1500, 'fire_giant_86', 'accurate']);
+    // the XP, and the level the kills still to do take each skill to (Attack 51 and 666,000 XP: 70; Hitpoints 54 and 221,400: 63)
+    const xp = card.locator('.plan-sec', { hasText: 'XP from 1,500 kills' });
+    assert.deepEqual((await xp.locator('.step').allInnerTexts()).map(flat), ['+666,000 Attack XP (444 a kill) · the 1,500 still to do take you from level 51 to 70', '+221,400 Hitpoints XP (147.6 a kill) · the 1,500 still to do take you from level 54 to 63']);
+    assert.equal(flat(await xp.locator('.small-note').innerText()), 'Their Big bones: +22,500 Prayer XP if you bury them all.');
+    // the loot of 1,500 kills: a rune scimitar is 1/128, 11.7 of them to expect and at least one for 99.999% of players
+    const row = slug => card.locator(`tr[data-loot="${slug}"]`);
+    const cells = async slug => (await row(slug).locator('td').allInnerTexts()).map(flat);
+    assert.deepEqual((await cells('rune_scimitar')).slice(0, 5), ['Rune scimitar', '1/128', '1', '11.7', '99.999%']);
+    assert.deepEqual((await cells('big_bones')).slice(0, 5), ['Big bones', 'Always', '1', '1,500', '–']);
+    assert.deepEqual((await cells('firerune')).slice(0, 5), ['Fire rune', '11/128', '150 or 37', '18,012', '100%']);
+    // (its value at your prices, once the market's has come in)
+    await page.waitForFunction(() => /^[\d.,]+[KM]?$/.test(document.querySelector('.slayer-goal tr[data-loot="rune_scimitar"] td:nth-child(6)')?.innerText.trim() || ''), null, { timeout: 30000 });
+    // kills done: what's to be expected after them, and how what you got compares
+    await card.locator('[data-done]').fill('200');
+    await card.locator('[data-done]').press('Enter');
+    await card.locator('[data-done][value="200"]').waitFor();
+    assert.equal(flat(await card.locator('table.loot-t thead').innerText()), 'Item A kill Each drop Expected At least one in 1,500 Value Expected after 200 You got Luck');
+    // (You got: − and + either side of the box)
+    assert.deepEqual((await cells('rune_scimitar')).slice(6), ['1.56', '− +', 'dry 1.56 × rate · 21% go this dry']);
+    assert.equal(await row('rune_scimitar').locator('td').last().locator('span').getAttribute('title'), 'Rune scimitar: 200 kills without one is 1.56 × the drop rate (1/128). Going this dry happens to 21% of players (about 1 in 4.8).');
+    // + is a drop at a time: one is about as expected (21% would have fewer, 46% more), two luckier than 54%
+    await row('rune_scimitar').locator('[data-got-step="1"]').click();
+    await card.locator('tr[data-loot="rune_scimitar"] [data-got="rune_scimitar"][value="1"]').waitFor();
+    assert.equal((await cells('rune_scimitar'))[8], 'about as expected');
+    assert.equal(await row('rune_scimitar').locator('td').last().locator('span').getAttribute('title'), '1 drop (1.56 expected) after 200 kills. 21% of players would have fewer, 46% more.');
+    await row('rune_scimitar').locator('[data-got-step="1"]').click();
+    await card.locator('[data-got="rune_scimitar"][value="2"]').waitFor();
+    assert.equal((await cells('rune_scimitar'))[8], 'luckier than 54%');
+    // an amount typed in: 450 fire runes where 2,390 are to be expected after 199 kills
+    await card.locator('[data-got="firerune"]').fill('450');
+    await card.locator('[data-got="firerune"]').press('Enter');
+    await card.locator('[data-done-step="-1"]').click();
+    await card.locator('[data-done][value="199"]').waitFor();
+    assert.equal((await cells('firerune'))[8], '99.97% get more');
+    assert.deepEqual((await goalOf('old_badger', 'slayer')), { ...g, done: 199, got: { rune_scimitar: 2, firerune: 450 } });
+    assert.match(flat(await card.locator('.money').innerText()), /^Expected after 199 kills: ≈?[\d.,]+[KM]? gp You got: [\d.,]+[KM]? gp( \(\d+ without a price\))?$/);
+    // the dry checker: any drop, any number of kills without it
+    const dry = card.locator('.dry');
+    await dry.locator('[data-dry-item]').selectOption('rune_scimitar');
+    await dry.locator('[data-dry-kills]').fill('200');
+    await dry.locator('[data-dry-kills]').press('Enter');
+    await dry.locator('.dry-out', { hasText: '200 kills without one' }).waitFor();
+    assert.equal(flat(await dry.locator('.dry-out').innerText()), 'Rune scimitar: 200 kills without one is 1.56 × the drop rate (1/128). Going this dry happens to 21% of players (about 1 in 4.8). An even chance of one takes 89 kills; 9 players in 10 have one by 294, and 99 in 100 by 588.');
+    // every kill done: reached
+    await card.locator('[data-done]').fill('1500');
+    await card.locator('[data-done]').press('Enter');
+    await card.locator('.goal-sub .c-win').waitFor();
+    assert.match(flat(await card.locator('.goal-sub').innerText()), /^Reached · 1,500 kills · \+666,000 Attack XP/);
+  } finally {
+    await removeSlayers();
+  }
+});
+
+await check("slayer: a combat goal's monster line has Plan the loot: a Slayer goal of those kills, in the goal's style, made once; it follows the goal's kills when asked; Edit changes the monster or the kills (v3)", async () => {
+  await planAs('old badger', 'Old Badger');
+  await addGoal('attack', 60);
+  const att = goalCard('Attack');
+  try {
+    await att.locator('.plan').waitFor();
+    await att.locator('select[data-opt="style"]').selectOption('controlled');
+    await att.locator('[data-search]').fill('fire g');
+    await att.locator('tr[data-method="at_fire_giant_86"] td:nth-child(2)').click();
+    const step = att.locator('.plan-sec', { hasText: 'To reach your goal' }).locator('.step');
+    await step.filter({ hasText: '1,096 × Fire giant' }).waitFor();
+    assert.equal(flat(await step.innerText()), '1,096 × Fire giant (level 86) +161,769.6 XP Plan the loot');
+    await step.locator('[data-act="npc-plan-loot"]').click();
+    await slayerCard().waitFor();
+    assert.equal(flat(await text('#goals-msg')), 'A Slayer goal for 1,096 Fire giant kills: see its loot plan.');
+    const attGoal = await goalOf('old_badger', 'attack');
+    const g = await goalOf('old_badger', 'slayer');
+    assert.deepEqual([g.value, g.npc, g.style, g.from], [1096, 'fire_giant_86', 'controlled', attGoal.id], "the goal's kills, in its style");
+    assert.equal(flat(await slayerCard().locator('.goal-title').innerText()), 'Fire giant (level 86) · 0 / 1,096 kills');
+    assert.match(flat(await slayerCard().locator('.goal-sub').innerText()), /^1,096 kills to go · \+161,769\.6 Attack XP, \+161,769\.6 Strength XP, \+161,769\.6 Defence XP, \+161,769\.6 Hitpoints XP · loot about .* gp · for your Attack goal$/);
+    // made once: the line opens it from then on
+    assert.equal(flat(await step.innerText()), '1,096 × Fire giant (level 86) +161,769.6 XP Loot plan');
+    await step.locator('[data-act="npc-goto"]').click();
+    assert.equal(await slayerCard().count(), 1);
+    // the Attack goal moved to 62: its line says the Slayer goal has fewer kills, and makes it these on a click
+    await att.locator('[data-act="edit-goal"]').click();
+    await att.locator('[data-form="edit-goal"] input[name=value]').fill('62');
+    await att.locator('[data-form="edit-goal"] button[type=submit]').click();
+    await step.filter({ hasText: '1,503 × Fire giant' }).waitFor();
+    assert.equal(flat(await step.innerText()), '1,503 × Fire giant (level 86) +221,842.8 XP Loot plan (1,096 kills) make it 1,503');
+    await step.locator('[data-act="npc-sync"]').click();
+    await step.locator('[data-act="npc-sync"]').waitFor({ state: 'detached' });
+    assert.equal(flat(await step.innerText()), '1,503 × Fire giant (level 86) +221,842.8 XP Loot plan');
+    assert.equal((await goalOf('old_badger', 'slayer')).value, 1503);
+    // Edit on the Slayer goal: another monster and other kills; what you got stays
+    await slayerCard().locator('[data-got="big_bones"]').fill('12');
+    await slayerCard().locator('[data-got="big_bones"]').press('Enter');
+    await slayerCard().locator('[data-act="edit-goal"]').click();
+    const form = slayerCard().locator('[data-form="edit-goal"]');
+    assert.equal(await form.locator('input[name=npc]').inputValue(), 'Fire giant (level 86)');
+    await form.locator('input[name=npc]').fill('Moss giant (level 42)');
+    await form.locator('input[name=value]').fill('300');
+    await form.locator('button[type=submit]').click();
+    await slayerCard().locator('.goal-title', { hasText: 'Moss giant' }).waitFor();
+    assert.equal(flat(await slayerCard().locator('.goal-title').innerText()), 'Moss giant (level 42) · 0 / 300 kills');
+    const moved = await goalOf('old_badger', 'slayer');
+    assert.deepEqual([moved.npc, moved.value, moved.style, moved.got], ['moss_giant_42', 300, 'controlled', { big_bones: 12 }]);
+  } finally {
+    await removeSlayers();
+    await removeGoal(att);
+    await noGoalFor('Attack');
+  }
+});
+
+await check('slayer: loot read from screenshots of the inventory (with the bank open or not): what the monster drops, checked, then added to what you got; Add to my bank puts it in, and takes back what you correct (v3)', async () => {
+  await planAs('old badger', 'Old Badger');
+  await page.evaluate(() => localStorage.removeItem('lchs.bank.old_badger'));
+  await addSlayer('Fire giant (level 86)', 1000);
+  const card = slayerCard();
+  await card.locator('.plan').waitFor();
+  try {
+    // two trips: the second one with the bank open (its side panel is the inventory)
+    const trip1 = encodePng(fakeInventory({ items: [
+      { slot: 0, icon: 'rune_scimitar', count: 1 }, { slot: 1, icon: 'firerune', count: 150 }, { slot: 2, icon: 'big_bones', count: 1 },
+      { slot: 3, icon: 'lobster', count: 1 }, { slot: 4, icon: 'coins_1000', count: 3000, stack: true }, { slot: 5, icon: 'swordfish', count: 1 },
+      { slot: 6, icon: 'lawrune', count: 2 } ] }));
+    const trip2 = encodePng(fakeInventory({ items: [{ slot: 0, icon: 'rune_scimitar', count: 1 }, { slot: 1, icon: 'firerune', count: 37 }, { slot: 2, icon: 'uncut_sapphire', count: 1 }],
+      bank: [{ slot: 0, icon: 'lawrune', count: 3960 }, { slot: 1, icon: 'yew_logs', count: 1044 }] }));
+    // the plain file button (no newer file picker in this browser)
+    await page.evaluate(() => { window.showOpenFilePicker = undefined; });
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), card.locator('[data-act="loot-pick"]').click()]);
+    await chooser.setFiles([{ name: 'trip-1.png', mimeType: 'image/png', buffer: trip1 }, { name: 'trip-2.png', mimeType: 'image/png', buffer: trip2 }]);
+    const review = card.locator('.loot-shots');
+    await review.waitFor({ timeout: 45000 });
+    assert.match(flat(await review.locator('.shots-title').innerText()), /^From 2 screenshots: 7 kinds of Fire giant loot$/);
+    assert.match(flat(await review.locator('.note').innerText()), /^Each screenshot counts as a trip's loot, added to what you've got\. 1 other slot was left out: Swordfish, which Fire giant doesn't drop\./);
+    const lines = (await review.locator('.shot-row').allInnerTexts()).map(flat);
+    assert.deepEqual(lines.map(l => l.replace(/ Babydragon bones Jogre bones/, '')), ['Rune scimitar +2', 'Fire rune +187', 'Big bones +1', 'Lobster +1', 'Coins +3,000', 'Law rune +2', 'Uncut sapphire +1']);
+    // the lobster was food brought along: untick it
+    await review.locator('.shot-row', { hasText: 'Lobster' }).locator('input[type=checkbox]').uncheck();
+    await review.locator('[data-act="loot-apply"]').click();
+    await review.waitFor({ state: 'detached' });
+    assert.equal(flat(await text('#goals-msg')), '6 lines added to what you got.');
+    const got = { rune_scimitar: 2, firerune: 187, big_bones: 1, coins: 3000, lawrune: 2, uncut_sapphire: 1 };
+    assert.deepEqual((await goalOf('old_badger', 'slayer')).got, got);
+    // into the bank: what you got, less what's gone in already
+    assert.match(await card.locator('[data-act="loot-bank"]').getAttribute('title'), /^Adds 2 Rune scimitar, 187 Fire rune, 1 Big bones, 3,000 Coins, 2 Law rune, 1 Uncut sapphire to your bank\.$/);
+    await card.locator('[data-act="loot-bank"]').click();
+    await card.locator('.small-note', { hasText: 'What you got is in your bank.' }).waitFor();
+    const bankNow = () => page.evaluate(() => JSON.parse(localStorage.getItem('lchs.bank.old_badger')).items);
+    assert.deepEqual(await bankNow(), got);
+    // one scimitar fewer than you'd added: Update my bank takes it back out
+    await card.locator('tr[data-loot="rune_scimitar"] [data-got-step="-1"]').click();
+    await card.locator('[data-act="loot-bank"]', { hasText: 'Update my bank' }).waitFor();
+    assert.equal(await card.locator('[data-act="loot-bank"]').getAttribute('title'), "Takes 1 Rune scimitar back out (you got fewer than you'd added).");
+    await card.locator('[data-act="loot-bank"]').click();
+    await card.locator('.small-note', { hasText: 'What you got is in your bank.' }).waitFor();
+    assert.equal((await bankNow()).rune_scimitar, 1);
+  } finally {
+    await page.evaluate(() => { delete window.showOpenFilePicker; localStorage.removeItem('lchs.bank.old_badger'); });
+    await removeSlayers();
+  }
+});
+
+await check('bank and prices: a Slayer tab with everything a monster drops, by kind, coins and all; All by skill has each item once, under the skill it first belongs to (v3)', async () => {
+  await planAs('old badger', 'Old Badger');
+  await page.evaluate(() => localStorage.setItem('lchs.bank.old_badger', JSON.stringify({ items: { rune_scimitar: 2, firerune: 3000, big_bones: 400, coins: 50000, dragon_spear: 1, vial_water: 1000, lobster: 20 }, updated: Date.now() })));
+  try {
+    await page.click('.tab[data-tab="bank"]');
+    assert.deepEqual(await page.locator('#bank-head [data-bskill]').evaluateAll(els => els.map(e => e.dataset.bskill)),
+      ['all', 'prayer', 'magic', 'cooking', 'fletching', 'firemaking', 'crafting', 'smithing', 'herblore', 'slayer', 'runecraft']);
+    await page.click('#bank-head [data-bskill="slayer"]');
+    assert.deepEqual((await page.locator('#bank-body .bank-group h4').allInnerTexts()).map(flat), ['Coins and runes', 'Weapons', 'Armour', 'Ammunition and throwing weapons', 'Gems, jewellery and keys', 'Herbs and secondaries', 'Ores and bars', 'Bones and hides', 'Food and potions', 'Tools and containers', 'Other']);
+    assert.match(flat(await page.locator('#bank-head .bank-sum').innerText()), /^7 kinds of Slayer item · updated .* Slayer items are worth about [\d.,]+[KM]? gp/);
+    assert.match(flat(await page.locator('#bank-head .note').innerText()), /Everything a monster drops, by kind/);
+    assert.equal(await page.locator('#bank-body [data-bank="coins"]').inputValue(), '50,000');
+    // big bones are Prayer's too: one bank, on both tabs
+    await page.click('#bank-head [data-bskill="prayer"]');
+    assert.equal(await page.locator('#bank-body [data-bank="big_bones"]').inputValue(), '400');
+    // All by skill: each item once, where it first belongs; Slayer's is what only monsters drop
+    await page.click('#bank-head [data-bskill="all"]');
+    await page.click('[data-allsort="skill"]');
+    const secs = await page.locator('.bank-sec').evaluateAll(els => els.map(el => [el.querySelector('h5').innerText.trim(), [...el.querySelectorAll('.bn')].map(a => a.innerText.trim())]));
+    assert.deepEqual(secs, [['Prayer', ['Big bones']], ['Cooking', ['Lobster']], ['Smithing', ['Rune scimitar']], ['Herblore', ['Vial of water']], ['Slayer', ['Coins', 'Dragon spear']], ['Runecraft', ['Fire rune']]]);
+    await page.click('[data-allsort="yours"]');
+    // Prices: Slayer's tab lists what can be sold (not coins, nor a quest's badge)
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="slayer"]');
+    const priced = await page.$$eval('#prices-body [data-price]', els => els.map(e => e.dataset.price));
+    assert.ok(priced.includes('dragon_spear') && priced.includes('big_bones') && priced.includes('rune_scimitar'));
+    assert.ok(!priced.includes('coins') && !priced.includes('paladinbadge1') && !priced.includes('clue_scroll_hard'));
+    assert.equal(flat(await page.locator('#prices-head .bulk').innerText()), 'Every Slayer item: Market High alch');
+  } finally {
+    await page.evaluate(() => localStorage.removeItem('lchs.bank.old_badger'));
+    await page.click('.tab[data-tab="prices"]');
+    await page.click('#prices-head [data-bskill="herblore"]');
+  }
+});
+
+await check('Planner+: the name in the title, the header and Settings, the NPCs tab after Goals, and the version (v3)', async () => {
+  assert.equal(await page.title(), 'Planner+');
+  assert.equal(flat(await text('.brand')), 'Planner+');
+  assert.deepEqual(await page.locator('.tabs .tab').evaluateAll(els => els.map(e => e.dataset.tab)), ['lookup', 'compare', 'gains', 'leaders', 'goals', 'npcs', 'bank', 'prices']);
+  await page.click('#settings-btn');
+  await page.waitForSelector('#settings[open]');
+  assert.match(flat(await text('#settings')), /Planner\+ \(formerly Skills\+, and before that Hiscores\+\) reads the Lost City hiscores API/);
+  assert.match(flat(await text('#about-version')), /^Version 3\.0\.0 · /);
+  await page.click('#settings-close');
+});
+
 await check('planner tabs fit a narrow window', async () => {
   await page.setViewportSize({ width: 340, height: 800 });
-  for (const tab of ['goals', 'bank', 'prices']) {
+  for (const tab of ['goals', 'npcs', 'bank', 'prices']) {
     await page.click(`.tab[data-tab="${tab}"]`);
     await page.waitForSelector(`#view-${tab}:not([hidden])`);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

@@ -2522,9 +2522,13 @@ test('agility: or every ticket at one batch\'s rate, a choice on the goal (v2.8)
 
 test('what only Thieving and Agility name is not what a bank is for (v2.8)', () => {
   // every item of the ten skills before them is still in the catalog, with the bank tabs as they were
-  assert.deepEqual(Object.keys(BANK_GROUPS), ['herblore', 'runecraft', 'firemaking', 'fletching', 'crafting', 'smithing', 'cooking', 'prayer', 'magic']);      // (v2.9: Prayer and Magic have one)
-  const banked = new Set(Object.values(BANK_GROUPS).flatMap(gs => gs.flatMap(g => g.items)));
+  // (v2.9: Prayer and Magic have one. v3: Slayer, with everything a monster drops)
+  assert.deepEqual(Object.keys(BANK_GROUPS), ['herblore', 'runecraft', 'firemaking', 'fletching', 'crafting', 'smithing', 'cooking', 'prayer', 'magic', 'slayer']);
+  const banked = new Set(Object.entries(BANK_GROUPS).filter(([k]) => k !== 'slayer').flatMap(([, gs]) => gs.flatMap(g => g.items)));
   for (const k of ['silk', 'grey_wolf_fur', 'king_worm', 'lockpick', 'agilityarena_ticket', 'coins_25', 'rockcake']) assert.ok(ITEMS[k] && !banked.has(k), k);
+  // (a grey wolf's fur is a drop: Slayer's. Thieving's silk and the rest aren't)
+  const drops = new Set(BANK_GROUPS.slayer.flatMap(g => g.items));
+  assert.deepEqual(['silk', 'grey_wolf_fur', 'king_worm', 'lockpick', 'agilityarena_ticket', 'coins_25', 'rockcake'].filter(k => drops.has(k)), ['grey_wolf_fur']);
   assert.ok(ITEMS.agilityarena_ticket.untradeable && ITEMS.rockcake.untradeable);
 });
 
@@ -2996,8 +3000,12 @@ test("combat: the monsters are the server's, each once, in bands of combat level
   // what they leave is something Prayer buries, or nothing
   const buried = new Set(pr.train.map(m => Object.keys(m.in)[0]));
   for (const m of MONSTERS) assert.ok(m.bones === undefined || buried.has(m.bones), m.id);
+  // (v3: what every kill drops by the monster's own drop script, the server's. Up to v2.10 it was LostHQ's
+  // data where it had the monster: 200 left bones and 26 big bones, 67 nothing. Thirteen quest and
+  // minigame foes leave nothing by the server: the Kalphite Queen, Elvarg, Dad, the tower archers…)
   assert.deepEqual(MONSTERS.reduce((a, m) => ({ ...a, [m.bones || 'none']: (a[m.bones || 'none'] || 0) + 1 }), {}),
-    { bones: 200, none: 67, mm_normal_monkey_bones: 1, bat_bones: 2, wolf_bones: 11, big_bones: 26, babydragon_bones: 1, tbwt_jogre_bones: 1, dragon_bones: 5, tbwt_beast_bones: 1 });
+    { bones: 188, none: 80, mm_normal_monkey_bones: 1, bat_bones: 2, wolf_bones: 11, big_bones: 25, babydragon_bones: 1, tbwt_jogre_bones: 1, dragon_bones: 5, tbwt_beast_bones: 1 });
+  for (const id of ['kalphite_queen_333', 'elvarg_83', 'dad_101', 'tower_archer_19', 'otherworldly_being_64']) assert.equal(MONSTERS.find(m => m.id === id).bones, undefined, id);
 });
 
 test('combat: a monster with a catch says so, and is not what a plan picks by itself (v2.10)', () => {

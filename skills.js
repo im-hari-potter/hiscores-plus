@@ -26,6 +26,12 @@ export const SKILLS = [
   { id: 21, key: 'runecraft',   name: 'Runecraft',   icon: 'runecraft' },
 ];
 
+// Slayer isn't in this version of the game yet (it's the hiscores' 19, after
+// Thieving). Planner+ has it as a goal all the same: the home of monster plans,
+// their kills, XP and loot, until the skill itself comes. It's not one of
+// SKILLS, so the hiscores views never look for it.
+export const SLAYER = { id: 19, key: 'slayer', name: 'Slayer', icon: 'slayer' };
+
 export const SKILL_BY_ID = new Map(SKILLS.map(s => [s.id, s]));
 export const SKILL_BY_KEY = new Map(SKILLS.map(s => [s.key, s]));
 export const CATEGORY_IDS = SKILLS.map(s => s.id);            // 0..18, 21

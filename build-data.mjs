@@ -1,4 +1,4 @@
-// Builds gamedata.js and items.png: the skill calculator data Skills+ plans with.
+// Builds gamedata.js and items.png: the skill calculator data Planner+ plans with.
 //
 //   node build-data.mjs <Content checkout> <LostHQ 2004 checkout>
 //
@@ -6,9 +6,12 @@
 //   - Lost City's server content, LostCityRS/Content, branch 274 (MIT). Levels and
 //     XP come straight from the configs the game server runs, so the numbers are the
 //     game's own. XP is kept in tenths, the way the server stores it.
-//   - LostHQ/2004 (GPL-3.0): item_data.json for names, ids and shop values,
-//     item_spritesheet.png for the 32x32 item icons, and from Crafting on the
-//     rows of its calculators (js/calculators/), checked against the server.
+//   - LostHQ/2004 (GPL-3.0): item_data.json for names and ids (shop values are
+//     the server's own: its obj configs), item_spritesheet.png for the 32x32 item
+//     icons, and from Crafting on the rows of its calculators (js/calculators/):
+//     which ways to train there are. Every number in them is checked against the
+//     server's, and where the two differ the server's is used. Its NPC database
+//     (js/npcdb/) is what the server's drop scripts are checked against.
 // The output is committed, so the site itself never needs either checkout.
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -58,6 +61,23 @@ const need = name => {
   if (!ITEM.has(name)) throw new Error(`item ${name} is not in item_data.json`);
   return name;
 };
+// Shop values (what high alch is 3/5 of) are the server's: its obj configs' cost,
+// 1 where a config gives none (as the engine has it), a noted item's its item's.
+// (The curated configs first; rev 225's dump under _unpack for what they lack.)
+const SERVER_OBJ = new Map();
+{
+  const { readdir } = await import('node:fs/promises');
+  const objFiles = (await readdir(scripts(''), { recursive: true })).map(f => f.replace(/\\/g, '/')).filter(f => f.endsWith('.obj'))
+    .sort((a, b) => Number(a.startsWith('_unpack')) - Number(b.startsWith('_unpack')));
+  for (const f of objFiles) for (const b of (await readConfig(scripts(f))).values()) if (!SERVER_OBJ.has(b.name)) SERVER_OBJ.set(b.name, b);
+}
+const serverCost = name => {
+  const b = SERVER_OBJ.get(name);
+  if (!b) return null;
+  if (b.props.certtemplate && b.props.certlink) return serverCost(b.props.certlink);
+  return b.props.cost != null ? Number(b.props.cost) : 1;
+};
+const valueNotes = [];
 
 // ── Herblore ───────────────────────────────────────────────────────────────
 const methods = [];
@@ -68,6 +88,7 @@ const places = {};           // skill -> a choice of place that changes what a s
 const fixedPrices = {};      // item -> gp it's always worth (coins)
 const virtualItems = {};     // those items: slug -> { id, name, cost, iconOf, parts }
 const unidHerbs = {};        // the one entry every unidentified herb is counted under
+const herbOfUnid = new Map(); // unidentified herb -> the clean herb it turns out to be (v3: the herb table's names)
 const unchargedOf = {};      // a charged item -> the same thing with no charges left, a bank item of its own (an amulet of glory)
 
 async function herblore() {
@@ -97,6 +118,7 @@ async function herblore() {
   // unidentified herb -> clean herb, from the Identify option's script
   const unidOf = new Map();
   for (const m of identify.matchAll(/\[opheld1,(\w+)\]\s*~attempt_identify_herb\((\w+)/g)) unidOf.set(m[2], m[1]);
+  for (const [herb, unid] of unidOf) herbOfUnid.set(unid, herb);
 
   // Grinding (no level, no XP; needs a pestle and mortar)
   const grind = new Map();
@@ -3010,6 +3032,64 @@ await magic();
 // itself: those, and anything there are fewer than five of.
 const combatNotes = [];
 let monsters = [], combatStyles = {};
+// What combat() learns about the server's NPCs that the NPC database (npcLoot) goes on from:
+// monster id -> the NPCs it is [{ key, n }], each NPC's config, the scripts, and which spawn underground.
+const npcWorld = { rowsOf: new Map(), npcs: null, blocks: null, byCategory: null, underground: new Map() };
+// The server's drop scripts, read by build-drops.mjs's evaluator: what an NPC
+// leaves when it dies, every value a random() can take followed through (asTable:
+// what always drops, and rows with their chances). From v3 both what a monster
+// leaves to bury (combat) and everything it drops (npcLoot) are the server's own;
+// LostHQ's NPC database is only what they're checked against.
+const SHARED_TABLES = { randomherb: 'Herb table', randomjewel: 'Gem table', ultrarare_getitem: 'Rare drop table', megararetable: 'Mega rare table', randomjunk: 'Junk table' };
+async function dropEvaluator(npcs, raw) {
+  const { readdir } = await import('node:fs/promises');
+  const { parse, evaluate, asTable } = await import('./build-drops.mjs');
+  const files = (await readdir(scripts(''), { recursive: true })).map(f => f.replace(/\\/g, '/'));
+  const parsed = new Map();
+  const blocks = {
+    get(k) {
+      if (!raw.has(k)) return undefined;
+      if (!parsed.has(k)) {
+        try { parsed.set(k, parse(raw.get(k).trimStart().replace(/^\([^)]*\)(\([^)]*\))?/, ''))); } catch (e) { throw new Error(`npc loot: [${k}]: ${e.message}`); }
+      }
+      return parsed.get(k);
+    },
+  };
+  const constants = {};
+  for (const f of files.filter(f => f.endsWith('.constant'))) {
+    for (const line of (await readFile(scripts(f), 'utf8')).split(/\r?\n/)) {
+      const m = line.match(/^\^(\w+)\s*=\s*(-?\d+)/);
+      if (m) constants[m[1]] = Number(m[2]);
+    }
+  }
+  // Quests as done; the quest variables a drop script reads, with the constant that says done.
+  const QUEST_DONE = { viking: 'viking_complete', itgronigen: 'itgronigen_complete', hetty: 'hetty_complete', troll_quest: 'troll_complete', heroquest: 'hero_complete', grandtree: 'grandtree_complete' };
+  for (const c of [...Object.values(QUEST_DONE), 'legends_complete']) if (constants[c] == null) throw new Error(`npc loot: no constant ${c}`);
+  const deathDropDefault = (await readConfig(scripts('skill_combat/configs/npc_combat.param'))).get('death_drop')?.props.default;
+  const ctx = { blocks, sharedTables: new Set(Object.keys(SHARED_TABLES)), deathDropDefault, log: [] };
+  const envFor = (key, { ring = false, legends = false, under = false } = {}) => {
+    const b = npcs.get(key);
+    return {
+      npc: key, category: b?.props.category || null, displayName: b?.props.name, params: b?.params || {},
+      stats: Object.fromEntries(['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'magic'].map(k => [k, b?.props[k]])),
+      members: true, ring, legends, underground: under, constants,
+      vars: { ...Object.fromEntries(Object.entries(QUEST_DONE).map(([v, c]) => [v, constants[c]])), legendsquest: legends ? constants.legends_complete : 0 },
+    };
+  };
+  // An NPC's death: its own trigger, its category's, or everyone's.
+  const trigger = key => {
+    const b = npcs.get(key);
+    if (raw.has(`ai_queue3,${key}`)) return `ai_queue3,${key}`;
+    if (b?.props.category && raw.has(`ai_queue3,_${b.props.category}`)) return `ai_queue3,_${b.props.category}`;
+    return 'ai_queue3,_';
+  };
+  // (asTable's: { always: ['obj*count', …], of, rows: [[weight, ['obj*count' or '~table', …]], …], clue })
+  const tableOf = (key, opts) => {
+    try { return asTable(evaluate(blocks.get(trigger(key)), envFor(key, opts), ctx)); } catch (e) { throw new Error(`npc loot: ${key} (${trigger(key)}): ${e.message}`); }
+  };
+  return { blocks, constants, ctx, envFor, trigger, tableOf, deathDropDefault, evaluate, asTable };
+}
+
 async function combat() {
   const { readdir } = await import('node:fs/promises');
   const files = (await readdir(scripts(''), { recursive: true })).map(f => f.replace(/\\/g, '/'));
@@ -3035,6 +3115,8 @@ async function combat() {
         const name = npcIds.get(id);
         if (!name || !npcs.has(name)) throw new Error(`combat: map ${f} spawns NPC ${id}, which has no config`);
         spawns.set(name, (spawns.get(name) || 0) + 1);
+        // (a map square from z 100 on is underground: the server's coordz above 6400)
+        if (Number(f.match(/^m\d+_(\d+)\.jm2$/)[1]) >= 100) npcWorld.underground.set(name, (npcWorld.underground.get(name) || 0) + 1);
       }
     }
   }
@@ -3173,20 +3255,24 @@ async function combat() {
   if (JSON.stringify(rates.ranged_accurate) !== JSON.stringify(rates.ranged_rapid)) throw new Error('combat: Accurate and Rapid give different XP now');
 
   // ── The monsters ──
-  // What they leave to bury: LostHQ's drop data where it has the NPC (its "always"
-  // drops), else the server's death_drop (bones, unless the config says otherwise).
+  // What they leave to bury: what every kill drops, by its drop script (the
+  // server's death_drop, bones unless the config says otherwise, or a script of
+  // its own). Up to v2.10 this was LostHQ's drop data where it had the NPC; from
+  // v3 it's the server's, and where LostHQ says otherwise that's only noted.
   const lhq = JSON.parse(await readFile(join(LOSTHQ, 'js/npcdb/npc_data.json'), 'utf8'));
   const buried = new Set(methods.filter(m => m.skill === 'prayer').map(m => Object.keys(m.in)[0]));
   const deathDrop = (await readConfig(scripts('skill_combat/configs/npc_combat.param'))).get('death_drop')?.props.default;
   if (deathDrop !== 'bones') throw new Error(`combat: what an NPC drops by default is ${deathDrop} now`);
-  const bonesOf = key => {
+  npcWorld.drops = await dropEvaluator(npcs, blocks);
+  const bonesOf = key => npcWorld.drops.tableOf(key).always.map(k => k.slice(0, k.lastIndexOf('*'))).find(i => buried.has(i)) || null;
+  // (LostHQ's, for the note: its "always" drops where it has the NPC, else the death_drop)
+  const lhqBonesOf = key => {
     const always = lhq[key]?.drops?.always;
     const fromLhq = Array.isArray(always) ? always.map(d => (Array.isArray(d.item) ? d.item[0] : d.item)).find(i => buried.has(i)) : null;
-    const b = npcs.get(key);
-    const own = b.params.death_drop ?? deathDrop;
-    // (an NPC with a drop table of its own drops what the table says; one without, its death_drop)
+    const own = npcs.get(key).params.death_drop ?? deathDrop;
     return lhq[key]?.drops ? fromLhq || null : buried.has(own) ? own : null;
   };
+  const bonesDiffer = new Set();
   const attackable = [...npcs.values()].filter(b => b.props.op2 === 'Attack' && Number(b.props.hitpoints) > 0);
   // What the server asks besides an Attack option: its own rule, npc_is_attackable.
   const canAttack = scriptBlocks(await readFile(scripts('skill_combat/scripts/npc/npc_combat.rs2'), 'utf8')).get('proc,npc_is_attackable');
@@ -3229,6 +3315,7 @@ async function combat() {
     row.keys.push(b.name);
     for (const o of world.get(b.name)) row.from.add(o);
     const bones = bonesOf(b.name);
+    if (bones !== lhqBonesOf(b.name)) bonesDiffer.add(`${name} (level ${level}, ${b.name}): ${bones || 'nothing'}, LostHQ ${lhqBonesOf(b.name) || 'nothing'}`);
     row.bones.set(bones, (row.bones.get(bones) || 0) + count(b.name));
     row.mult.add(Number(b.params.combat_xp_multiplier ?? multDefault));
     if (KEPT[b.name]) row.notes.add(KEPT[b.name]);
@@ -3286,6 +3373,10 @@ async function combat() {
   });
   const ids = new Set(monsters.map(m => m.id));
   if (ids.size !== monsters.length) throw new Error('combat: two monsters got the same id');
+  // (for the NPC database: the NPCs each monster is, with how many of each the world has)
+  const sorted = [...rows.values()].sort((a, b) => a.level - b.level || a.name.localeCompare(b.name) || a.hp - b.hp);
+  sorted.forEach((r, i) => npcWorld.rowsOf.set(monsters[i].id, r.keys.map(key => ({ key, n: count(key) }))));
+  Object.assign(npcWorld, { npcs, blocks, byCategory, placed, turns });
   if (monsters.length < 280 || monsters.length > 360) throw new Error(`combat: ${monsters.length} monsters: far from what was there when this was written (315)`);
   for (const [name, lvl, hp] of [['Chicken', 1, 3], ['Cow', 2, 8], ['Giant', 28, 35], ['Moss giant', 42, 60], ['Lesser demon', 82, 79], ['Fire giant', 86, 111], ['Rock Crab', 13, 50], ['Loar Shade', 40, 38]]) {
     if (!monsters.some(m => m.name === name && m.level === lvl && m.hp === hp)) throw new Error(`combat: no ${name} (level ${lvl}, ${hp} hitpoints) any more`);
@@ -3314,9 +3405,208 @@ async function combat() {
   combatNotes.push(`left out: random events (${uniq(leftOut.events).length} kinds), Tutorial Island's, ${uniq(leftOut.hidden).join(', ')} (no combat level shown), ${uniq(leftOut.forms).join(', ')} (counted as the shades they turn into), what only a quest or a script brings in (${uniq(leftOut.scripted).length}: ${uniq(leftOut.scripted).slice(0, 12).join(', ')}…), and what no map has (${uniq(leftOut.nowhere).join(', ')})`);
   combatNotes.push(`not picked by itself: ${monsters.filter(m => m.aside).length} (${monsters.filter(m => m.n < FEW).length} with fewer than ${FEW} in the world, ${monsters.filter(m => m.n === 1).length} of them one of a kind); with a catch: ${monsters.filter(m => m.note).map(m => `${m.name} (level ${m.level})`).join(', ')}`);
   combatNotes.push(`with an XP rule of their own: ${monsters.filter(m => m.mult || m.flat).map(m => `${m.name} (${m.flat ? '1 XP a point of damage' : `${m.mult / 10}% of the usual`})`).join(', ') || 'none'}; only Magic works on: ${monsters.filter(m => m.magic).map(m => m.name).join(', ') || 'none'}`);
+  combatNotes.push(`what a monster leaves to bury is the server's (its drop script); ${bonesDiffer.size} NPCs where LostHQ's data says otherwise: ${[...bonesDiffer].join('; ')}`);
 }
 
 await combat();
+
+// ── NPC drops (Planner+ v3) ────────────────────────────────────────────────
+// What each monster drops, read from the server's own drop scripts by a small
+// RuneScript evaluator (build-drops.mjs) that follows every value a random()
+// can take: a table of rows with their chances, the shared tables (herb, gem,
+// rare drop table, mega rare) as references, and the clue a kill can give.
+// LostHQ's NPC database (js/npcdb) is the reference it's checked against, NPC
+// by NPC; where the two differ, the server's is used, and the differences are
+// counted (KNOWN_LOOT_DIFFERENCES) so a change in either shows up here.
+// Worked out as a members world, with quests done (their rewards drop, their
+// quest items don't); a ring of wealth, Legends' Quest and above or under
+// ground change the gem table, which is kept in each of those forms.
+const lootNotes = [];
+let npcData = null;              // what npcdata.js holds
+const dropItems = new Set();     // every item some monster drops (as the bank counts it)
+async function npcLoot() {
+  const { rowsOf, npcs, placed, drops: ev, blocks: raw } = npcWorld;
+  const { blocks, constants, ctx, envFor, deathDropDefault, evaluate, asTable, trigger } = ev;
+  const SHARED = SHARED_TABLES;
+  // (a drop as the bank counts it: every unidentified herb that identifies to a herb Herblore
+  // uses is the one "Unid herb", since in-game they're all "Herb" until identified)
+  const asBanked = obj => (herbOfUnid.has(obj) && unidHerbs.item ? unidHerbs.item : obj);
+  // A drop entry: [item, count] (count a number or [lo, hi]), [item, count, 'noted'] for a
+  // noted drop (counted as the item: it is one in a bank), or ['~table']
+  const entry = k => {
+    if (k.startsWith('~')) return [k];
+    const [obj, n] = [k.slice(0, k.lastIndexOf('*')), k.slice(k.lastIndexOf('*') + 1)];
+    if (!ITEM.has(obj)) throw new Error(`npc loot: ${obj} is dropped, and not in item_data.json`);
+    const count = n.includes('-') ? n.split('-').map(Number) : Number(n);
+    if (obj.startsWith('cert_') && ITEM.has(obj.slice(5))) return [obj.slice(5), count, 'noted'];
+    return [obj, count];
+  };
+  const tableOf = (key, opts) => {
+    const t = ev.tableOf(key, opts);
+    return {
+      always: t.always.map(entry),
+      ...(t.rows.length > 1 || (t.rows[0] && t.rows[0][1].length) ? { of: t.of, rows: t.rows.map(([w, ds]) => [w, ds.map(entry)]) } : {}),
+      ...(t.clue ? { clue: [t.clue.tier, t.clue.rarity] } : {}),
+    };
+  };
+  // The shared tables, from their procs: { of, rows }, the gem table in each of its forms.
+  const sharedOf = (proc, opts) => {
+    const states = evaluate(blocks.get(`proc,${proc}`), envFor('man', opts), ctx);
+    const rows = new Map();
+    for (const st of states) {
+      const r = st.ret;
+      let k = '';
+      if (r && r.length) {
+        const [obj, n] = r.length === 1 && Array.isArray(r[0]) ? r[0] : r;
+        if (obj && typeof obj === 'object' && obj.table) k = `~${obj.table}`;
+        else if (obj != null) k = `${obj}*${n}`;
+      }
+      rows.set(k, (rows.get(k) || 0) + st.p);
+    }
+    let of = null;
+    for (const cand of [1, 2, 4, 8, 16, 32, 64, 65, 128, 256, 512]) if ([...rows.values()].every(p => Math.abs(p * cand - Math.round(p * cand)) < 1e-6)) { of = cand; break; }
+    if (!of) throw new Error(`npc loot: the ${proc} table isn't in whole parts`);
+    return { of, rows: [...rows].map(([k, p]) => [Math.round(p * of), k ? [entry(k)] : []]).sort((a, b) => b[0] - a[0]) };
+  };
+  const shared = {};
+  for (const [proc, name] of Object.entries(SHARED)) {
+    if (!raw.has(`proc,${proc}`)) throw new Error(`npc loot: no proc ${proc}`);
+    if (proc === 'randomjewel') {
+      const variants = {};
+      for (const ring of [false, true]) for (const legends of [false, true]) for (const under of [false, true]) {
+        variants[[ring && 'ring', legends && 'legends', under && 'under'].filter(Boolean).join(',')] = sharedOf(proc, { ring, legends, under });
+      }
+      shared[proc] = { name, variants };
+    } else shared[proc] = { name, ...sharedOf(proc, {}) };
+  }
+  // (the herb table's herbs are all "Herb" until identified: counted as the one Unid herb, named by what they turn out to be)
+  shared.randomherb.bank = unidHerbs.item;
+  shared.randomherb.herbs = Object.fromEntries(shared.randomherb.rows.flatMap(([, ds]) => ds).filter(([o]) => herbOfUnid.has(o)).map(([o]) => [o, ITEM.get(herbOfUnid.get(o)).name]));
+  // Checked against LostHQ's shared tables (which say the talisman in words, and leave Legends' Quest out)
+  const lhqShared = JSON.parse(await readFile(join(LOSTHQ, 'js/npcdb/shared_drops.json'), 'utf8'));
+  const fractions = (t, base) => {
+    const m = new Map();
+    for (const [w, ds] of t.rows) { const k = ds.map(d => d.join('*')).sort().join(' + ') || 'nothing'; m.set(k, (m.get(k) || 0) + w / (base ?? t.of)); }
+    return m;
+  };
+  const sameFractions = (a, b) => [...new Set([...a.keys(), ...b.keys()])].every(k => Math.abs((a.get(k) || 0) - (b.get(k) || 0)) < 1e-9);
+  const lhqRows = (rollTable, base, jewel = false) => {
+    const rows = [];
+    let used = 0;
+    for (const r of rollTable) {
+      const [obj, n] = r.item;
+      used += Number(r.chance);
+      if (/aboveground = nature_talisman/.test(obj)) { rows.push([Number(r.chance), [['nature_talisman', 1]]]); continue; }
+      if (jewel && obj === '~megararetable') { rows.push([Number(r.chance), [['nature_talisman', 1]]]); continue; }   // (the gem table's, with Legends' Quest not done)
+      const count = typeof n === 'string' && n.includes('-') ? n.split('-').map(Number) : Number(n);
+      rows.push([Number(r.chance), [obj.startsWith('~') ? [obj] : obj.startsWith('cert_') && ITEM.has(obj.slice(5)) ? [obj.slice(5), count, 'noted'] : [obj, count]]]);
+    }
+    if (base - used > 0) rows.push([base - used, []]);
+    return { of: base, rows };
+  };
+  for (const proc of ['randomherb', 'randomjewel', 'ultrarare_getitem', 'megararetable']) {
+    const ours = proc === 'randomjewel' ? shared[proc].variants[''] : shared[proc];
+    if (!sameFractions(fractions(ours), fractions(lhqRows(lhqShared[proc].roll_table, lhqShared[proc].roll_base, proc === 'randomjewel')))) throw new Error(`npc loot: the ${proc} table differs from LostHQ's: look at it`);
+  }
+  // Each monster: the table of each NPC it is; the one most of them have.
+  const lhq = JSON.parse(await readFile(join(LOSTHQ, 'js/npcdb/npc_data.json'), 'utf8'));
+  const lhqTable = d => ({
+    always: (d.always || []).map(a => (a.item[0].startsWith('cert_') && ITEM.has(a.item[0].slice(5)) ? [a.item[0].slice(5), a.item[1], 'noted'] : [a.item[0], a.item[1]])),
+    ...(d.roll_table ? lhqRows(d.roll_table, d.roll_base || 128) : {}),
+    clue: d.tertiary ? [d.tertiary[0].item.replace('~clue-', ''), Number(d.tertiary[0].chance.split('/')[1])] : null,
+  });
+  const sameTable = (a, b) => {
+    const al = x => x.always.map(e => e.join('*')).sort().join();
+    const fa = a.rows ? fractions(a) : new Map(), fb = b.rows ? fractions(b) : new Map();
+    for (const f of [fa, fb]) if (f.size === 1 && f.has('nothing')) f.clear();
+    return al(a) === al(b) && sameFractions(fa, fb) && JSON.stringify(a.clue || null) === JSON.stringify(b.clue || null);
+  };
+  const tables = new Map();        // signature -> id
+  const out = { tables: {}, npcs: {} };
+  // How an NPC hits and how often, where its config doesn't say: the params' defaults (crush, every 4 ticks)
+  const STYLES = Object.fromEntries(Object.entries(constants).filter(([k]) => /_style$/.test(k)).map(([k, v]) => [v, k.replace(/_style$/, '')]));
+  const styleDefault = STYLES[Number((await readConfig(scripts('skill_combat/configs/npc_combat.param'))).get('damagetype')?.props.default)];
+  const speedDefault = Number((await readConfig(scripts('skill_combat/configs/combat.param'))).get('attackrate')?.props.default);
+  if (styleDefault !== 'crush' || speedDefault !== 4) throw new Error(`npc loot: an NPC's default style or speed is ${styleDefault}, ${speedDefault} now`);
+  const differs = [];
+  for (const m of monsters) {
+    const parts = rowsOf.get(m.id);
+    // (under ground: most of its NPCs on the map stand there)
+    const under = parts.reduce((a, { key }) => a + (npcWorld.underground.get(key) || 0), 0) * 2 > parts.reduce((a, { key }) => a + (placed.get(key) || 0), 0);
+    const kinds = new Map();
+    // (a form that turns into another one of the same monster is fought on as that one: the Kalphite Queen)
+    const finals = parts.filter(({ key }) => ![...(npcWorld.turns.get(key) || [])].some(t => parts.some(p => p.key === t)));
+    for (const { key, n } of finals.length ? finals : parts) {
+      const t = tableOf(key, { under });
+      const sig = JSON.stringify(t);
+      const k = kinds.get(sig) || kinds.set(sig, { t, n: 0, keys: [] }).get(sig);
+      k.n += n; k.keys.push(key);
+      if (lhq[key]?.drops && !sameTable(t, lhqTable(lhq[key].drops))) differs.push(`${m.name} (level ${m.level}, ${key})`);
+      if (!lhq[key]?.drops && (t.rows || t.always.some(([o]) => o !== deathDropDefault && o !== m.bones))) differs.push(`${m.name} (level ${m.level}, ${key}): not in LostHQ's database`);
+    }
+    const [main, ...others] = [...kinds.values()].sort((a, b) => b.n - a.n);
+    if (others.length) lootNotes.push(`${m.name} (level ${m.level}): ${others.map(o => o.keys.join(', ')).join('; ')} drop otherwise than ${main.keys.join(', ')}; the table of most is used`);
+    const sig = JSON.stringify(main.t);
+    if (!tables.has(sig)) { tables.set(sig, m.id); out.tables[m.id] = main.t; }
+    const key = main.keys[0], b = npcs.get(key);
+    const num = v => (v == null || v === '' ? undefined : Number(v));
+    const bonus = {};
+    for (const p of ['attackbonus', 'strengthbonus', 'rangebonus', 'magicbonus', 'stabdefence', 'slashdefence', 'crushdefence', 'rangedefence', 'magicdefence']) if (b.params[p] != null) bonus[p] = Number(b.params[p]);
+    out.npcs[m.id] = {
+      drops: tables.get(sig),
+      ...(under ? { under: 1 } : {}),
+      stats: [num(b.props.attack) ?? 1, num(b.props.strength) ?? 1, num(b.props.defence) ?? 1, num(b.props.hitpoints) ?? 1, num(b.props.ranged) ?? 1, num(b.props.magic) ?? 1],
+      ...(Object.keys(bonus).length ? { bonus } : {}),
+      style: b.params.damagetype ? b.params.damagetype.replace(/^\^|_style$/g, '') : styleDefault,
+      speed: b.params.attackrate ? Number(b.params.attackrate) : speedDefault,
+      ...(/^aggressive/.test(b.props.huntmode || '') ? { aggressive: 1 } : {}),
+      ...(b.props.respawnrate ? { respawn: Number(b.props.respawnrate) } : {}),
+      ...(b.props.size && b.props.size !== '1' ? { size: Number(b.props.size) } : {}),
+      ...(b.props.desc ? { examine: b.props.desc } : {}),
+    };
+  }
+  // (calls that don't touch what's dropped: finding other NPCs, zones and quest bits, teleports, timing, a
+  // form turning into the next. Each was read in its script: the drops after them are evaluated all the same.)
+  const harmless = /^(unknown call (npc_statheal|split_init|getbit_range|if_settext|if_sethide|if_openchat|if_addresumebutton|spotanim_npc|inv_freespace|\.npc_find|\.npc_findall|npc_find|obj_addall|npc_huntall|huntall|world_delay|inzone|testbit|movecoord|coordx|p_teleport|\.npc_add|\.npc_anim|npc_changetype_keepall|npc_sethuntmode)( \(\w+\))?|a loop, skipped|a label too deep: zq_greenmist|too deep at .*)$/;
+  const odd = [...new Set(ctx.log)].filter(l => !harmless.test(l));
+  if (odd.length) console.log(`npc loot: the drop scripts do something the evaluator doesn't know: ${odd.join('; ')}`);
+  // (quest items LostHQ lists that only drop during a quest; tables it lacks: thrower and spectator
+  // trolls, the vampire; rows it has otherwise: guards' iron dagger, chaos druids' two herbs at once,
+  // the hard clue's staffs swapped, the tribesman's cleaning cloth; death drops the server has otherwise)
+  const KNOWN_LOOT_DIFFERENCES = 43;
+  lootNotes.unshift(`${monsters.length} monsters, ${Object.keys(out.tables).length} different drop tables; ${differs.length} NPCs whose drops differ from LostHQ's database (the server's are used): ${differs.join('; ')}`);
+  if (differs.length !== KNOWN_LOOT_DIFFERENCES) lootNotes.push(`(KNOWN_LOOT_DIFFERENCES is ${KNOWN_LOOT_DIFFERENCES}, there are ${differs.length})`);
+  // Every item dropped, as the bank counts it
+  const every = t => [...(t.always || []), ...(t.rows || []).flatMap(([, ds]) => ds)].filter(e => !e[0].startsWith('~')).map(e => e[0]);
+  for (const t of Object.values(out.tables)) for (const o of every(t)) dropItems.add(asBanked(o));
+  for (const s of Object.values(shared)) for (const t of s.variants ? Object.values(s.variants) : [s]) for (const o of every(t)) dropItems.add(asBanked(o));
+  npcData = { ...out, shared };
+  // The Slayer tab of the bank: every item a monster drops, other skills' too
+  // (runes, herbs, gems), sorted into kinds.
+  const kindOf = slug => {
+    const i = ITEM.get(slug), wear = i.equipable_item?.wearpos, iops = Object.values(i.iops || {});
+    if (slug === 'coins' || (/rune$/.test(slug) && /rune$/i.test(i.name))) return 'Coins and runes';
+    if (/talisman$/.test(slug)) return 'Coins and runes';
+    if (wear === 'ammunition' || (wear === 'weapon' && i.stackable)) return 'Ammunition and throwing weapons';
+    if (wear === 'weapon') return 'Weapons';
+    if (wear === 'neck' || wear === 'ring' || /^uncut_|^(sapphire|emerald|ruby|diamond|dragonstone|opal|jade|red_topaz)$/.test(slug) || /^keyhalf|crystal_key|oyster/.test(slug)) return 'Gems, jewellery and keys';
+    if (wear || slug === 'dragonshield_a') return 'Armour';
+    if (slug === unidHerbs.item || /^unidentified_|^vial|horn_dust$/.test(slug) || ['limpwurt_root', 'snape_grass', 'white_berries', 'eye_of_newt', 'unicorn_horn', 'red_spiders_eggs', 'wine_of_zamorak', 'jangerberries'].includes(slug)) return 'Herbs and secondaries';
+    if (/_ore$|_bar$|^coal$/.test(slug)) return 'Ores and bars';
+    if (iops.includes('Bury') || /bones|^ashes$/.test(slug) || /hide|fur$/.test(slug)) return 'Bones and hides';
+    if (iops.includes('Eat') || iops.includes('Drink') || /dose|potion|poison$|^raw_|^burnt_|_dough$|^egg$|^grain$|^pot_flour$|berries$/.test(slug)) return 'Food and potions';
+    if (['lobster_pot', 'harpoon', 'tinderbox', 'knife', 'hammer', 'shears', 'rope', 'bucket_empty', 'pot_empty', 'jug_empty', 'ring_mould', 'amulet_mould', 'unholy_symbol_mould'].includes(slug)) return 'Tools and containers';
+    return 'Other';
+  };
+  const KINDS = ['Coins and runes', 'Weapons', 'Armour', 'Ammunition and throwing weapons', 'Gems, jewellery and keys', 'Herbs and secondaries', 'Ores and bars', 'Bones and hides', 'Food and potions', 'Tools and containers', 'Other'];
+  const byKind = new Map(KINDS.map(k => [k, []]));
+  for (const slug of [...dropItems].sort((a, b) => ITEM.get(a).id - ITEM.get(b).id)) byKind.get(kindOf(slug)).push(slug);
+  bankGroups.slayer = KINDS.filter(k => byKind.get(k).length).map(k => ({ name: k, items: byKind.get(k) }));
+}
+await npcLoot();
+// The clue a kill can give: one entry for each tier (every clue scroll is "Clue scroll" in-game).
+const clueItems = { clue_scroll_easy: ['trail_clue_easy_simple001', 'Clue scroll (easy)'], clue_scroll_medium: ['trail_clue_medium_sextant001', 'Clue scroll (medium)'], clue_scroll_hard: ['trail_clue_hard_sextant001', 'Clue scroll (hard)'] };
+for (const [, [rep]] of Object.entries(clueItems)) need(rep);
 
 // ── Catalog of every item the data mentions ───────────────────────────────
 const used = new Set();
@@ -3334,13 +3624,23 @@ for (const m of methods) {
   // (what a choice has you bring instead, a staff: named, never counted, and not what a bank is read for)
   for (const v of Object.values(m.opt || {})) for (const k of v.tools || []) used.add(k);
 }
-for (const groups of Object.values(bankGroups)) for (const g of groups) for (const k of g.items) { used.add(k); banked.add(k); }
+for (const [key, groups] of Object.entries(bankGroups)) if (key !== 'slayer') for (const g of groups) for (const k of g.items) { used.add(k); banked.add(k); }
 // Potions are made as 3 doses but often traded as 4; keep the 4-dose items so a
 // price can be scaled from them when the 3-dose has no trades.
-for (const k of [...used]) {
-  const m = k.match(/^3dose(.+)$/);
-  if (m && ITEM.has('4dose' + m[1])) { used.add('4dose' + m[1]); banked.add('4dose' + m[1]); }
-}
+const fourDoses = () => {
+  for (const k of [...used]) {
+    const m = k.match(/^3dose(.+)$/);
+    if (m && ITEM.has('4dose' + m[1])) { used.add('4dose' + m[1]); banked.add('4dose' + m[1]); }
+  }
+};
+fourDoses();
+// (v3) Everything a monster drops: named, priced, and read from bank screenshots.
+// What the skills bank comes first where a screenshot can't tell two apart: a
+// battlestaff is still read as a battlestaff, not as the plain staff monsters drop.
+const skillBanked = new Set(banked);
+for (const k of dropItems) { used.add(k); banked.add(k); }
+for (const [rep] of Object.values(clueItems)) used.add(rep);
+fourDoses();
 
 const names = [...used].filter(k => !virtualItems[k] && !chargeItems[k]).map(need).sort((a, b) => ITEM.get(a).id - ITEM.get(b).id);
 
@@ -3407,7 +3707,12 @@ names.forEach((name, n) => {
   items[name] = {
     id: i.id,
     name: nameOverride[name] || i.name,
-    cost: i.cost ?? 0,
+    cost: (() => {
+      const own = serverCost(name);
+      if (own == null) throw new Error(`items: ${name} has no config on the server`);
+      if (own !== (i.cost ?? 0)) valueNotes.push(`${name}: ${own} (LostHQ ${i.cost ?? 0})`);
+      return own;
+    })(),
     ...(i.members ? { members: 1 } : {}),
     ...(i.tradeable === true ? {} : { untradeable: 1 }),
     ...(fixedPrices[name] != null ? { gp: fixedPrices[name] } : {}),
@@ -3417,6 +3722,30 @@ names.forEach((name, n) => {
 // The market's sets: no icon of their own, so they borrow their biggest piece's.
 for (const [slug, v] of Object.entries(virtualItems)) {
   items[slug] = { id: v.id, name: v.name, cost: v.cost, members: 1, icon: items[v.iconOf].icon, set: v.parts };
+}
+// (v3) the clue a kill can give: untradeable, worth nothing at the market. (The
+// scroll it borrows its icon from is only there for the icon.)
+for (const [slug, [rep, name]] of Object.entries(clueItems)) {
+  items[slug] = { id: ITEM.get(rep).id, name, cost: 0, members: 1, untradeable: 1, icon: items[rep].icon, gp: 0, clue: 1 };
+  delete items[rep];
+}
+// (v3) Drops the game names alike, told apart: a wizards hat blue or black, a
+// robe's top or bottom, the three paladin's badges, a round or a pointed shell.
+// (Coins have an icon for each size of stack: those stay "Coins".) A new pair
+// without a rule here stops the build, so a list never shows two of one name.
+{
+  const SAME_NAME = [[/top$/, 'top'], [/bottom$/, 'bottom'], [/^blue/, 'blue'], [/^black/, 'black'], [/(\d)$/, m => m[1]], [/^shellround/, 'round'], [/^shellpoint/, 'pointed']];
+  const byName = new Map();
+  for (const [slug, it] of Object.entries(items)) if (!/^coins(_\d+)?$/.test(slug)) byName.set(it.name, [...(byName.get(it.name) || []), slug]);
+  for (const [name, slugs] of byName) {
+    if (slugs.length < 2) continue;
+    for (const slug of slugs) {
+      const rule = SAME_NAME.find(([re]) => re.test(slug));
+      if (!rule) throw new Error(`Items ${slugs.join(', ')} are all named "${name}": add a rule to SAME_NAME`);
+      const m = slug.match(rule[0]);
+      items[slug].name = `${name} (${typeof rule[1] === 'function' ? rule[1](m) : rule[1]})`;
+    }
+  }
 }
 // What a worn item gives while it lasts (a ring of forging's 140 bars): not an
 // item you hold, so it's worth nothing and never bought. Plans count the ring.
@@ -3578,9 +3907,39 @@ export const COMBAT_STYLES = ${JSON.stringify(combatStyles)};
 }
 `;
 await writeFile('gamedata.js', out);
+// ── npcdata.js (v3): the NPC database ─────────────────────────────────────
+// (an entry: [item, count] with count a number or [lo, hi], or ['~table'])
+const fmtTable = t => JSON.stringify(t);
+await writeFile('npcdata.js', `// Generated by build-data.mjs. Do not edit by hand; change the script and re-run it.
+// What each monster drops, read from Lost City's server scripts (LostCityRS/Content,
+// rev 274, MIT: "scripts/drop tables" and the NPCs' own death scripts) by
+// build-drops.mjs, and checked against LostHQ's NPC database (GPL-3.0); where the two
+// differ, the server's is used. A members world, quests done. RuneScape is (c) Jagex Ltd.
+//
+// DROP_TABLES: id -> { always: [entries], of, rows: [[weight, [entries]]], clue: [tier, 1 in] }
+//   one kill: everything in always; one row, weight in "of" (no entries: nothing); and,
+//   in members worlds while you hold no clue, a clue of that tier one kill in so many.
+//   An entry is [item, count] (count a number, or [lowest, highest], each as likely) or
+//   ["~table"]: a roll on one of the shared tables.
+// SHARED_DROPS: those tables, { name, of, rows } (the gem table in each of its forms:
+//   "ring" a ring of wealth worn, "legends" Legends' Quest done, "under" underground).
+// NPC_INFO: monster id (gamedata.js MONSTERS) -> { drops: its table, under: most of them
+//   underground, stats: [attack, strength, defence, hitpoints, ranged, magic], bonus,
+//   style: how it hits (stab, slash or crush: crush where its config doesn't say),
+//   speed: ticks between its attacks (4 where its config doesn't say), aggressive,
+//   respawn: ticks (only where its config says), size, examine }
+export const DROP_TABLES = {
+${Object.entries(npcData.tables).map(([k, t]) => `  ${JSON.stringify(k)}: ${fmtTable(t)},`).join('\n')}
+};
+export const SHARED_DROPS = ${JSON.stringify(npcData.shared)};
+export const NPC_INFO = {
+${Object.entries(npcData.npcs).map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)},`).join('\n')}
+};
+`);
 // (a monster only Magic works on is a row of Hitpoints alone)
 const combatRows = Object.keys(combatStyles).reduce((a, skill) => a + monsters.filter(mon => !(mon.magic && skill !== 'hitpoints')).length, 0);
 console.log(`gamedata.js: ${methods.length} methods, ${monsters.length} monsters (${combatRows} rows more), ${names.length} items; items.png ${PER_ROW * SIZE}x${rows * SIZE}`);
+console.log(`  items: shop values the server's (its obj configs); ${valueNotes.length ? `LostHQ's item database says otherwise for ${valueNotes.join(', ')}` : "LostHQ's item database agrees on every one"}`);
 for (const note of craftingNotes) console.log(`  crafting: ${note}`);
 for (const note of miningNotes) console.log(`  mining: ${note}`);
 for (const note of smithingNotes) console.log(`  smithing: ${note}`);
@@ -3591,6 +3950,7 @@ for (const note of agilityNotes) console.log(`  agility: ${note}`);
 for (const note of prayerNotes) console.log(`  prayer: ${note}`);
 for (const note of magicNotes) console.log(`  magic: ${note}`);
 for (const note of combatNotes) console.log(`  combat: ${note}`);
+for (const note of lootNotes) console.log(`  loot: ${note}`);
 
 // ── Bank screenshots ───────────────────────────────────────────────────────
 // What bankread.js needs to read a bank from a screenshot, loaded only when one
@@ -3650,7 +4010,8 @@ async function bankScreenshots() {
   const objFiles = (await readdir(scripts(''), { recursive: true })).filter(f => f.endsWith('.obj'));
   for (const f of objFiles) {
     for (const block of (await readConfig(scripts(f))).values()) {
-      if (!banked.has(block.name) || fixedPrices[block.name] != null) continue;      // (coins aren't read: they're a fee or loot here, not a bank item)
+      // (coins: read from v3 on, the commonest drop of all. Up to v2.10 they weren't: a fee or Thieving's loot, never a bank item)
+      if (!banked.has(block.name)) continue;
       for (const [k, v] of Object.entries(block.props)) if (/^count\d+$/.test(k)) variants.set(need(v.split(',')[0]), block.name);
     }
   }
@@ -3717,7 +4078,7 @@ async function bankScreenshots() {
   // An amulet of glory with no charges left looks the same again: it's the next
   // guess, before the plain dragonstone amulet.
   const enchantedFirst = methods.filter(m => m.id.startsWith('cr_ench_')).map(m => Object.keys(m.out)[0]).flatMap(k => (unchargedOf[k] ? [k, unchargedOf[k]] : [k]));
-  for (const name of [...enchantedFirst, ...names]) if (fixedPrices[name] == null && banked.has(name)) add(name);
+  for (const name of [...enchantedFirst, ...names.filter(n => skillBanked.has(n)), ...names.filter(n => !skillBanked.has(n))]) if (banked.has(name)) add(name);
   for (const [v, base] of variants) add(v, { of: base });
   const ours = new Set(entries.map(x => x.e.slug));
   for (const { px } of [...entries]) {

@@ -150,6 +150,29 @@ export function readBank(img, icons, font, layout) {
     }
     return out;
   };
+  const { outlineIn, shapeMatches } = shapes(img, icons);
+
+  // The scroll within the grip's few pixels (and a few either side, for
+  // pictures from other tools): the one where the most slots have an icon
+  // shape we know, then where the most stack numbers sit exactly in place.
+  let best = null;
+  const span = layout.scrollHeight - viewH;
+  for (let scroll = Math.max(0, bank.scrollLo - 3); scroll <= Math.min(span, bank.scrollHi + 3); scroll++) {
+    const slots = visible(scroll).map(s => { const outline = outlineIn(s.x, s.y); return { ...s, outline, set: new Set(outline) }; });
+    let score = 0;
+    for (const s of slots) {
+      if (!s.outline.length) continue;
+      if (shapeMatches(s).length) score += 1000;
+      if (readText(img, s.x, s.y, font)) score++;
+    }
+    if (!best || score > best.score) best = { scroll, slots, score };
+  }
+  return { ok: true, scroll: best.scroll, ...readSlots(img, icons, font, best.slots, shapeMatches) };
+}
+
+// An icon's outline in the slot at x, y, and the icons of that shape.
+function shapes(img, icons) {
+  const size = icons.size;
   const outlineIn = (x, y) => {
     const out = [];
     for (let i = 0; i < size * size; i++) if (at(img, x + (i % size), y + Math.floor(i / size)) === OUTLINE) out.push(i);
@@ -168,27 +191,17 @@ export function readBank(img, icons, font, layout) {
       return true;
     });
   };
+  return { outlineIn, shapeMatches };
+}
 
-  // The scroll within the grip's few pixels (and a few either side, for
-  // pictures from other tools): the one where the most slots have an icon
-  // shape we know, then where the most stack numbers sit exactly in place.
-  let best = null;
-  const span = layout.scrollHeight - viewH;
-  for (let scroll = Math.max(0, bank.scrollLo - 3); scroll <= Math.min(span, bank.scrollHi + 3); scroll++) {
-    const slots = visible(scroll).map(s => { const outline = outlineIn(s.x, s.y); return { ...s, outline, set: new Set(outline) }; });
-    let score = 0;
-    for (const s of slots) {
-      if (!s.outline.length) continue;
-      if (shapeMatches(s).length) score += 1000;
-      if (readText(img, s.x, s.y, font)) score++;
-    }
-    if (!best || score > best.score) best = { scroll, slots, score };
-  }
-
+// What's in some slots ({ slot, row, col, x, y, outline, set }): the icon, by
+// shape and then colour, and the stack number.
+function readSlots(img, icons, font, all, shapeMatches) {
+  const size = icons.size;
   // Colour: the closest of the same shape. The brightness setting bends every
   // colour the same way (a power curve); when colours are off overall, the
   // curve that makes the slots fit their icons best is found and allowed for.
-  const read = best.slots.filter(s => s.outline.length).map(s => ({ s, shape: shapeMatches(s) }));
+  const read = all.filter(s => s.outline.length).map(s => ({ s, shape: shapeMatches(s) }));
   const distance = (ic, s, k, step = 1) => {
     let d = 0, n = 0;
     for (let j = 0; j < ic.colour.length; j += step) {
@@ -232,8 +245,148 @@ export function readBank(img, icons, font, layout) {
     if (!top || top.d > 40) { unknown++; slots.push({ slot: s.slot, row: s.row, col: s.col, entry: null, ...count }); continue; }
     slots.push({ slot: s.slot, row: s.row, col: s.col, entry: top.ic.e, dist: top.d, margin: second - top.d, ...count });
   }
-  const empty = best.slots.filter(s => !s.outline.length).map(s => s.slot);
-  return { ok: true, scroll: best.scroll, brightness: k, slots, empty, unknown };
+  const empty = all.filter(s => !s.outline.length).map(s => s.slot);
+  return { brightness: k, slots, empty, unknown };
+}
+
+// ── The inventory ─────────────────────────────────────────────────────────
+// Loot, read from what you carry. The inventory is 4 by 7 slots of 32 pixels,
+// 10 apart across and 4 down (the server's inventory.if; the bank's side panel
+// is the very same grid), drawn at 569, 213 on the game canvas: the side panel's
+// place (553, 205) and the grid's in it (16, 8). In a picture that isn't the
+// whole canvas it's found by its icons' outlines: each sits inside a slot, and
+// none in the gaps between them.
+export const INV_LAYOUT = { cols: 4, rows: 7, pitchX: 42, pitchY: 36, x: 569, y: 213 };
+
+// Where the inventory's first slot is in a picture: { x, y }, or null. A picture
+// with no icon in it at all can't say: null.
+export function findInventory(img, icons, layout = INV_LAYOUT) {
+  const size = icons.size;
+  const { cols, rows, pitchX, pitchY } = layout;
+  const gridW = (cols - 1) * pitchX + size, gridH = (rows - 1) * pitchY + size;
+  if (img.width < gridW || img.height < gridH) return null;
+  // outline pixels, summed (an integral image): any box's count in four looks
+  const W = img.width + 1;
+  const sum = new Int32Array(W * (img.height + 1));
+  for (let y = 0; y < img.height; y++) {
+    let row = 0;
+    for (let x = 0; x < img.width; x++) {
+      const p = (y * img.width + x) * 4;
+      if (img.data[p] === 0 && img.data[p + 1] === 0 && img.data[p + 2] === OUTLINE) row++;
+      sum[(y + 1) * W + x + 1] = sum[y * W + x + 1] + row;
+    }
+  }
+  const box = (x, y, w, h) => sum[(y + h) * W + x + w] - sum[y * W + x + w] - sum[(y + h) * W + x] + sum[y * W + x];
+  // How a place fits: no outline in the gaps, and as many slots with an icon as can be.
+  const score = (x, y) => {
+    let inside = 0, filled = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const n = box(x + c * pitchX, y + r * pitchY, size, size);
+        inside += n;
+        if (n >= 8) filled++;
+      }
+    }
+    return { gaps: box(x, y, gridW, gridH) - inside, filled, inside };
+  };
+  // ...and exactly: how many of its slots hold an icon shape we know. (Icons
+  // don't fill their 32 pixels, so a place a pixel or two off fits the gaps
+  // as well; only the right one puts each outline where an icon has it.)
+  const { outlineIn, shapeMatches } = shapes(img, icons);
+  const known = (x, y) => {
+    let n = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const sx = x + c * pitchX, sy = y + r * pitchY;
+        if (box(sx, sy, size, size) < 8) continue;
+        const outline = outlineIn(sx, sy);
+        if (shapeMatches({ x: sx, y: sy, outline, set: new Set(outline) }).length) n++;
+      }
+    }
+    return n;
+  };
+  // The whole game canvas: where the client draws it.
+  if (img.width >= layout.x + gridW && img.height >= layout.y + gridH) {
+    const s = score(layout.x, layout.y);
+    if (!s.gaps && s.filled && known(layout.x, layout.y) === s.filled) return { x: layout.x, y: layout.y };
+  }
+  // Anywhere else: of the places with nothing in the gaps and the most slots
+  // filled (then the most outline inside), the one with the most icons we know.
+  // With a few items that don't reach the grid's edges, a place a slot or two
+  // off fits as well: what you pick up goes to the first free slot, so the one
+  // that starts the soonest, then the nearest the canvas's own place.
+  let top = [], most = null;
+  for (let y = 0; y + gridH <= img.height; y++) {
+    for (let x = 0; x + gridW <= img.width; x++) {
+      const s = score(x, y);
+      if (s.gaps || !s.filled) continue;
+      const better = !most || s.filled > most.filled || (s.filled === most.filled && s.inside > most.inside);
+      if (better) { most = s; top = []; }
+      if (s.filled === most.filled && s.inside === most.inside) top.push({ x, y });
+    }
+  }
+  if (!top.length) return null;
+  const near = c => Math.abs(c.x - layout.x) + Math.abs(c.y - layout.y);
+  top.sort((a, b) => near(a) - near(b));
+  const first = (x, y) => {
+    for (let i = 0; i < cols * rows; i++) if (box(x + (i % cols) * pitchX, y + Math.floor(i / cols) * pitchY, size, size) >= 8) return i;
+    return Infinity;
+  };
+  let best = null;
+  for (const c of top.slice(0, 200)) {
+    const n = known(c.x, c.y), f = first(c.x, c.y);
+    if (!best || n > best.n || (n === best.n && f < best.f)) best = { ...c, n, f };
+  }
+  return { x: best.x, y: best.y };
+}
+
+// Returns { ok, x, y, brightness, slots: [{ slot, row, col, entry, count, … }],
+// empty: [slot …], unknown } or { ok: false, why: 'no-inventory' }.
+export function readInventory(img, icons, font, layout = INV_LAYOUT) {
+  const size = icons.size;
+  const place = findInventory(img, icons, layout);
+  if (!place) return { ok: false, why: 'no-inventory' };
+  const { outlineIn, shapeMatches } = shapes(img, icons);
+  const all = [];
+  for (let r = 0; r < layout.rows; r++) {
+    for (let c = 0; c < layout.cols; c++) {
+      const x = place.x + c * layout.pitchX, y = place.y + r * layout.pitchY;
+      const outline = outlineIn(x, y);
+      all.push({ slot: r * layout.cols + c, row: r, col: c, x, y, outline, set: new Set(outline) });
+    }
+  }
+  return { ok: true, ...place, ...readSlots(img, icons, font, all, shapeMatches) };
+}
+
+// Inventories add up: each screenshot is a trip's loot (unlike a bank's, where
+// screenshots that overlap show the same slots again). Returns what mergeReads
+// does: { items: [{ slug, count, min, max, approx, unsure, slots, also, like?, parts }], others, unknown, seen }.
+export function sumReads(reads) {
+  const items = new Map();
+  let others = 0, unknown = 0, seen = 0, n = 0;
+  for (const r of reads) {
+    if (!r.ok) continue;
+    for (const s of r.slots) {
+      seen++;
+      if (!s.entry) { unknown++; continue; }
+      if (s.entry.other) { others++; continue; }
+      const slug = s.entry.of || s.entry.slug;
+      const it = items.get(slug) || { slug, count: 0, min: 0, max: 0, approx: false, unsure: false, slots: [], also: [], parts: [] };
+      if (s.entry.also?.length) it.also = s.entry.also;
+      if (s.entry.like) it.like = s.entry.like;
+      it.count += s.count; it.min += s.min; it.max += s.max;
+      it.approx ||= !!s.approx;
+      const unsure = s.margin < 2 || s.dist > 15;
+      it.unsure ||= unsure;
+      // (a slot of each screenshot: numbered on, so two screenshots' first slots stay two)
+      const slot = n * 1000 + s.slot;
+      it.slots.push(slot);
+      it.parts.push({ slot, count: s.count, min: s.min, max: s.max, approx: !!s.approx, unsure, shared: !!s.entry.also?.length });
+      items.set(slug, it);
+    }
+    n++;
+  }
+  return { items: [...items.values()], others, unknown, seen, complete: false };
 }
 const curve = (c, k) => (k === 1 ? c : 256 * Math.pow(c / 256, k));
 

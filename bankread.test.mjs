@@ -3,10 +3,10 @@
 // client draws the bank (bankfake.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareIcons, readBank, mergeReads, parseStack, findBank, reviewRows, pickRow, movedFrom } from './bankread.js';
+import { prepareIcons, readBank, mergeReads, parseStack, findBank, reviewRows, pickRow, movedFrom, readInventory, sumReads, INV_LAYOUT } from './bankread.js';
 import { BANK_ICONS, BANK_ICONS_PER_ROW, BANK_LAYOUT, STACK_FONT } from './bankread-data.js';
 import { ITEMS, BANK_GROUPS, METHODS } from './gamedata.js';
-import { fakeBank, atlas, crop } from './bankfake.mjs';
+import { fakeBank, fakeInventory, atlas, crop } from './bankfake.mjs';
 
 const icons = prepareIcons(atlas, BANK_ICONS, BANK_ICONS_PER_ROW);
 const read = img => readBank(img, icons, STACK_FONT, BANK_LAYOUT);
@@ -118,11 +118,16 @@ test('every planner item but lantadyme has an icon to be read by', () => {
   assert.ok(['silk', 'king_worm', 'lockpick', 'agilityarena_ticket', 'coins_25'].every(k => onlyNew.includes(k)));
   // (v2.9) Prayer's bones and the staves Magic's own spells are cast with are read now, with what looks like them:
   // 929 icons, where v2.7 and v2.8 had 921. Death, blood and soul runes were lookalikes before, and are Magic's now.
-  assert.equal(BANK_ICONS.length, 929);
-  for (const k of ['bones', 'big_bones', 'dragon_bones', 'wolf_bones', 'bones_burnt', 'deathrune', 'bloodrune', 'soulrune']) assert.ok(BANK_ICONS.some(e => e.slug === k && !e.other && !e.of), k);
-  // (a staff a choice has you bring is named, never counted: not read)
-  for (const k of ['staff_of_air', 'staff_of_fire', 'lava_battlestaff']) assert.ok(ITEMS[k] && !ours.has(k), k);
-  assert.ok(!BANK_ICONS.some(e => (e.of || e.slug) === 'coins' && !e.other), 'a stack of coins is not read as a planner item');
+  // (v3) Everything a monster drops is read too, for the loot of a Slayer plan, coins and all: 1,178 icons.
+  assert.equal(BANK_ICONS.length, 1178);
+  for (const k of ['bones', 'big_bones', 'dragon_bones', 'wolf_bones', 'bones_burnt', 'deathrune', 'bloodrune', 'soulrune', 'rune_scimitar', 'dragon_spear', 'black_kiteshield']) assert.ok(BANK_ICONS.some(e => e.slug === k && !e.other && !e.of), k);
+  // (a staff a choice has you bring is named, never counted. Up to v2.10 it wasn't read; monsters drop
+  // the elemental staves, so from v3 they are: noted under the battlestaff they look exactly like, which a
+  // screenshot is still read as first)
+  for (const k of ['staff_of_air', 'staff_of_fire']) assert.ok(ITEMS[k] && ours.has(k) && !BANK_ICONS.some(e => e.slug === k), k);
+  // (up to v2.10 a stack of coins wasn't read: a fee or Thieving's loot, never a bank item. From v3 coins are the
+  // commonest drop there is: read, with the icon each size of stack has)
+  assert.deepEqual(BANK_ICONS.filter(e => (e.of || e.slug) === 'coins').map(e => e.slug), ['coins', 'coins_2', 'coins_3', 'coins_4', 'coins_5', 'coins_25', 'coins_100', 'coins_250', 'coins_1000', 'coins_10000']);
 });
 
 test('an item that looks exactly like another says so (v2.5)', () => {
@@ -134,8 +139,9 @@ test('an item that looks exactly like another says so (v2.5)', () => {
   assert.deepEqual(entry('ring_of_recoil'), { slug: 'ring_of_recoil', also: ['sapphire_ring'] });
   assert.equal(entry('strung_dragonstone_amulet'), undefined);
   // things the planner doesn't use that you could well have in a bank are named
-  assert.deepEqual(entry('battlestaff').like, ['Dramen staff', 'Staff']);
-  assert.deepEqual(entry('air_battlestaff').like, ['Staff of air', 'Mystic air staff']);
+  // (v3: the plain staff and the staff of air are drops now: noted under also, the battlestaff still read first)
+  assert.deepEqual(entry('battlestaff'), { slug: 'battlestaff', also: ['plainstaff'], like: ['Dramen staff'] });
+  assert.deepEqual(entry('air_battlestaff'), { slug: 'air_battlestaff', also: ['staff_of_air'], like: ['Mystic air staff'] });
   // (v2.7: a jug of wine and an unfermented one are Cooking's now: a choice, where they were only named)
   assert.deepEqual(entry('wine_of_zamorak'), { slug: 'wine_of_zamorak', also: ['jug_wine', 'jug_unfermented_wine'], like: ['Half full wine jug', 'Jug of bad wine'] });
   assert.equal(entry('lawrune').like, undefined, 'not quest and minigame pieces (a board game\'s law rune)');
@@ -316,3 +322,62 @@ test('review: any stack that looks like an unid herb can be said to be lantadyme
   assert.deepEqual(movedFrom(pair, { [UNID]: 642 }, { complete: true }), {}, 'unid herbs are still in the bank');
 });
 
+
+// ── The inventory: loot (v3) ─────────────────────────────────────────────
+const LOOT = [
+  { slot: 0, icon: 'rune_scimitar', count: 1 },
+  { slot: 1, icon: 'rune_scimitar', count: 1 },               // two of them: a slot each
+  { slot: 2, icon: 'firerune', count: 150 },
+  { slot: 3, icon: 'big_bones', count: 1 },
+  { slot: 5, icon: 'uncut_sapphire', count: 1 },
+  { slot: 9, icon: 'steel_axe', count: 1 },
+  { slot: 14, icon: 'lobster', count: 1 },                     // food you brought: a planner item, not a fire giant's drop
+  { slot: 27, icon: 'lawrune', count: 2 },
+];
+const inv = img => readInventory(img, icons, STACK_FONT);
+const slugsOf = r => r.slots.map(s => [s.slot, s.entry?.of || s.entry?.slug, s.count]);
+
+test('inventory: found where the client draws it on the game canvas, and read slot by slot (v3)', () => {
+  const r = inv(fakeInventory({ items: LOOT }));
+  assert.equal(r.ok, true);
+  assert.deepEqual([r.x, r.y], [INV_LAYOUT.x, INV_LAYOUT.y]);
+  assert.deepEqual(slugsOf(r), [[0, 'rune_scimitar', 1], [1, 'rune_scimitar', 1], [2, 'firerune', 150], [3, 'big_bones', 1], [5, 'uncut_sapphire', 1], [9, 'steel_axe', 1], [14, 'lobster', 1], [27, 'lawrune', 2]]);
+  assert.equal(r.empty.length, 20);
+  assert.equal(r.unknown, 0);
+});
+
+test('inventory: a crop of the side panel, a picture with the canvas somewhere in it, darker colours, the bank open beside it (v3)', () => {
+  const whole = fakeInventory({ items: LOOT });
+  // a crop around the side panel
+  const r1 = inv(crop(whole, 553, 205, 190, 261));
+  assert.deepEqual([r1.x, r1.y], [16, 8]);
+  assert.deepEqual(slugsOf(r1), slugsOf(inv(whole)));
+  // the canvas inside a bigger picture (another tool's screenshot of the window)
+  const big = fakeInventory({ items: LOOT, width: 900, height: 620, x: 600, y: 300 });
+  const r2 = inv(big);
+  assert.deepEqual([r2.x, r2.y], [600, 300]);
+  assert.deepEqual(slugsOf(r2), slugsOf(inv(whole)));
+  // the brightness setting bends every colour
+  assert.deepEqual(slugsOf(inv(fakeInventory({ items: LOOT, brightness: 1.3 }))), slugsOf(inv(whole)));
+  // the bank open too: the side panel is still what you carry
+  const both = fakeInventory({ items: LOOT, bank: [{ slot: 0, icon: 'lawrune', count: 3960 }, { slot: 1, icon: 'yew_logs', count: 1044 }, { slot: 8, icon: 'coal', count: 500 }] });
+  const r3 = inv(both);
+  assert.deepEqual([r3.x, r3.y], [INV_LAYOUT.x, INV_LAYOUT.y]);
+  assert.deepEqual(slugsOf(r3), slugsOf(inv(whole)));
+  // nothing carried: nothing to say where the inventory is
+  assert.equal(inv(fakeInventory({ items: [] })).ok, false);
+});
+
+test('inventory: screenshots add up (each is a trip), and the review is the bank\'s (v3)', () => {
+  const a = inv(fakeInventory({ items: LOOT }));
+  const b = inv(fakeInventory({ items: [{ slot: 0, icon: 'rune_scimitar', count: 1 }, { slot: 1, icon: 'firerune', count: 37 }, { slot: 2, icon: 'ashes', count: 1 }] }));
+  const sum = sumReads([a, b]);
+  assert.equal(item(sum, 'rune_scimitar').count, 3);
+  assert.equal(item(sum, 'firerune').count, 187);
+  assert.equal(sum.seen, 11);
+  // ashes look exactly like soda ash: a line with a choice, as on the Bank tab
+  const rows = reviewRows(sum, { likelier: { ashes: 'soda_ash' } });
+  const ash = rows.find(r => r.icon === 'ashes');
+  assert.ok(ash.choices.includes('soda_ash'));
+  assert.equal(rows.filter(r => r.slug === 'rune_scimitar').reduce((n, r) => n + r.count, 0), 3);
+});
